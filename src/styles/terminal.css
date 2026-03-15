@@ -1,0 +1,150 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+/* ===== Bloomberg Dark Global Theme ===== */
+
+:root {
+  --bg-primary: #0a0a0a;
+  --bg-secondary: #141414;
+  --bg-tertiary: #1e1e1e;
+  --bg-hover: #252525;
+  --text-primary: #e0e0e0;
+  --text-secondary: #888888;
+  --text-accent: #ff8c00;
+  --border-default: #2a2a2a;
+  --border-focus: #ff8c00;
+  --status-idle: #4a9eff;
+  --status-running: #00c853;
+  --status-error: #ff3d00;
+  --status-waiting: #ffab00;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+}
+
+/* Remove all rounded corners — Bloomberg style */
+* {
+  border-radius: 0 !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a3a3a;
+}
+
+/* xterm.js overrides */
+.xterm {
+  padding: 2px 4px;
+}
+
+.xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-default) transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.xterm-viewport::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+}
+
+/* Terminal container fills parent */
+.terminal-container {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-container .xterm {
+  height: 100%;
+}
+
+/* react-grid-layout overrides */
+.gridcode-layout {
+  background: var(--bg-primary);
+}
+
+.react-grid-item {
+  transition: none !important;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: rgba(255, 140, 0, 0.15) !important;
+  border: 1px dashed var(--text-accent) !important;
+  opacity: 1 !important;
+}
+
+.react-grid-item > .react-resizable-handle {
+  background: none;
+}
+
+.react-grid-item > .react-resizable-handle::after {
+  border-color: var(--border-default);
+}
+
+.react-grid-item > .react-resizable-handle:hover::after {
+  border-color: var(--text-accent);
+}
+
+/* Disable all animations for Bloomberg-like snappiness */
+.react-grid-item.cssTransforms {
+  transition-duration: 0ms !important;
+}
+
+/* Selection styling */
+::selection {
+  background: rgba(255, 140, 0, 0.3);
+  color: #ffffff;
+}
+
+/* Focus outlines */
+:focus-visible {
+  outline: 1px solid var(--text-accent);
+  outline-offset: -1px;
+}
+
+/* Input styling */
+input[type="text"],
+input[type="number"] {
+  border-radius: 0 !important;
+}
+
+input[type="checkbox"] {
+  border-radius: 0 !important;
+}
+
+/* Dense UI: reduce all padding */
+button {
+  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  border-radius: 0 !important;
+}
