@@ -8,6 +8,10 @@ interface AppState {
   defaultModel: string;
   skillsPanelOpen: boolean;
   hubBrowserOpen: boolean;
+  gitManagerOpen: boolean;
+  mcpManagerOpen: boolean;
+  gitManagerDir: string | null;   // Which directory the git manager is viewing
+  mcpManagerDir: string | null;   // Which project the MCP manager is viewing
 
   setSkills: (skills: SkillInfo[]) => void;
   setModels: (models: ModelInfo[]) => void;
@@ -15,6 +19,8 @@ interface AppState {
   setDefaultModel: (model: string) => void;
   setSkillsPanelOpen: (open: boolean) => void;
   setHubBrowserOpen: (open: boolean) => void;
+  setGitManagerOpen: (open: boolean, dir?: string) => void;
+  setMcpManagerOpen: (open: boolean, dir?: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -24,6 +30,10 @@ export const useAppStore = create<AppState>((set) => ({
   defaultModel: "claude-sonnet-4-6",
   skillsPanelOpen: false,
   hubBrowserOpen: false,
+  gitManagerOpen: false,
+  mcpManagerOpen: false,
+  gitManagerDir: null,
+  mcpManagerDir: null,
 
   setSkills: (skills) => set({ skills }),
   setModels: (models) => set({ models }),
@@ -31,4 +41,6 @@ export const useAppStore = create<AppState>((set) => ({
   setDefaultModel: (model) => set({ defaultModel: model }),
   setSkillsPanelOpen: (open) => set({ skillsPanelOpen: open }),
   setHubBrowserOpen: (open) => set({ hubBrowserOpen: open }),
+  setGitManagerOpen: (open, dir) => set({ gitManagerOpen: open, gitManagerDir: dir ?? null }),
+  setMcpManagerOpen: (open, dir) => set({ mcpManagerOpen: open, mcpManagerDir: dir ?? null }),
 }));

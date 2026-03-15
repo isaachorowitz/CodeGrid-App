@@ -35,7 +35,7 @@ export const Sidebar = memo(function Sidebar({
   const { workspaces, activeWorkspaceId, sidebarOpen } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
-  const { setSkillsPanelOpen, setHubBrowserOpen } = useAppStore();
+  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen } = useAppStore();
 
   if (!sidebarOpen) return null;
 
@@ -195,7 +195,7 @@ export const Sidebar = memo(function Sidebar({
       </div>
 
       {/* Quick access buttons */}
-      <div style={{ borderTop: "1px solid #2a2a2a", padding: "6px 8px", display: "flex", gap: "4px" }}>
+      <div style={{ borderTop: "1px solid #2a2a2a", padding: "6px 8px", display: "flex", gap: "4px", flexWrap: "wrap" }}>
         <button
           onClick={() => setHubBrowserOpen(true)}
           style={{
@@ -219,6 +219,36 @@ export const Sidebar = memo(function Sidebar({
           onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
         >
           SKILLS
+        </button>
+        <button
+          onClick={() => {
+            const focused = sessions.find((s) => s.id === focusedSessionId);
+            setGitManagerOpen(true, focused?.working_dir);
+          }}
+          style={{
+            flex: 1, background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            padding: "4px", textAlign: "center",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          GIT
+        </button>
+        <button
+          onClick={() => {
+            const focused = sessions.find((s) => s.id === focusedSessionId);
+            setMcpManagerOpen(true, focused?.working_dir);
+          }}
+          style={{
+            flex: 1, background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            padding: "4px", textAlign: "center",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#d500f9"; e.currentTarget.style.borderColor = "#d500f9"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          MCP
         </button>
       </div>
 

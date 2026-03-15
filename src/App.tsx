@@ -7,6 +7,8 @@ import { NewSessionDialog } from "./components/NewSessionDialog";
 import { Settings } from "./components/Settings";
 import { SkillsPanel } from "./components/SkillsPanel";
 import { HubBrowser } from "./components/HubBrowser";
+import { GitManager } from "./components/GitManager";
+import { McpManager } from "./components/McpManager";
 import { useSessionStore } from "./stores/sessionStore";
 import { useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
@@ -216,6 +218,8 @@ export default function App() {
       <Settings />
       <SkillsPanel />
       <HubBrowser />
+      <GitManager />
+      <McpManager />
     </div>
   );
 }

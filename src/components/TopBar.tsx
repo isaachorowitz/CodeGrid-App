@@ -20,7 +20,7 @@ export const TopBar = memo(function TopBar() {
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const toggleBroadcast = useSessionStore((s) => s.toggleBroadcast);
   const applyPreset = useLayoutStore((s) => s.applyPreset);
-  const { setSkillsPanelOpen, setHubBrowserOpen } = useAppStore();
+  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen } = useAppStore();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
 
@@ -219,6 +219,42 @@ export const TopBar = memo(function TopBar() {
           onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
         >
           SKILLS
+        </button>
+
+        {/* Git Manager button */}
+        <button
+          onClick={() => {
+            const focused = sessions.find((s) => s.id === useSessionStore.getState().focusedSessionId);
+            setGitManagerOpen(true, focused?.working_dir);
+          }}
+          title="Git Manager — push, pull, commit, branch"
+          style={{
+            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            padding: "2px 6px",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          GIT
+        </button>
+
+        {/* MCP Manager button */}
+        <button
+          onClick={() => {
+            const focused = sessions.find((s) => s.id === useSessionStore.getState().focusedSessionId);
+            setMcpManagerOpen(true, focused?.working_dir);
+          }}
+          title="MCP Manager — manage MCP servers per project"
+          style={{
+            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            padding: "2px 6px",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#d500f9"; e.currentTarget.style.borderColor = "#d500f9"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          MCP
         </button>
 
         {/* New session */}

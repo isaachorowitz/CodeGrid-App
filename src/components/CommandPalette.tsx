@@ -17,7 +17,7 @@ export const CommandPalette = memo(function CommandPalette() {
   const sessions = useSessionStore((s) => s.sessions);
   const { setFocusedSession, toggleBroadcast, focusedSessionId } = useSessionStore();
   const { applyPreset, toggleMaximize } = useLayoutStore();
-  const { setSkillsPanelOpen, setHubBrowserOpen, skills, models } = useAppStore();
+  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, skills, models } = useAppStore();
   const setSessionModel = useSessionStore((s) => s.setSessionModel);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -63,6 +63,26 @@ export const CommandPalette = memo(function CommandPalette() {
         label: "Open Settings",
         category: "App",
         action: () => { setCommandPaletteOpen(false); setSettingsOpen(true); },
+      },
+      {
+        id: "open-git",
+        label: "Open Git Manager — push, pull, commit, branch",
+        category: "Tools",
+        action: () => {
+          const focused = sessions.find((s) => s.id === focusedSessionId);
+          setCommandPaletteOpen(false);
+          setGitManagerOpen(true, focused?.working_dir);
+        },
+      },
+      {
+        id: "open-mcp",
+        label: "Open MCP Manager — manage MCP servers",
+        category: "Tools",
+        action: () => {
+          const focused = sessions.find((s) => s.id === focusedSessionId);
+          setCommandPaletteOpen(false);
+          setMcpManagerOpen(true, focused?.working_dir);
+        },
       },
     ];
 

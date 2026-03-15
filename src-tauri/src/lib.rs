@@ -55,6 +55,24 @@ pub fn run() {
             commands::get_available_models,
             commands::send_to_session,
             commands::dir_exists,
+            // Git manager
+            commands::git_status,
+            commands::git_push,
+            commands::git_pull,
+            commands::git_commit,
+            commands::git_stage_file,
+            commands::git_unstage_file,
+            commands::git_create_branch,
+            commands::git_switch_branch,
+            commands::git_list_branches,
+            commands::git_log,
+            commands::git_discard_file,
+            // MCP manager
+            commands::list_mcps,
+            commands::save_mcp_config,
+            commands::toggle_mcp_server,
+            commands::remove_mcp_server,
+            commands::add_mcp_server,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GridCode");

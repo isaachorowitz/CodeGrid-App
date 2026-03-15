@@ -663,3 +663,425 @@ pub async fn dir_exists(path: String) -> Result<bool, String> {
     let expanded = expand_tilde(&path);
     Ok(std::path::Path::new(&expanded).is_dir())
 }
+
+// === Git Manager Commands ===
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitStatusInfo {
+    pub branch: String,
+    pub ahead: u32,
+    pub behind: u32,
+    pub staged: Vec<GitFileChange>,
+    pub unstaged: Vec<GitFileChange>,
+    pub untracked: Vec<String>,
+    pub has_remote: bool,
+    pub remote_url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitFileChange {
+    pub path: String,
+    pub status: String, // "modified", "added", "deleted", "renamed"
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitLogEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GitBranchInfo {
+    pub name: String,
+    pub is_current: bool,
+    pub is_remote: bool,
+    pub last_commit: String,
+}
+
+fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("Failed to run git: {}", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(stderr.trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+#[tauri::command]
+pub async fn git_status(working_dir: String) -> Result<GitStatusInfo, String> {
+    let dir = expand_tilde(&working_dir);
+
+    let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+
+    // Ahead/behind
+    let (ahead, behind) = {
+        let ab = run_git(&dir, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"]).unwrap_or_default();
+        let parts: Vec<&str> = ab.split_whitespace().collect();
+        (
+            parts.first().and_then(|s| s.parse().ok()).unwrap_or(0u32),
+            parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0u32),
+        )
+    };
+
+    // Porcelain status
+    let status_out = run_git(&dir, &["status", "--porcelain=v1"])?;
+    let mut staged = Vec::new();
+    let mut unstaged = Vec::new();
+    let mut untracked = Vec::new();
+
+    for line in status_out.lines() {
+        if line.len() < 3 { continue; }
+        let index = line.chars().nth(0).unwrap_or(' ');
+        let work = line.chars().nth(1).unwrap_or(' ');
+        let path = line[3..].to_string();
+
+        if index == '?' {
+            untracked.push(path);
+            continue;
+        }
+        if index != ' ' && index != '?' {
+            staged.push(GitFileChange {
+                path: path.clone(),
+                status: match index {
+                    'M' => "modified", 'A' => "added", 'D' => "deleted", 'R' => "renamed", _ => "modified",
+                }.to_string(),
+            });
+        }
+        if work != ' ' && work != '?' {
+            unstaged.push(GitFileChange {
+                path,
+                status: match work {
+                    'M' => "modified", 'D' => "deleted", _ => "modified",
+                }.to_string(),
+            });
+        }
+    }
+
+    // Remote URL
+    let remote_url = run_git(&dir, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let has_remote = !remote_url.is_empty();
+
+    Ok(GitStatusInfo { branch, ahead, behind, staged, unstaged, untracked, has_remote, remote_url })
+}
+
+#[tauri::command]
+pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String, String> {
+    let dir = expand_tilde(&working_dir);
+    if set_upstream {
+        let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+        run_git(&dir, &["push", "-u", "origin", &branch])
+    } else {
+        run_git(&dir, &["push"])
+    }
+}
+
+#[tauri::command]
+pub async fn git_pull(working_dir: String) -> Result<String, String> {
+    let dir = expand_tilde(&working_dir);
+    run_git(&dir, &["pull"])
+}
+
+#[tauri::command]
+pub async fn git_commit(working_dir: String, message: String, stage_all: bool) -> Result<String, String> {
+    let dir = expand_tilde(&working_dir);
+    if stage_all {
+        run_git(&dir, &["add", "-A"])?;
+    }
+    run_git(&dir, &["commit", "-m", &message])
+}
+
+#[tauri::command]
+pub async fn git_stage_file(working_dir: String, file_path: String) -> Result<(), String> {
+    let dir = expand_tilde(&working_dir);
+    run_git(&dir, &["add", &file_path])?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_unstage_file(working_dir: String, file_path: String) -> Result<(), String> {
+    let dir = expand_tilde(&working_dir);
+    run_git(&dir, &["reset", "HEAD", &file_path])?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_create_branch(working_dir: String, branch_name: String, checkout: bool) -> Result<(), String> {
+    let dir = expand_tilde(&working_dir);
+    if checkout {
+        run_git(&dir, &["checkout", "-b", &branch_name])?;
+    } else {
+        run_git(&dir, &["branch", &branch_name])?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_switch_branch(working_dir: String, branch_name: String) -> Result<(), String> {
+    let dir = expand_tilde(&working_dir);
+    run_git(&dir, &["checkout", &branch_name])?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_list_branches(working_dir: String) -> Result<Vec<GitBranchInfo>, String> {
+    let dir = expand_tilde(&working_dir);
+
+    let current = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+
+    // Local branches
+    let local_out = run_git(&dir, &["branch", "--format=%(refname:short)\t%(objectname:short)\t%(subject)"])?;
+    let mut branches: Vec<GitBranchInfo> = local_out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+            GitBranchInfo {
+                name: parts.first().unwrap_or(&"").to_string(),
+                is_current: parts.first().unwrap_or(&"") == &current,
+                is_remote: false,
+                last_commit: parts.get(2).unwrap_or(&"").to_string(),
+            }
+        })
+        .collect();
+
+    // Remote branches
+    let remote_out = run_git(&dir, &["branch", "-r", "--format=%(refname:short)\t%(objectname:short)\t%(subject)"]).unwrap_or_default();
+    for line in remote_out.lines() {
+        if line.is_empty() || line.contains("HEAD") { continue; }
+        let parts: Vec<&str> = line.splitn(3, '\t').collect();
+        let name = parts.first().unwrap_or(&"").to_string();
+        // Skip if local exists
+        if branches.iter().any(|b| name.ends_with(&b.name)) { continue; }
+        branches.push(GitBranchInfo {
+            name,
+            is_current: false,
+            is_remote: true,
+            last_commit: parts.get(2).unwrap_or(&"").to_string(),
+        });
+    }
+
+    Ok(branches)
+}
+
+#[tauri::command]
+pub async fn git_log(working_dir: String, count: u32) -> Result<Vec<GitLogEntry>, String> {
+    let dir = expand_tilde(&working_dir);
+    let n = format!("-{}", count.min(50));
+    let out = run_git(&dir, &["log", &n, "--format=%H\t%h\t%s\t%an\t%cr"])?;
+
+    Ok(out
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let parts: Vec<&str> = line.splitn(5, '\t').collect();
+            GitLogEntry {
+                hash: parts.first().unwrap_or(&"").to_string(),
+                short_hash: parts.get(1).unwrap_or(&"").to_string(),
+                message: parts.get(2).unwrap_or(&"").to_string(),
+                author: parts.get(3).unwrap_or(&"").to_string(),
+                date: parts.get(4).unwrap_or(&"").to_string(),
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn git_discard_file(working_dir: String, file_path: String) -> Result<(), String> {
+    let dir = expand_tilde(&working_dir);
+    run_git(&dir, &["checkout", "--", &file_path])?;
+    Ok(())
+}
+
+// === MCP Manager Commands ===
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub env: std::collections::HashMap<String, String>,
+    pub enabled: bool,
+    pub scope: String, // "global", "project"
+    pub source_file: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct McpConfigFile {
+    #[serde(rename = "mcpServers", default)]
+    pub mcp_servers: std::collections::HashMap<String, McpServerEntry>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct McpServerEntry {
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub disabled: Option<bool>,
+}
+
+fn read_mcp_file(path: &str) -> Option<McpConfigFile> {
+    let content = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+#[tauri::command]
+pub async fn list_mcps(project_dir: Option<String>) -> Result<Vec<McpServerConfig>, String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let mut servers: Vec<McpServerConfig> = Vec::new();
+
+    // 1. Global MCPs: ~/.claude/mcp.json or ~/.claude.json
+    let global_paths = [
+        format!("{}/.claude/mcp.json", home),
+        format!("{}/.claude.json", home),
+    ];
+
+    for gpath in &global_paths {
+        if let Some(config) = read_mcp_file(gpath) {
+            for (name, entry) in &config.mcp_servers {
+                servers.push(McpServerConfig {
+                    name: name.clone(),
+                    command: entry.command.clone(),
+                    args: entry.args.clone(),
+                    env: entry.env.clone(),
+                    enabled: !entry.disabled.unwrap_or(false),
+                    scope: "global".to_string(),
+                    source_file: gpath.clone(),
+                });
+            }
+        }
+    }
+
+    // 2. Project MCPs: <project>/.claude/mcp.json or <project>/.mcp.json
+    if let Some(ref pdir) = project_dir {
+        let dir = expand_tilde(pdir);
+        let project_paths = [
+            format!("{}/.claude/mcp.json", dir),
+            format!("{}/.mcp.json", dir),
+        ];
+
+        for ppath in &project_paths {
+            if let Some(config) = read_mcp_file(ppath) {
+                for (name, entry) in &config.mcp_servers {
+                    // Check if already in list (project overrides global)
+                    servers.retain(|s| !(s.name == *name && s.scope == "global"));
+                    servers.push(McpServerConfig {
+                        name: name.clone(),
+                        command: entry.command.clone(),
+                        args: entry.args.clone(),
+                        env: entry.env.clone(),
+                        enabled: !entry.disabled.unwrap_or(false),
+                        scope: "project".to_string(),
+                        source_file: ppath.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(servers)
+}
+
+#[tauri::command]
+pub async fn save_mcp_config(
+    config_path: String,
+    servers: std::collections::HashMap<String, McpServerEntry>,
+) -> Result<(), String> {
+    let config = McpConfigFile { mcp_servers: servers };
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+
+    // Ensure parent directory exists
+    let path = std::path::Path::new(&config_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    std::fs::write(&config_path, json)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn toggle_mcp_server(
+    config_path: String,
+    server_name: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+    let mut config: McpConfigFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+    if let Some(server) = config.mcp_servers.get_mut(&server_name) {
+        server.disabled = Some(!enabled);
+    }
+
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    std::fs::write(&config_path, json)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn remove_mcp_server(
+    config_path: String,
+    server_name: String,
+) -> Result<(), String> {
+    let content = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read config: {}", e))?;
+    let mut config: McpConfigFile = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse config: {}", e))?;
+
+    config.mcp_servers.remove(&server_name);
+
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+    std::fs::write(&config_path, json)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn add_mcp_server(
+    config_path: String,
+    name: String,
+    command: String,
+    args: Vec<String>,
+    env: std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let mut config = read_mcp_file(&config_path).unwrap_or(McpConfigFile {
+        mcp_servers: std::collections::HashMap::new(),
+    });
+
+    config.mcp_servers.insert(name, McpServerEntry {
+        command,
+        args,
+        env,
+        disabled: Some(false),
+    });
+
+    let json = serde_json::to_string_pretty(&config)
+        .map_err(|e| format!("Failed to serialize: {}", e))?;
+
+    let path = std::path::Path::new(&config_path);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory: {}", e))?;
+    }
+
+    std::fs::write(&config_path, json)
+        .map_err(|e| format!("Failed to write config: {}", e))?;
+    Ok(())
+}

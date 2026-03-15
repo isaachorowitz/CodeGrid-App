@@ -192,6 +192,125 @@ export async function dirExists(path: string): Promise<boolean> {
   return invoke("dir_exists", { path });
 }
 
+// === Git Manager Commands ===
+
+export interface GitStatusInfo {
+  branch: string;
+  ahead: number;
+  behind: number;
+  staged: GitFileChange[];
+  unstaged: GitFileChange[];
+  untracked: string[];
+  has_remote: boolean;
+  remote_url: string;
+}
+
+export interface GitFileChange {
+  path: string;
+  status: string;
+}
+
+export interface GitLogEntry {
+  hash: string;
+  short_hash: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
+export interface GitBranchInfo {
+  name: string;
+  is_current: boolean;
+  is_remote: boolean;
+  last_commit: string;
+}
+
+export async function gitStatus(workingDir: string): Promise<GitStatusInfo> {
+  return invoke("git_status", { workingDir });
+}
+
+export async function gitPush(workingDir: string, setUpstream: boolean = false): Promise<string> {
+  return invoke("git_push", { workingDir, setUpstream });
+}
+
+export async function gitPull(workingDir: string): Promise<string> {
+  return invoke("git_pull", { workingDir });
+}
+
+export async function gitCommit(workingDir: string, message: string, stageAll: boolean = false): Promise<string> {
+  return invoke("git_commit", { workingDir, message, stageAll });
+}
+
+export async function gitStageFile(workingDir: string, filePath: string): Promise<void> {
+  return invoke("git_stage_file", { workingDir, filePath });
+}
+
+export async function gitUnstageFile(workingDir: string, filePath: string): Promise<void> {
+  return invoke("git_unstage_file", { workingDir, filePath });
+}
+
+export async function gitCreateBranch(workingDir: string, branchName: string, checkout: boolean = true): Promise<void> {
+  return invoke("git_create_branch", { workingDir, branchName, checkout });
+}
+
+export async function gitSwitchBranch(workingDir: string, branchName: string): Promise<void> {
+  return invoke("git_switch_branch", { workingDir, branchName });
+}
+
+export async function gitListBranches(workingDir: string): Promise<GitBranchInfo[]> {
+  return invoke("git_list_branches", { workingDir });
+}
+
+export async function gitLog(workingDir: string, count: number = 20): Promise<GitLogEntry[]> {
+  return invoke("git_log", { workingDir, count });
+}
+
+export async function gitDiscardFile(workingDir: string, filePath: string): Promise<void> {
+  return invoke("git_discard_file", { workingDir, filePath });
+}
+
+// === MCP Manager Commands ===
+
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  enabled: boolean;
+  scope: string;
+  source_file: string;
+}
+
+export interface McpServerEntry {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  disabled?: boolean;
+}
+
+export async function listMcps(projectDir?: string): Promise<McpServerConfig[]> {
+  return invoke("list_mcps", { projectDir: projectDir ?? null });
+}
+
+export async function saveMcpConfig(configPath: string, servers: Record<string, McpServerEntry>): Promise<void> {
+  return invoke("save_mcp_config", { configPath, servers });
+}
+
+export async function toggleMcpServer(configPath: string, serverName: string, enabled: boolean): Promise<void> {
+  return invoke("toggle_mcp_server", { configPath, serverName, enabled });
+}
+
+export async function removeMcpServer(configPath: string, serverName: string): Promise<void> {
+  return invoke("remove_mcp_server", { configPath, serverName });
+}
+
+export async function addMcpServer(
+  configPath: string, name: string, command: string,
+  args: string[], env: Record<string, string>,
+): Promise<void> {
+  return invoke("add_mcp_server", { configPath, name, command, args, env });
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,
