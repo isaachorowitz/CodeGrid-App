@@ -1,8 +1,8 @@
 import { memo, useState, useEffect } from "react";
-import type { SessionInfo } from "../lib/ipc";
+import type { SessionWithModel } from "../stores/sessionStore";
 
 interface StatusBarProps {
-  session: SessionInfo;
+  session: SessionWithModel;
 }
 
 function shortenPath(path: string): string {
@@ -44,6 +44,18 @@ const STATUS_LABELS: Record<string, string> = {
   dead: "DEAD",
 };
 
+const MODEL_COLORS: Record<string, string> = {
+  "claude-opus-4-6": "#d500f9",
+  "claude-sonnet-4-6": "#ff8c00",
+  "claude-haiku-4-5": "#00e5ff",
+};
+
+const MODEL_SHORT: Record<string, string> = {
+  "claude-opus-4-6": "OPUS",
+  "claude-sonnet-4-6": "SONNET",
+  "claude-haiku-4-5": "HAIKU",
+};
+
 export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
   const [uptime, setUptime] = useState(formatUptime(session.created_at));
 
@@ -56,6 +68,9 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
 
   const statusColor = STATUS_COLORS[session.status] ?? "#555555";
   const statusLabel = STATUS_LABELS[session.status] ?? "UNKNOWN";
+  const modelColor = MODEL_COLORS[session.model ?? ""] ?? "#888888";
+  const modelShort = MODEL_SHORT[session.model ?? ""] ?? "";
+  const isClaude = session.command?.includes("claude");
 
   return (
     <div
@@ -74,13 +89,7 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
         flexShrink: 0,
       }}
     >
-      <span
-        style={{
-          color: "#ff8c00",
-          fontWeight: "bold",
-          minWidth: "16px",
-        }}
-      >
+      <span style={{ color: "#ff8c00", fontWeight: "bold", minWidth: "16px" }}>
         [{session.pane_number}]
       </span>
       <span
@@ -93,6 +102,21 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
       >
         {statusLabel}
       </span>
+      {isClaude && modelShort && (
+        <span
+          style={{
+            color: modelColor,
+            fontSize: "9px",
+            fontWeight: "bold",
+            letterSpacing: "0.5px",
+            padding: "0 3px",
+            border: `1px solid ${modelColor}44`,
+            background: `${modelColor}11`,
+          }}
+        >
+          {modelShort}
+        </span>
+      )}
       <span style={{ color: "#e0e0e0" }}>
         {shortenPath(session.working_dir)}
       </span>

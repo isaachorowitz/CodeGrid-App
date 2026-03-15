@@ -48,6 +48,13 @@ pub fn run() {
             commands::set_setting,
             commands::get_default_shell,
             commands::spawn_shell_session,
+            commands::clone_repo,
+            commands::get_home_dir,
+            commands::list_recent_dirs,
+            commands::detect_claude_skills,
+            commands::get_available_models,
+            commands::send_to_session,
+            commands::dir_exists,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GridCode");

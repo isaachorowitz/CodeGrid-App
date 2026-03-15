@@ -142,6 +142,56 @@ export async function spawnShellSession(
   return invoke("spawn_shell_session", { workingDir, workspaceId });
 }
 
+// === New: Hub, Skills, Models, Utility Commands ===
+
+export interface SkillInfo {
+  name: string;
+  description: string;
+  category: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  speed: string;
+  tier: string;
+}
+
+export async function cloneRepo(
+  url: string,
+  targetDir?: string,
+): Promise<string> {
+  return invoke("clone_repo", { url, targetDir });
+}
+
+export async function getHomeDir(): Promise<string> {
+  return invoke("get_home_dir");
+}
+
+export async function listRecentDirs(): Promise<string[]> {
+  return invoke("list_recent_dirs");
+}
+
+export async function detectClaudeSkills(): Promise<SkillInfo[]> {
+  return invoke("detect_claude_skills");
+}
+
+export async function getAvailableModels(): Promise<ModelInfo[]> {
+  return invoke("get_available_models");
+}
+
+export async function sendToSession(
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  return invoke("send_to_session", { sessionId, text });
+}
+
+export async function dirExists(path: string): Promise<boolean> {
+  return invoke("dir_exists", { path });
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,

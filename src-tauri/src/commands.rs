@@ -436,3 +436,230 @@ pub async fn spawn_shell_session(
 
     Ok(info)
 }
+
+// === Git Clone Commands ===
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CloneProgress {
+    pub status: String,
+    pub path: String,
+}
+
+#[tauri::command]
+pub async fn clone_repo(
+    app: AppHandle,
+    url: String,
+    target_dir: Option<String>,
+) -> Result<String, String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let projects_dir = target_dir.unwrap_or_else(|| format!("{}/Projects", home));
+
+    // Create Projects dir if needed
+    std::fs::create_dir_all(&projects_dir)
+        .map_err(|e| format!("Failed to create directory: {}", e))?;
+
+    // Extract repo name from URL
+    let repo_name = url
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .rsplit('/')
+        .next()
+        .unwrap_or("repo")
+        .to_string();
+
+    let clone_path = format!("{}/{}", projects_dir, repo_name);
+
+    // Check if already exists
+    if std::path::Path::new(&clone_path).exists() {
+        return Ok(clone_path);
+    }
+
+    let _ = app.emit("clone-progress", serde_json::json!({
+        "status": "cloning",
+        "repo": &repo_name,
+    }));
+
+    let output = std::process::Command::new("git")
+        .args(["clone", &url, &clone_path])
+        .output()
+        .map_err(|e| format!("Failed to run git clone: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Clone failed: {}", stderr));
+    }
+
+    let _ = app.emit("clone-progress", serde_json::json!({
+        "status": "done",
+        "repo": &repo_name,
+        "path": &clone_path,
+    }));
+
+    Ok(clone_path)
+}
+
+#[tauri::command]
+pub async fn get_home_dir() -> Result<String, String> {
+    std::env::var("HOME").map_err(|_| "Could not determine home directory".to_string())
+}
+
+#[tauri::command]
+pub async fn list_recent_dirs() -> Result<Vec<String>, String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let mut dirs: Vec<String> = Vec::new();
+
+    // Check common project locations
+    let search_paths = [
+        format!("{}/Projects", home),
+        format!("{}/projects", home),
+        format!("{}/Developer", home),
+        format!("{}/dev", home),
+        format!("{}/Code", home),
+        format!("{}/code", home),
+        format!("{}/repos", home),
+        format!("{}/src", home),
+        format!("{}/workspace", home),
+        format!("{}/Documents/GitHub", home),
+        format!("{}/GitHub", home),
+        home.clone(),
+    ];
+
+    for base in &search_paths {
+        if let Ok(entries) = std::fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let git_dir = path.join(".git");
+                    let pkg_json = path.join("package.json");
+                    let cargo_toml = path.join("Cargo.toml");
+                    let pyproject = path.join("pyproject.toml");
+                    if git_dir.exists() || pkg_json.exists() || cargo_toml.exists() || pyproject.exists() {
+                        if let Some(s) = path.to_str() {
+                            if !dirs.contains(&s.to_string()) {
+                                dirs.push(s.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Sort by modification time (newest first)
+    dirs.sort_by(|a, b| {
+        let a_time = std::fs::metadata(a).and_then(|m| m.modified()).ok();
+        let b_time = std::fs::metadata(b).and_then(|m| m.modified()).ok();
+        b_time.cmp(&a_time)
+    });
+
+    dirs.truncate(30);
+    Ok(dirs)
+}
+
+// === Claude Code Integration Commands ===
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SkillInfo {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+}
+
+#[tauri::command]
+pub async fn detect_claude_skills() -> Result<Vec<SkillInfo>, String> {
+    let mut skills = vec![
+        SkillInfo { name: "/help".to_string(), description: "Get help with Claude Code".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/clear".to_string(), description: "Clear conversation history".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/compact".to_string(), description: "Compact conversation to save context".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/cost".to_string(), description: "Show token usage and costs".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/doctor".to_string(), description: "Check Claude Code health and config".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/init".to_string(), description: "Initialize CLAUDE.md project file".to_string(), category: "Project".to_string() },
+        SkillInfo { name: "/review".to_string(), description: "Review code changes".to_string(), category: "Coding".to_string() },
+        SkillInfo { name: "/bug".to_string(), description: "Report or investigate a bug".to_string(), category: "Coding".to_string() },
+        SkillInfo { name: "/config".to_string(), description: "Open or edit configuration".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/login".to_string(), description: "Log in to Anthropic".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/logout".to_string(), description: "Log out of current account".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/model".to_string(), description: "Switch or display current model".to_string(), category: "Models".to_string() },
+        SkillInfo { name: "/permissions".to_string(), description: "View or modify tool permissions".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/status".to_string(), description: "Show session status and info".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/vim".to_string(), description: "Toggle vim keybindings".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/memory".to_string(), description: "Save info to project memory".to_string(), category: "Project".to_string() },
+        SkillInfo { name: "/terminal-setup".to_string(), description: "Configure terminal integration".to_string(), category: "General".to_string() },
+        SkillInfo { name: "/pr-comments".to_string(), description: "Address PR review comments".to_string(), category: "Coding".to_string() },
+        SkillInfo { name: "/mcp".to_string(), description: "Manage MCP server connections".to_string(), category: "General".to_string() },
+    ];
+
+    // Detect custom skills
+    let home = std::env::var("HOME").unwrap_or_default();
+    let config_path = format!("{}/.claude/skills", home);
+    if let Ok(entries) = std::fs::read_dir(&config_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "md" || e == "txt") {
+                let name = path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                skills.push(SkillInfo {
+                    name: format!("/{}", name),
+                    description: "Custom skill".to_string(),
+                    category: "Custom".to_string(),
+                });
+            }
+        }
+    }
+
+    Ok(skills)
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ModelInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub speed: String,
+    pub tier: String,
+}
+
+#[tauri::command]
+pub async fn get_available_models() -> Result<Vec<ModelInfo>, String> {
+    Ok(vec![
+        ModelInfo {
+            id: "claude-opus-4-6".to_string(),
+            name: "Opus 4.6".to_string(),
+            description: "Most capable. Best for complex reasoning and architecture.".to_string(),
+            speed: "Slower".to_string(),
+            tier: "max".to_string(),
+        },
+        ModelInfo {
+            id: "claude-sonnet-4-6".to_string(),
+            name: "Sonnet 4.6".to_string(),
+            description: "Fast and capable. Great balance of speed and quality.".to_string(),
+            speed: "Fast".to_string(),
+            tier: "high".to_string(),
+        },
+        ModelInfo {
+            id: "claude-haiku-4-5".to_string(),
+            name: "Haiku 4.5".to_string(),
+            description: "Fastest and cheapest. Good for simple tasks.".to_string(),
+            speed: "Fastest".to_string(),
+            tier: "standard".to_string(),
+        },
+    ])
+}
+
+#[tauri::command]
+pub async fn send_to_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    text: String,
+) -> Result<(), String> {
+    let data = format!("{}\n", text);
+    state.pty_manager.write_to_pty(&session_id, data.as_bytes())
+}
+
+#[tauri::command]
+pub async fn dir_exists(path: String) -> Result<bool, String> {
+    let expanded = expand_tilde(&path);
+    Ok(std::path::Path::new(&expanded).is_dir())
+}
