@@ -1,8 +1,10 @@
 import { memo, useState, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../stores/appStore";
+import { useToastStore } from "../stores/toastStore";
 import {
   gitStatus, gitPush, gitPull, gitCommit, gitStageFile, gitUnstageFile,
   gitCreateBranch, gitSwitchBranch, gitListBranches, gitLog, gitDiscardFile,
+  gitFetch, gitStash,
   type GitStatusInfo, type GitBranchInfo, type GitLogEntry,
 } from "../lib/ipc";
 
@@ -27,6 +29,7 @@ export const GitManager = memo(function GitManager() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const addToast = useToastStore((s) => s.addToast);
   const dir = gitManagerDir ?? "";
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -185,7 +188,27 @@ export const GitManager = memo(function GitManager() {
             </div>
           </div>
           <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
-            {/* Push / Pull buttons */}
+            {/* Fetch / Stash / Pull / Push buttons */}
+            <button onClick={async () => {
+              setLoading("fetch");
+              try { await gitFetch(dir); flash("Fetched"); } catch (e) { setError(String(e)); }
+              setLoading("");
+            }} disabled={loading === "fetch"} style={{
+              background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "fetch" ? "#ffab00" : "#888888",
+              fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 8px",
+            }}>
+              {loading === "fetch" ? "..." : "FETCH"}
+            </button>
+            <button onClick={async () => {
+              setLoading("stash");
+              try { await gitStash(dir, false); flash("Stashed"); await refresh(); } catch (e) { setError(String(e)); }
+              setLoading("");
+            }} style={{
+              background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+              fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 8px",
+            }}>
+              STASH
+            </button>
             <button onClick={handlePull} disabled={loading === "pull"} aria-label="Pull from remote" style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "pull" ? "#ffab00" : "#4a9eff",
               fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",

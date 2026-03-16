@@ -84,6 +84,18 @@ export const CommandPalette = memo(function CommandPalette() {
           setMcpManagerOpen(true, focused?.working_dir);
         },
       },
+      {
+        id: "open-claude-md",
+        label: "Edit CLAUDE.md — project instructions for Claude",
+        category: "Tools",
+        action: () => {
+          const focused = sessions.find((s) => s.id === focusedSessionId);
+          setCommandPaletteOpen(false);
+          if (focused?.working_dir) {
+            useAppStore.getState().setClaudeMdEditorOpen(true, focused.working_dir);
+          }
+        },
+      },
     ];
 
     // Layout presets

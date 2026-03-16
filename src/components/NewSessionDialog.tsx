@@ -1,6 +1,7 @@
 import { memo, useState, useCallback, useRef, useEffect } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useAppStore } from "../stores/appStore";
+import { useToastStore } from "../stores/toastStore";
 
 interface NewSessionDialogProps {
   onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => void;

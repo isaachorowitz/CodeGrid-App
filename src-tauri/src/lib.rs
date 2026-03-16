@@ -67,6 +67,15 @@ pub fn run() {
             commands::git_list_branches,
             commands::git_log,
             commands::git_discard_file,
+            commands::git_fetch,
+            commands::git_stash,
+            commands::git_diff_stat,
+            // Workspace-repo binding
+            commands::set_workspace_repo,
+            commands::create_workspace_with_repo,
+            // CLAUDE.md management
+            commands::read_claude_md,
+            commands::write_claude_md,
             // MCP manager
             commands::list_mcps,
             commands::save_mcp_config,

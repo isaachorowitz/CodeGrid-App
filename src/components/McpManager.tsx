@@ -1,9 +1,28 @@
 import { memo, useState, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../stores/appStore";
+import { useToastStore } from "../stores/toastStore";
 import {
   listMcps, addMcpServer, removeMcpServer, toggleMcpServer,
   getHomeDir, type McpServerConfig,
 } from "../lib/ipc";
+
+interface McpPreset {
+  name: string;
+  command: string;
+  args: string[];
+  description: string;
+}
+
+const MCP_PRESETS: McpPreset[] = [
+  { name: "filesystem", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"], description: "File system access" },
+  { name: "github", command: "npx", args: ["-y", "@modelcontextprotocol/server-github"], description: "GitHub API integration" },
+  { name: "postgres", command: "npx", args: ["-y", "@modelcontextprotocol/server-postgres"], description: "PostgreSQL database" },
+  { name: "sqlite", command: "npx", args: ["-y", "@modelcontextprotocol/server-sqlite"], description: "SQLite database" },
+  { name: "puppeteer", command: "npx", args: ["-y", "@modelcontextprotocol/server-puppeteer"], description: "Browser automation" },
+  { name: "brave-search", command: "npx", args: ["-y", "@modelcontextprotocol/server-brave-search"], description: "Brave Search API" },
+  { name: "memory", command: "npx", args: ["-y", "@modelcontextprotocol/server-memory"], description: "Persistent memory store" },
+  { name: "sequential-thinking", command: "npx", args: ["-y", "@modelcontextprotocol/server-sequential-thinking"], description: "Step-by-step reasoning" },
+];
 
 export const McpManager = memo(function McpManager() {
   const { mcpManagerOpen, setMcpManagerOpen, mcpManagerDir } = useAppStore();
@@ -17,6 +36,8 @@ export const McpManager = memo(function McpManager() {
   const [newArgs, setNewArgs] = useState("");
   const [newScope, setNewScope] = useState<"global" | "project">("global");
 
+  const addToast = useToastStore((s) => s.addToast);
+  const [showPresets, setShowPresets] = useState(false);
   const dir = mcpManagerDir ?? undefined;
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -117,6 +138,16 @@ export const McpManager = memo(function McpManager() {
             </div>
           </div>
           <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
+            <button onClick={() => setShowPresets(!showPresets)} style={{
+              background: showPresets ? "#d500f922" : "#1e1e1e", border: "1px solid #2a2a2a",
+              color: showPresets ? "#d500f9" : "#888888", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+              cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#d500f9"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
+            >
+              PRESETS
+            </button>
             <button onClick={() => setAdding(!adding)} style={{
               background: adding ? "#d500f9" : "#1e1e1e", border: "1px solid #d500f9",
               color: adding ? "#0a0a0a" : "#d500f9", fontSize: "10px", fontFamily: "'SF Mono', monospace",
@@ -167,6 +198,42 @@ export const McpManager = memo(function McpManager() {
               fontFamily: "'SF Mono', monospace", cursor: newName.trim() && newCommand.trim() ? "pointer" : "default",
               padding: "6px 12px", fontWeight: "bold", alignSelf: "flex-end",
             }}>ADD SERVER</button>
+          </div>
+        )}
+
+        {/* Popular presets */}
+        {showPresets && (
+          <div style={{ padding: "8px 16px", borderBottom: "1px solid #2a2a2a" }}>
+            <div style={{ color: "#d500f9", fontSize: "9px", letterSpacing: "1px", fontWeight: "bold", marginBottom: "6px" }}>
+              POPULAR MCP SERVERS — CLICK TO INSTALL
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "3px" }}>
+              {MCP_PRESETS.filter(p => !servers.some(s => s.name === p.name)).map((preset) => (
+                <button
+                  key={preset.name}
+                  onClick={async () => {
+                    let homePath = "~";
+                    try { homePath = await getHomeDir(); } catch {}
+                    const configPath = `${homePath}/.claude/mcp.json`;
+                    try {
+                      await addMcpServer(configPath, preset.name, preset.command, preset.args, {});
+                      addToast(`Added ${preset.name}`, "success");
+                      await refresh();
+                    } catch (e) { addToast(`Failed: ${e}`, "error"); }
+                  }}
+                  style={{
+                    background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
+                    fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+                    padding: "6px 8px", textAlign: "left",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#d500f9"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
+                >
+                  <div style={{ fontWeight: "bold", color: "#d500f9" }}>{preset.name}</div>
+                  <div style={{ color: "#888888", fontSize: "9px" }}>{preset.description}</div>
+                </button>
+              ))}
+            </div>
           </div>
         )}
 

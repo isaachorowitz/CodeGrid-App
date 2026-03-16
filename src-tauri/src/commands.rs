@@ -325,6 +325,83 @@ pub async fn rename_workspace(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_workspace_repo(
+    state: State<'_, Arc<AppState>>,
+    workspace_id: String,
+    repo_path: Option<String>,
+) -> Result<(), String> {
+    let workspaces = state.db.load_workspaces()?;
+    if let Some(mut ws) = workspaces.into_iter().find(|w| w.id == workspace_id) {
+        ws.repo_path = repo_path;
+        state.db.save_workspace(&ws)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn create_workspace_with_repo(
+    state: State<'_, Arc<AppState>>,
+    name: String,
+    repo_path: Option<String>,
+) -> Result<Workspace, String> {
+    let id = Uuid::new_v4().to_string();
+    let mut workspace = Workspace::new(id, name);
+    if let Some(ref path) = repo_path {
+        workspace = workspace.with_repo(path.clone());
+    }
+    state.db.save_workspace(&workspace)?;
+    Ok(workspace)
+}
+
+// === CLAUDE.md Management ===
+
+#[tauri::command]
+pub async fn read_claude_md(project_dir: String) -> Result<Option<String>, String> {
+    let dir = validate_dir(&project_dir)?;
+    let path = format!("{}/CLAUDE.md", dir);
+    match std::fs::read_to_string(&path) {
+        Ok(content) => Ok(Some(content)),
+        Err(_) => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub async fn write_claude_md(project_dir: String, content: String) -> Result<(), String> {
+    let dir = validate_dir(&project_dir)?;
+    let path = format!("{}/CLAUDE.md", dir);
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write CLAUDE.md: {}", e))
+}
+
+// === Git Fetch ===
+
+#[tauri::command]
+pub async fn git_fetch(working_dir: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    run_git(&dir, &["fetch", "--all", "--prune"])
+}
+
+// === Git Stash ===
+
+#[tauri::command]
+pub async fn git_stash(working_dir: String, pop: bool) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    if pop {
+        run_git(&dir, &["stash", "pop"])
+    } else {
+        run_git(&dir, &["stash"])
+    }
+}
+
+// === Git Diff ===
+
+#[tauri::command]
+pub async fn git_diff_stat(working_dir: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    run_git(&dir, &["diff", "--stat"])
+}
+
 // === Utility Commands ===
 
 #[tauri::command]

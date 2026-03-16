@@ -7,6 +7,7 @@ pub struct Workspace {
     pub layout_json: Option<String>,
     pub created_at: String,
     pub is_active: bool,
+    pub repo_path: Option<String>,
 }
 
 impl Workspace {
@@ -17,6 +18,17 @@ impl Workspace {
             layout_json: None,
             created_at: chrono::Utc::now().to_rfc3339(),
             is_active: false,
+            repo_path: None,
         }
+    }
+
+    pub fn with_repo(mut self, repo_path: String) -> Self {
+        self.name = std::path::Path::new(&repo_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&self.name)
+            .to_string();
+        self.repo_path = Some(repo_path);
+        self
     }
 }
