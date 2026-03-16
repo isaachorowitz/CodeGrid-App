@@ -451,14 +451,25 @@ pub async fn clone_repo(
     url: String,
     target_dir: Option<String>,
 ) -> Result<String, String> {
+    // Validate URL - must look like a git URL
+    if !url.starts_with("https://") && !url.starts_with("http://") && !url.starts_with("git@") && !url.starts_with("ssh://") {
+        return Err("Invalid URL: must start with https://, http://, git@, or ssh://".to_string());
+    }
+
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let projects_dir = target_dir.unwrap_or_else(|| format!("{}/Projects", home));
+
+    // Validate projects_dir is under home or /tmp
+    let projects_path = std::path::Path::new(&projects_dir);
+    if !projects_dir.starts_with(&home) && !projects_dir.starts_with("/tmp") {
+        return Err("Target directory must be under your home directory".to_string());
+    }
 
     // Create Projects dir if needed
     std::fs::create_dir_all(&projects_dir)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
 
-    // Extract repo name from URL
+    // Extract repo name from URL and sanitize
     let repo_name = url
         .trim_end_matches('/')
         .trim_end_matches(".git")
@@ -466,6 +477,11 @@ pub async fn clone_repo(
         .next()
         .unwrap_or("repo")
         .to_string();
+
+    // Reject repo names with path traversal
+    if repo_name.contains("..") || repo_name.contains('/') || repo_name.contains('\\') || repo_name.is_empty() {
+        return Err("Invalid repository name extracted from URL".to_string());
+    }
 
     let clone_path = format!("{}/{}", projects_dir, repo_name);
 
@@ -930,6 +946,21 @@ pub async fn git_discard_file(working_dir: String, file_path: String) -> Result<
 
 // === MCP Manager Commands ===
 
+fn validate_mcp_config_path(config_path: &str) -> Result<(), String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    // Config path must be under home dir and end with .json
+    if !config_path.starts_with(&home) {
+        return Err("MCP config path must be under home directory".to_string());
+    }
+    if !config_path.ends_with(".json") {
+        return Err("MCP config path must be a .json file".to_string());
+    }
+    if config_path.contains("..") {
+        return Err("MCP config path must not contain path traversal".to_string());
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct McpServerConfig {
     pub name: String,
@@ -1025,6 +1056,7 @@ pub async fn save_mcp_config(
     config_path: String,
     servers: std::collections::HashMap<String, McpServerEntry>,
 ) -> Result<(), String> {
+    validate_mcp_config_path(&config_path)?;
     let config = McpConfigFile { mcp_servers: servers };
     let json = serde_json::to_string_pretty(&config)
         .map_err(|e| format!("Failed to serialize: {}", e))?;
@@ -1047,6 +1079,7 @@ pub async fn toggle_mcp_server(
     server_name: String,
     enabled: bool,
 ) -> Result<(), String> {
+    validate_mcp_config_path(&config_path)?;
     let content = std::fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config: {}", e))?;
     let mut config: McpConfigFile = serde_json::from_str(&content)
@@ -1068,6 +1101,7 @@ pub async fn remove_mcp_server(
     config_path: String,
     server_name: String,
 ) -> Result<(), String> {
+    validate_mcp_config_path(&config_path)?;
     let content = std::fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read config: {}", e))?;
     let mut config: McpConfigFile = serde_json::from_str(&content)
@@ -1090,6 +1124,13 @@ pub async fn add_mcp_server(
     args: Vec<String>,
     env: std::collections::HashMap<String, String>,
 ) -> Result<(), String> {
+    validate_mcp_config_path(&config_path)?;
+
+    // Validate command doesn't contain path traversal or shell tricks
+    if command.contains("..") || command.contains(';') || command.contains('|') || command.contains('&') {
+        return Err("Invalid command: contains prohibited characters".to_string());
+    }
+
     let mut config = read_mcp_file(&config_path).unwrap_or(McpConfigFile {
         mcp_servers: std::collections::HashMap::new(),
     });
