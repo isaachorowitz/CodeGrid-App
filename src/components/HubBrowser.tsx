@@ -162,11 +162,11 @@ export const HubBrowser = memo(function HubBrowser() {
     await handleClone(customUrl.trim(), name);
   }, [customUrl, handleClone]);
 
-  const handleOpenInGridCode = useCallback(
+  const handleOpenInCodeGrid = useCallback(
     (path: string) => {
       setHubBrowserOpen(false);
       window.dispatchEvent(
-        new CustomEvent("gridcode:quick-session", {
+        new CustomEvent("codegrid:quick-session", {
           detail: { path, type: "claude" },
         }),
       );
@@ -204,13 +204,16 @@ export const HubBrowser = memo(function HubBrowser() {
       />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Hub Browser"
         style={{
           position: "relative",
           width: "700px",
           maxHeight: "650px",
           background: "#141414",
           border: "1px solid #ff8c00",
-          fontFamily: "'SF Mono', 'Menlo', monospace",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           zIndex: 1,
           display: "flex",
           flexDirection: "column",
@@ -238,7 +241,7 @@ export const HubBrowser = memo(function HubBrowser() {
             onClick={() => setHubBrowserOpen(false)}
             style={{
               background: "none", border: "none", color: "#555555",
-              fontSize: "14px", cursor: "pointer", fontFamily: "'SF Mono', monospace",
+              fontSize: "14px", cursor: "pointer", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
           >
             x
@@ -258,7 +261,7 @@ export const HubBrowser = memo(function HubBrowser() {
                 border: "1px solid #2a2a2a",
                 color: "#e0e0e0",
                 fontSize: "12px",
-                fontFamily: "'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 padding: "8px",
                 outline: "none",
               }}
@@ -276,7 +279,7 @@ export const HubBrowser = memo(function HubBrowser() {
                 border: "none",
                 color: customUrl.trim() ? "#0a0a0a" : "#555555",
                 fontSize: "11px",
-                fontFamily: "'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: customUrl.trim() ? "pointer" : "default",
                 padding: "8px 16px",
                 fontWeight: "bold",
@@ -307,7 +310,7 @@ export const HubBrowser = memo(function HubBrowser() {
                 color: tab === t ? "#ff8c00" : "#555555",
                 fontSize: "11px",
                 fontWeight: "bold",
-                fontFamily: "'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer",
                 letterSpacing: "1px",
               }}
@@ -330,7 +333,7 @@ export const HubBrowser = memo(function HubBrowser() {
               border: "none",
               color: "#e0e0e0",
               fontSize: "12px",
-              fontFamily: "'SF Mono', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               padding: "4px 0",
               outline: "none",
             }}
@@ -349,7 +352,7 @@ export const HubBrowser = memo(function HubBrowser() {
                   placeholder="Search GitHub (all repos, orgs)..."
                   style={{
                     flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
-                    fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none",
+                    fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none",
                   }}
                   onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
                   onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
@@ -361,7 +364,7 @@ export const HubBrowser = memo(function HubBrowser() {
                   style={{
                     background: searchQuery.trim() ? "#ff8c00" : "#2a2a2a", border: "none",
                     color: searchQuery.trim() ? "#0a0a0a" : "#555", fontSize: "10px",
-                    fontFamily: "'SF Mono', monospace", padding: "6px 12px", fontWeight: "bold", cursor: "pointer",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 12px", fontWeight: "bold", cursor: "pointer",
                   }}
                 >
                   {searching ? "..." : "SEARCH"}
@@ -375,7 +378,7 @@ export const HubBrowser = memo(function HubBrowser() {
                   placeholder="organization name"
                   style={{
                     flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
-                    fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "4px 8px", outline: "none",
+                    fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "4px 8px", outline: "none",
                   }}
                   onKeyDown={(e) => { if (e.key === "Enter") loadOrgRepos(orgName); }}
                 />
@@ -385,7 +388,7 @@ export const HubBrowser = memo(function HubBrowser() {
                   style={{
                     background: orgName.trim() ? "#1e1e1e" : "#1a1a1a", border: "1px solid #2a2a2a",
                     color: orgName.trim() ? "#4a9eff" : "#555", fontSize: "10px",
-                    fontFamily: "'SF Mono', monospace", padding: "4px 10px", cursor: "pointer",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "4px 10px", cursor: "pointer",
                   }}
                 >
                   {orgLoading ? "..." : "LOAD"}
@@ -393,7 +396,7 @@ export const HubBrowser = memo(function HubBrowser() {
               </div>
               {searchResults.length > 0 && (
                 <div style={{ padding: "4px 16px", color: "#4a9eff", fontSize: "9px", borderBottom: "1px solid #1e1e1e" }}>
-                  {searchResults.length} search results for "{searchQuery}" — <button onClick={() => { setSearchResults([]); setSearchQuery(""); }} style={{ background: "none", border: "none", color: "#ff8c00", fontSize: "9px", cursor: "pointer", fontFamily: "'SF Mono', monospace", padding: 0 }}>CLEAR</button>
+                  {searchResults.length} search results for "{searchQuery}" — <button onClick={() => { setSearchResults([]); setSearchQuery(""); }} style={{ background: "none", border: "none", color: "#ff8c00", fontSize: "9px", cursor: "pointer", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: 0 }}>CLEAR</button>
                 </div>
               )}
               {ghLoading && (
@@ -476,10 +479,10 @@ export const HubBrowser = memo(function HubBrowser() {
                     <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
                       {clonedPath ? (
                         <button
-                          onClick={() => handleOpenInGridCode(clonedPath)}
+                          onClick={() => handleOpenInCodeGrid(clonedPath)}
                           style={{
                             background: "#00c853", border: "none", color: "#0a0a0a",
-                            fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                             cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
                           }}
                         >
@@ -494,7 +497,7 @@ export const HubBrowser = memo(function HubBrowser() {
                             border: "1px solid #2a2a2a",
                             color: isCloning ? "#ffab00" : "#888888",
                             fontSize: "10px",
-                            fontFamily: "'SF Mono', monospace",
+                            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                             cursor: isCloning ? "default" : "pointer",
                             padding: "4px 10px",
                           }}
@@ -556,10 +559,10 @@ export const HubBrowser = memo(function HubBrowser() {
                     <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
                       {clonedPath ? (
                         <button
-                          onClick={() => handleOpenInGridCode(clonedPath)}
+                          onClick={() => handleOpenInCodeGrid(clonedPath)}
                           style={{
                             background: "#00c853", border: "none", color: "#0a0a0a",
-                            fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                             cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
                           }}
                         >
@@ -574,7 +577,7 @@ export const HubBrowser = memo(function HubBrowser() {
                             border: "1px solid #2a2a2a",
                             color: isCloning ? "#ffab00" : "#888888",
                             fontSize: "10px",
-                            fontFamily: "'SF Mono', monospace",
+                            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                             cursor: isCloning ? "default" : "pointer",
                             padding: "4px 10px",
                           }}

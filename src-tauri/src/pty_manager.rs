@@ -47,7 +47,7 @@ impl PtyManager {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| format!("Failed to open PTY: {}", e))?;
+            .map_err(|e| format!("Failed to open PTY: {e}"))?;
 
         let mut cmd = CommandBuilder::new(command);
         for arg in args {
@@ -80,19 +80,19 @@ impl PtyManager {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| format!("Failed to spawn command: {}", e))?;
+            .map_err(|e| format!("Failed to spawn command: {e}"))?;
 
         let writer = pair
             .master
             .take_writer()
-            .map_err(|e| format!("Failed to get PTY writer: {}", e))?;
+            .map_err(|e| format!("Failed to get PTY writer: {e}"))?;
 
         // Set up output reading
         let (tx, rx) = mpsc::unbounded_channel();
         let mut reader = pair
             .master
             .try_clone_reader()
-            .map_err(|e| format!("Failed to clone PTY reader: {}", e))?;
+            .map_err(|e| format!("Failed to clone PTY reader: {e}"))?;
 
         let sid = session_id.to_string();
         std::thread::spawn(move || {
@@ -106,9 +106,12 @@ impl PtyManager {
                         }
                     }
                     Err(e) => {
-                        // EIO is expected when PTY child exits
-                        if e.kind() != std::io::ErrorKind::Other {
-                            eprintln!("PTY read error for session {}: {}", sid, e);
+                        // EIO is expected when PTY child exits on Unix.
+                        // On macOS this surfaces as ErrorKind::Other with raw_os_error 5 (EIO).
+                        // Only log unexpected errors.
+                        let is_eio = e.raw_os_error() == Some(5); // libc::EIO
+                        if !is_eio {
+                            eprintln!("PTY read error for session {}: {} (kind={:?}, os_error={:?})", sid, e, e.kind(), e.raw_os_error());
                         }
                         break;
                     }
@@ -134,14 +137,14 @@ impl PtyManager {
             instance
                 .writer
                 .write_all(data)
-                .map_err(|e| format!("Failed to write to PTY: {}", e))?;
+                .map_err(|e| format!("Failed to write to PTY: {e}"))?;
             instance
                 .writer
                 .flush()
-                .map_err(|e| format!("Failed to flush PTY: {}", e))?;
+                .map_err(|e| format!("Failed to flush PTY: {e}"))?;
             Ok(())
         } else {
-            Err(format!("Session {} not found", session_id))
+            Err(format!("Session {session_id} not found"))
         }
     }
 
@@ -156,10 +159,10 @@ impl PtyManager {
                     pixel_width: 0,
                     pixel_height: 0,
                 })
-                .map_err(|e| format!("Failed to resize PTY: {}", e))?;
+                .map_err(|e| format!("Failed to resize PTY: {e}"))?;
             Ok(())
         } else {
-            Err(format!("Session {} not found", session_id))
+            Err(format!("Session {session_id} not found"))
         }
     }
 
@@ -171,7 +174,7 @@ impl PtyManager {
             let _ = instance.child.wait();
             Ok(())
         } else {
-            Err(format!("Session {} not found", session_id))
+            Err(format!("Session {session_id} not found"))
         }
     }
 
@@ -182,9 +185,8 @@ impl PtyManager {
         };
         if let Some(instance) = instances.get_mut(session_id) {
             match instance.child.try_wait() {
-                Ok(Some(_)) => false,
                 Ok(None) => true,
-                Err(_) => false,
+                Ok(Some(_)) | Err(_) => false,
             }
         } else {
             false
@@ -200,10 +202,26 @@ impl PtyManager {
     pub fn kill_all(&self) {
         if let Ok(mut instances) = self.instances.lock() {
             for (sid, mut instance) in instances.drain() {
-                eprintln!("[GridCode] Killing PTY session {} on shutdown", sid);
+                eprintln!("[CodeGrid] Killing PTY session {sid} on shutdown");
                 let _ = instance.child.kill();
                 let _ = instance.child.wait();
             }
         }
+    }
+
+    /// Returns the list of active session IDs (for diagnostics).
+    #[allow(dead_code)]
+    pub fn active_session_ids(&self) -> Vec<String> {
+        lock_instances(&self.instances)
+            .map(|i| i.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+}
+
+/// Safety net: kill all child processes if `PtyManager` is dropped without
+/// an explicit `kill_all` call (e.g. during a panic unwind).
+impl Drop for PtyManager {
+    fn drop(&mut self) {
+        self.kill_all();
     }
 }

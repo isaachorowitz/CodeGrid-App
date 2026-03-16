@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
-  "productName": "GridCode",
+  "productName": "CodeGrid",
   "version": "0.1.0",
-  "identifier": "com.gridcode.app",
+  "identifier": "dev.codegrid.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "GridCode — Bloomberg Terminal for Claude Code",
+        "title": "Code Grid — Terminal workspace manager",
         "width": 1440,
         "height": 900,
         "minWidth": 800,
@@ -47,9 +47,9 @@
       "entitlements": "Entitlements.plist"
     },
     "category": "DeveloperTool",
-    "shortDescription": "Bloomberg Terminal for Claude Code — multi-session AI terminal multiplexer",
-    "longDescription": "GridCode is a desktop terminal multiplexer that lets you run multiple Claude Code sessions in a free-form 2D grid layout. Features include workspace management, broadcast mode, git manager, MCP server management, and a Bloomberg-inspired dark theme.",
-    "copyright": "Copyright © 2026 GridCode"
+    "shortDescription": "Code Grid — Terminal workspace manager for multi-session AI coding",
+    "longDescription": "Code Grid is a desktop terminal multiplexer that lets you run multiple Claude Code sessions in a free-form 2D grid layout. Features include workspace management, broadcast mode, git manager, MCP server management, and a dense dark theme.",
+    "copyright": "Copyright © 2026 Code Grid"
   },
   "plugins": {
     "shell": {

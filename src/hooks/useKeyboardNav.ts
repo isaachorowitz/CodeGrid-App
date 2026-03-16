@@ -3,6 +3,7 @@ import { matchKeybinding } from "../lib/keybindings";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
 
 export function useKeyboardNav() {
   const {
@@ -11,7 +12,7 @@ export function useKeyboardNav() {
     setFocusedSession,
     toggleBroadcast,
   } = useSessionStore();
-  const { layouts, toggleMaximize, swapPanes } = useLayoutStore();
+  const { layouts, toggleMaximize, swapPanes, setLayouts } = useLayoutStore();
   const {
     workspaces,
     activeWorkspaceId,
@@ -88,7 +89,7 @@ export function useKeyboardNav() {
           // Handled by the pane component
           if (focusedSessionId) {
             window.dispatchEvent(
-              new CustomEvent("gridcode:close-session", {
+              new CustomEvent("codegrid:close-session", {
                 detail: { sessionId: focusedSessionId },
               }),
             );
@@ -103,7 +104,7 @@ export function useKeyboardNav() {
           if (targetId) {
             setFocusedSession(targetId);
             window.dispatchEvent(
-              new CustomEvent("gridcode:focus-terminal", {
+              new CustomEvent("codegrid:focus-terminal", {
                 detail: { sessionId: targetId },
               }),
             );
@@ -139,7 +140,7 @@ export function useKeyboardNav() {
           setSettingsOpen(true);
           break;
         case "new-workspace":
-          window.dispatchEvent(new CustomEvent("gridcode:new-workspace"));
+          window.dispatchEvent(new CustomEvent("codegrid:new-workspace"));
           break;
         case "next-workspace":
         case "prev-workspace": {
@@ -149,19 +150,29 @@ export function useKeyboardNav() {
               action === "next-workspace"
                 ? (idx + 1) % workspaces.length
                 : (idx - 1 + workspaces.length) % workspaces.length;
-            setActiveWorkspace(workspaces[next].id);
+            const targetWs = workspaces[next];
+            setActiveWorkspace(targetWs.id);
+            // Restore layout for the target workspace
+            if (targetWs.layout_json) {
+              try { setLayouts(JSON.parse(targetWs.layout_json)); } catch { setLayouts([]); }
+            } else {
+              setLayouts([]);
+            }
+            setActiveWorkspaceIpc(targetWs.id).catch(() => {});
           }
           break;
         }
         default:
-          // Handle focus-pane-N
+          // Handle focus-pane-N (only search sessions in the active workspace)
           if (action.startsWith("focus-pane-")) {
             const num = parseInt(action.replace("focus-pane-", ""), 10);
-            const session = sessions.find((s) => s.pane_number === num);
+            const session = sessions.find(
+              (s) => s.pane_number === num && s.workspace_id === activeWorkspaceId,
+            );
             if (session) {
               setFocusedSession(session.id);
               window.dispatchEvent(
-                new CustomEvent("gridcode:focus-terminal", {
+                new CustomEvent("codegrid:focus-terminal", {
                   detail: { sessionId: session.id },
                 }),
               );
@@ -179,5 +190,15 @@ export function useKeyboardNav() {
     workspaces,
     activeWorkspaceId,
     findAdjacentPane,
+    setFocusedSession,
+    setNewSessionDialogOpen,
+    setCommandPaletteOpen,
+    toggleSidebar,
+    setSettingsOpen,
+    toggleBroadcast,
+    swapPanes,
+    toggleMaximize,
+    setActiveWorkspace,
+    setLayouts,
   ]);
 }

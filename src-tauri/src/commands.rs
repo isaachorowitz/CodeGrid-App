@@ -27,6 +27,8 @@ pub struct SessionInfo {
     pub created_at: String,
     pub pane_number: u32,
     pub worktree_path: Option<String>,
+    /// User-assigned name, persisted to DB. None = auto-detected from terminal activity.
+    pub name: Option<String>,
 }
 
 impl From<&Session> for SessionInfo {
@@ -47,6 +49,7 @@ impl From<&Session> for SessionInfo {
             created_at: s.created_at.clone(),
             pane_number: s.pane_number,
             worktree_path: s.worktree_path.clone(),
+            name: s.name.clone(),
         }
     }
 }
@@ -58,9 +61,9 @@ pub struct PtyOutput {
 }
 
 fn expand_tilde(path: &str) -> String {
-    if path.starts_with("~") {
+    if path.starts_with('~') {
         if let Ok(home) = std::env::var("HOME") {
-            return path.replacen("~", &home, 1);
+            return path.replacen('~', &home, 1);
         }
     }
     path.to_string()
@@ -77,10 +80,14 @@ pub async fn create_session(
     use_worktree: bool,
     resume: bool,
 ) -> Result<SessionInfo, String> {
-    let working_dir = expand_tilde(&working_dir);
+    let working_dir = validate_dir(&working_dir)?;
     let session_id = Uuid::new_v4().to_string();
     let sessions = state.sessions.lock().await;
-    let pane_number = sessions.iter().filter(|s| s.workspace_id == workspace_id).count() as u32 + 1;
+    let pane_number = sessions.iter()
+        .filter(|s| s.workspace_id == workspace_id)
+        .map(|s| s.pane_number)
+        .max()
+        .unwrap_or(0) + 1;
     drop(sessions);
 
     // Determine actual working directory (possibly a worktree)
@@ -119,8 +126,8 @@ pub async fn create_session(
     let claude_path = which::which("claude")
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "claude".to_string());
-    eprintln!("[GridCode] Claude binary: {}", claude_path);
-    eprintln!("[GridCode] Working dir: {}", actual_dir);
+    eprintln!("[CodeGrid] Claude binary: {claude_path}");
+    eprintln!("[CodeGrid] Working dir: {actual_dir}");
 
     let mut args: Vec<String> = Vec::new();
     if resume {
@@ -162,13 +169,13 @@ pub async fn create_session(
 
     let app_handle = app.clone();
     let sid = session_id.clone();
-    eprintln!("[GridCode] Session {} created, waiting for frontend connect", session_id);
+    eprintln!("[CodeGrid] Session {session_id} created, waiting for frontend connect");
 
     tokio::spawn(async move {
         // Wait for frontend to signal it's ready (or timeout after 5s as fallback)
         tokio::select! {
-            _ = connect_rx => { eprintln!("[GridCode] Session {} connected by frontend", sid); },
-            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => { eprintln!("[GridCode] Session {} connect timed out, starting anyway", sid); },
+            _ = connect_rx => { eprintln!("[CodeGrid] Session {sid} connected by frontend"); },
+            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => { eprintln!("[CodeGrid] Session {sid} connect timed out, starting anyway"); },
         }
 
         let mut count = 0u64;
@@ -176,7 +183,7 @@ pub async fn create_session(
         while let Some(data) = rx.recv().await {
             count += data.len() as u64;
             if count <= 1000 || count % 10000 < 100 {
-                eprintln!("[GridCode] Session {} emitting {} bytes (total: {})", sid, data.len(), count);
+                eprintln!("[CodeGrid] Session {} emitting {} bytes (total: {})", sid, data.len(), count);
             }
             let _ = app_handle.emit(
                 "pty-output",
@@ -186,7 +193,7 @@ pub async fn create_session(
                 },
             );
         }
-        eprintln!("[GridCode] Session {} ended (total bytes: {})", sid, count);
+        eprintln!("[CodeGrid] Session {sid} ended (total bytes: {count})");
         let _ = app_handle.emit(
             "session-ended",
             serde_json::json!({ "session_id": sid }),
@@ -220,11 +227,19 @@ pub async fn kill_session(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
+    // Clean up the connect signal so the buffering task unblocks immediately
+    // instead of waiting for the 5-second timeout
+    let signal = state.connect_signals.lock().await.remove(&session_id);
+    if let Some(tx) = signal {
+        let _ = tx.send(());
+    }
+
     state.pty_manager.kill_session(&session_id)?;
 
     let mut sessions = state.sessions.lock().await;
     if let Some(pos) = sessions.iter().position(|s| s.id == session_id) {
         let session = sessions.remove(pos);
+        drop(sessions);
         let _ = state.db.delete_session(&session_id);
 
         // Clean up worktree if applicable
@@ -251,6 +266,33 @@ pub async fn get_sessions(
         .collect())
 }
 
+/// Load sessions from the database (status will be Dead — used to restore layout on startup).
+#[tauri::command]
+pub async fn get_persisted_sessions(
+    state: State<'_, Arc<AppState>>,
+    workspace_id: String,
+) -> Result<Vec<SessionInfo>, String> {
+    let db_sessions = state.db.load_sessions(&workspace_id)?;
+    Ok(db_sessions.iter().map(SessionInfo::from).collect())
+}
+
+/// Persist a user-assigned name for a session tab.
+#[tauri::command]
+pub async fn rename_session(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    name: Option<String>,
+) -> Result<(), String> {
+    // Update in-memory session
+    let mut sessions = state.sessions.lock().await;
+    if let Some(s) = sessions.iter_mut().find(|s| s.id == session_id) {
+        s.name = name.clone();
+    }
+    drop(sessions);
+    // Persist to DB
+    state.db.rename_session(&session_id, name.as_deref())
+}
+
 #[tauri::command]
 pub async fn update_session_status(
     state: State<'_, Arc<AppState>>,
@@ -265,7 +307,7 @@ pub async fn update_session_status(
             "waiting" => SessionStatus::Waiting,
             "error" => SessionStatus::Error,
             "dead" => SessionStatus::Dead,
-            _ => return Err(format!("Invalid status: {}", status)),
+            _ => return Err(format!("Invalid status: {status}")),
         };
         let _ = state.db.save_session(session);
     }
@@ -306,8 +348,13 @@ pub async fn delete_workspace(
         .collect();
     drop(sessions);
 
-    for sid in session_ids {
-        let _ = state.pty_manager.kill_session(&sid);
+    for sid in &session_ids {
+        // Clean up connect signals so buffering tasks unblock immediately
+        let signal = state.connect_signals.lock().await.remove(sid);
+        if let Some(tx) = signal {
+            let _ = tx.send(());
+        }
+        let _ = state.pty_manager.kill_session(sid);
     }
 
     // Clean up worktrees before removing sessions
@@ -391,7 +438,7 @@ pub async fn create_workspace_with_repo(
 #[tauri::command]
 pub async fn read_claude_md(project_dir: String) -> Result<Option<String>, String> {
     let dir = validate_dir(&project_dir)?;
-    let path = format!("{}/CLAUDE.md", dir);
+    let path = format!("{dir}/CLAUDE.md");
     match std::fs::read_to_string(&path) {
         Ok(content) => Ok(Some(content)),
         Err(_) => Ok(None),
@@ -401,9 +448,9 @@ pub async fn read_claude_md(project_dir: String) -> Result<Option<String>, Strin
 #[tauri::command]
 pub async fn write_claude_md(project_dir: String, content: String) -> Result<(), String> {
     let dir = validate_dir(&project_dir)?;
-    let path = format!("{}/CLAUDE.md", dir);
+    let path = format!("{dir}/CLAUDE.md");
     std::fs::write(&path, content)
-        .map_err(|e| format!("Failed to write CLAUDE.md: {}", e))
+        .map_err(|e| format!("Failed to write CLAUDE.md: {e}"))
 }
 
 // === Git Fetch ===
@@ -438,12 +485,14 @@ pub async fn git_diff_stat(working_dir: String) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn get_git_branch(working_dir: String) -> Result<Option<String>, String> {
-    Ok(WorktreeManager::current_branch(&working_dir))
+    let dir = validate_dir(&working_dir)?;
+    Ok(WorktreeManager::current_branch(&dir))
 }
 
 #[tauri::command]
 pub async fn is_git_repo(working_dir: String) -> Result<bool, String> {
-    Ok(WorktreeManager::is_git_repo(&working_dir))
+    let dir = validate_dir(&working_dir)?;
+    Ok(WorktreeManager::is_git_repo(&dir))
 }
 
 #[tauri::command]
@@ -489,10 +538,14 @@ pub async fn spawn_shell_session(
     working_dir: String,
     workspace_id: String,
 ) -> Result<SessionInfo, String> {
-    let working_dir = expand_tilde(&working_dir);
+    let working_dir = validate_dir(&working_dir)?;
     let session_id = Uuid::new_v4().to_string();
     let sessions = state.sessions.lock().await;
-    let pane_number = sessions.iter().filter(|s| s.workspace_id == workspace_id).count() as u32 + 1;
+    let pane_number = sessions.iter()
+        .filter(|s| s.workspace_id == workspace_id)
+        .map(|s| s.pane_number)
+        .max()
+        .unwrap_or(0) + 1;
     drop(sessions);
 
     let shell = get_default_shell().await?;
@@ -563,7 +616,8 @@ pub async fn connect_pty(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Result<(), String> {
-    if let Some(tx) = state.connect_signals.lock().await.remove(&session_id) {
+    let signal = state.connect_signals.lock().await.remove(&session_id);
+    if let Some(tx) = signal {
         let _ = tx.send(());
     }
     Ok(())
@@ -583,7 +637,7 @@ pub async fn clone_repo(
     }
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let projects_dir = target_dir.unwrap_or_else(|| format!("{}/Projects", home));
+    let projects_dir = target_dir.unwrap_or_else(|| format!("{home}/Projects"));
 
     // Validate projects_dir is under home or /tmp
     if !projects_dir.starts_with(&home) && !projects_dir.starts_with("/tmp") {
@@ -592,7 +646,7 @@ pub async fn clone_repo(
 
     // Create Projects dir if needed
     std::fs::create_dir_all(&projects_dir)
-        .map_err(|e| format!("Failed to create directory: {}", e))?;
+        .map_err(|e| format!("Failed to create directory: {e}"))?;
 
     // Extract repo name from URL and sanitize
     let repo_name = url
@@ -608,7 +662,7 @@ pub async fn clone_repo(
         return Err("Invalid repository name extracted from URL".to_string());
     }
 
-    let clone_path = format!("{}/{}", projects_dir, repo_name);
+    let clone_path = format!("{projects_dir}/{repo_name}");
 
     // Check if already exists
     if std::path::Path::new(&clone_path).exists() {
@@ -623,11 +677,11 @@ pub async fn clone_repo(
     let output = std::process::Command::new("git")
         .args(["clone", &url, &clone_path])
         .output()
-        .map_err(|e| format!("Failed to run git clone: {}", e))?;
+        .map_err(|e| format!("Failed to run git clone: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Clone failed: {}", stderr));
+        return Err(format!("Clone failed: {stderr}"));
     }
 
     let _ = app.emit("clone-progress", serde_json::json!({
@@ -653,25 +707,28 @@ pub struct GitHubRepo {
     pub is_fork: bool,
 }
 
-/// Resolve the `gh` binary path, augmenting PATH with common macOS/Linux locations
+/// Resolve the `gh` binary path, checking common macOS/Linux install locations
 /// so it works even when the app is launched from Finder/Dock (limited PATH).
+///
+/// NOTE: We explicitly do NOT mutate the process-wide PATH via `std::env::set_var`
+/// because that is unsound in multi-threaded programs and can introduce PATH
+/// injection risks. Instead we probe well-known directories directly.
 fn resolve_gh_path() -> Result<String, String> {
     // Try the current PATH first
     if let Ok(p) = which::which("gh") {
         return Ok(p.to_string_lossy().to_string());
     }
-    // Augment PATH with common install locations and retry
+    // Probe well-known install locations directly (no global state mutation)
     let extra_paths = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/home/linuxbrew/.linuxbrew/bin",
+        "/opt/homebrew/bin/gh",
+        "/usr/local/bin/gh",
+        "/usr/bin/gh",
+        "/home/linuxbrew/.linuxbrew/bin/gh",
     ];
-    if let Ok(current) = std::env::var("PATH") {
-        let augmented = format!("{}:{}", extra_paths.join(":"), current);
-        std::env::set_var("PATH", &augmented);
-        if let Ok(p) = which::which("gh") {
-            return Ok(p.to_string_lossy().to_string());
+    for candidate in &extra_paths {
+        let path = std::path::Path::new(candidate);
+        if path.is_file() {
+            return Ok(candidate.to_string());
         }
     }
     Err("GitHub CLI (gh) not found. Install with: brew install gh".to_string())
@@ -686,8 +743,9 @@ pub async fn search_github_repos(
 
     let limit_str = (limit.unwrap_or(20)).to_string();
 
-    // Sanitize query
-    let clean_query = query.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_' && c != '.' && c != '/' && c != ' ', "");
+    // Sanitize query — allow characters used in GitHub search qualifiers
+    // (e.g. "language:rust", "stars:>100", "user:foo", "topic:web+api")
+    let clean_query = query.replace(|c: char| !c.is_alphanumeric() && !"-_./ :><+@".contains(c), "");
 
     // gh search repos uses different field names than gh repo list:
     //   language (string), stargazersCount, fullName
@@ -701,11 +759,11 @@ pub async fn search_github_repos(
             "--limit", &limit_str,
         ])
         .output()
-        .map_err(|e| format!("Failed to run gh search: {}", e))?;
+        .map_err(|e| format!("Failed to run gh search: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Search failed: {}", stderr));
+        return Err(format!("Search failed: {stderr}"));
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
@@ -718,7 +776,7 @@ pub async fn search_github_repos(
 ///   gh search repos: fullName, stargazersCount, language (string)
 fn parse_gh_results(json_str: &str) -> Result<Vec<GitHubRepo>, String> {
     let raw: Vec<serde_json::Value> = serde_json::from_str(json_str)
-        .map_err(|e| format!("Failed to parse gh output: {}", e))?;
+        .map_err(|e| format!("Failed to parse gh output: {e}"))?;
 
     Ok(raw.iter().map(|r| {
         // full_name: try fullName (search) then nameWithOwner (list)
@@ -782,11 +840,11 @@ pub async fn list_github_repos(
     let output = std::process::Command::new(&gh_path)
         .args(&args)
         .output()
-        .map_err(|e| format!("Failed to run gh: {}", e))?;
+        .map_err(|e| format!("Failed to run gh: {e}"))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("gh failed: {}. Run 'gh auth login' to authenticate.", stderr));
+        return Err(format!("gh failed: {stderr}. Run 'gh auth login' to authenticate."));
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
@@ -799,23 +857,58 @@ pub async fn get_home_dir() -> Result<String, String> {
 }
 
 #[tauri::command]
+pub async fn create_project_dir(name: String) -> Result<String, String> {
+    let home = std::env::var("HOME")
+        .map_err(|_| "Could not determine home directory".to_string())?;
+
+    // Slugify: lowercase, replace spaces/underscores with hyphens, remove non-alphanumeric except hyphens
+    let slug: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c == ' ' || c == '_' { '-' } else { c })
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+        .collect();
+
+    // Collapse multiple hyphens and trim leading/trailing hyphens
+    let slug = slug
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<&str>>()
+        .join("-");
+
+    if slug.is_empty() {
+        return Err("Invalid project name: results in empty slug".to_string());
+    }
+
+    let projects_dir = format!("{home}/Projects");
+    let project_path = format!("{projects_dir}/{slug}");
+
+    // Create ~/Projects/ if it doesn't exist
+    std::fs::create_dir_all(&project_path)
+        .map_err(|e| format!("Failed to create project directory: {e}"))?;
+
+    Ok(project_path)
+}
+
+#[tauri::command]
 pub async fn list_recent_dirs() -> Result<Vec<String>, String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let mut dirs: Vec<String> = Vec::new();
 
     // Check common project locations
     let search_paths = [
-        format!("{}/Projects", home),
-        format!("{}/projects", home),
-        format!("{}/Developer", home),
-        format!("{}/dev", home),
-        format!("{}/Code", home),
-        format!("{}/code", home),
-        format!("{}/repos", home),
-        format!("{}/src", home),
-        format!("{}/workspace", home),
-        format!("{}/Documents/GitHub", home),
-        format!("{}/GitHub", home),
+        format!("{home}/Projects"),
+        format!("{home}/projects"),
+        format!("{home}/Developer"),
+        format!("{home}/dev"),
+        format!("{home}/Code"),
+        format!("{home}/code"),
+        format!("{home}/repos"),
+        format!("{home}/src"),
+        format!("{home}/workspace"),
+        format!("{home}/Documents/GitHub"),
+        format!("{home}/GitHub"),
         home.clone(),
     ];
 
@@ -862,16 +955,19 @@ pub struct RepoQuickStatus {
 
 #[tauri::command]
 pub async fn check_repo_status(path: String) -> Result<RepoQuickStatus, String> {
-    let p = std::path::Path::new(&path);
-    if !p.is_dir() {
+    let dir = match validate_dir(&path) {
+        Ok(d) => d,
+        Err(_) => return Ok(RepoQuickStatus { is_git: false, has_remote: false, branch: None }),
+    };
+    // Use rev-parse to detect git repos; this handles worktrees where .git is a file
+    let is_git = run_git(&dir, &["rev-parse", "--is-inside-work-tree"])
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    if !is_git {
         return Ok(RepoQuickStatus { is_git: false, has_remote: false, branch: None });
     }
-    let git_dir = p.join(".git");
-    if !git_dir.exists() {
-        return Ok(RepoQuickStatus { is_git: false, has_remote: false, branch: None });
-    }
-    let branch = run_git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
-    let remote_url = run_git(&path, &["remote", "get-url", "origin"]).unwrap_or_default();
+    let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).ok();
+    let remote_url = run_git(&dir, &["remote", "get-url", "origin"]).unwrap_or_default();
     let has_remote = !remote_url.is_empty();
     Ok(RepoQuickStatus { is_git: true, has_remote, branch })
 }
@@ -949,7 +1045,7 @@ pub async fn detect_claude_skills() -> Result<Vec<SkillInfo>, String> {
 
     // Detect custom skills
     let home = std::env::var("HOME").unwrap_or_default();
-    let config_path = format!("{}/.claude/skills", home);
+    let config_path = format!("{home}/.claude/skills");
     if let Ok(entries) = std::fs::read_dir(&config_path) {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -959,7 +1055,7 @@ pub async fn detect_claude_skills() -> Result<Vec<SkillInfo>, String> {
                     .unwrap_or("unknown")
                     .to_string();
                 skills.push(SkillInfo {
-                    name: format!("/{}", name),
+                    name: format!("/{name}"),
                     description: "Custom skill".to_string(),
                     category: "Custom".to_string(),
                 });
@@ -1012,14 +1108,25 @@ pub async fn send_to_session(
     session_id: String,
     text: String,
 ) -> Result<(), String> {
-    let data = format!("{}\n", text);
+    let data = format!("{text}\n");
     state.pty_manager.write_to_pty(&session_id, data.as_bytes())
 }
 
 #[tauri::command]
 pub async fn dir_exists(path: String) -> Result<bool, String> {
     let expanded = expand_tilde(&path);
-    Ok(std::path::Path::new(&expanded).is_dir())
+    let p = std::path::Path::new(&expanded);
+
+    // Only allow probing directories under home or /tmp
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() && !expanded.starts_with(&home) && !expanded.starts_with("/tmp") {
+        return Ok(false);
+    }
+    if expanded.contains("..") {
+        return Ok(false);
+    }
+
+    Ok(p.is_dir())
 }
 
 // === Git Manager Commands ===
@@ -1063,14 +1170,22 @@ fn validate_dir(dir: &str) -> Result<String, String> {
     let expanded = expand_tilde(dir);
     let path = std::path::Path::new(&expanded);
     if !path.is_dir() {
-        return Err(format!("Directory does not exist: {}", expanded));
+        return Err(format!("Directory does not exist: {expanded}"));
     }
-    // Canonicalize to prevent path traversal
+    // Canonicalize to resolve symlinks and ".." components
     let canonical = path.canonicalize()
-        .map_err(|e| format!("Invalid path: {}", e))?;
-    canonical.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| "Path contains invalid characters".to_string())
+        .map_err(|e| format!("Invalid path: {e}"))?;
+    let canonical_str = canonical.to_str()
+        .ok_or_else(|| "Path contains invalid characters".to_string())?;
+
+    // Enforce that the resolved path is under the user's home directory or /tmp.
+    // This prevents operations on system directories like /etc, /var, etc.
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() && !canonical_str.starts_with(&home) && !canonical_str.starts_with("/tmp") {
+        return Err("Access denied: path must be under your home directory".to_string());
+    }
+
+    Ok(canonical_str.to_string())
 }
 
 fn validate_file_path(file_path: &str) -> Result<(), String> {
@@ -1078,20 +1193,83 @@ fn validate_file_path(file_path: &str) -> Result<(), String> {
     if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') {
         return Err("Invalid file path: path traversal not allowed".to_string());
     }
+    // Reject paths starting with '-' which could be interpreted as git flags
+    if file_path.starts_with('-') {
+        return Err("Invalid file path: must not start with '-'".to_string());
+    }
+    // Reject null bytes
+    if file_path.contains('\0') {
+        return Err("Invalid file path: contains null byte".to_string());
+    }
     Ok(())
 }
 
+/// Build a shell login environment so that git can find SSH agents,
+/// credential helpers, and other tools that live outside the default
+/// macOS-app PATH (e.g. /opt/homebrew/bin, ~/.nix-profile/bin).
+/// The result is cached after the first call to avoid spawning a login
+/// shell on every git invocation.
+fn shell_env() -> std::collections::HashMap<String, String> {
+    use std::sync::OnceLock;
+    static CACHED_ENV: OnceLock<std::collections::HashMap<String, String>> = OnceLock::new();
+
+    CACHED_ENV.get_or_init(|| {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
+
+        if let Ok(output) = std::process::Command::new(&shell)
+            .args(["-l", "-c", "env"])
+            .output()
+        {
+            if output.status.success() {
+                let out = String::from_utf8_lossy(&output.stdout);
+                for line in out.lines() {
+                    if let Some((k, v)) = line.split_once('=') {
+                        env.insert(k.to_string(), v.to_string());
+                    }
+                }
+            }
+        }
+
+        // Ensure critical vars are always present
+        if !env.contains_key("HOME") {
+            if let Ok(h) = std::env::var("HOME") {
+                env.insert("HOME".into(), h);
+            }
+        }
+
+        env
+    }).clone()
+}
+
 fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
+    let env = shell_env();
     let output = std::process::Command::new("git")
         .args(args)
         .current_dir(dir)
+        .envs(&env)
+        // Prevent git from prompting for credentials via TTY -- this is a GUI app
+        // with no attached terminal, so a prompt would hang the process indefinitely.
+        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
-        .map_err(|e| format!("Failed to run git: {}", e))?;
+        .map_err(|e| format!("Failed to run git: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        return Err(stderr.trim().to_string());
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let msg = if stderr.trim().is_empty() { stdout } else { stderr };
+        return Err(msg.trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    // Git push/pull/fetch write useful output (progress, remote info) to stderr
+    // even on success. When stdout is empty, return stderr content instead so
+    // callers can see what actually happened.
+    if stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if !stderr.is_empty() {
+            return Ok(stderr);
+        }
+    }
+    Ok(stdout)
 }
 
 #[tauri::command]
@@ -1120,17 +1298,33 @@ pub async fn git_status(working_dir: String) -> Result<GitStatusInfo, String> {
         if line.len() < 3 { continue; }
         let index = line.chars().next().unwrap_or(' ');
         let work = line.chars().nth(1).unwrap_or(' ');
-        let path = line[3..].to_string();
+        let raw_path = line[3..].to_string();
+
+        // For renames/copies (R/C), porcelain v1 format is "old -> new"; use the new name
+        let path = if index == 'R' || index == 'C' {
+            raw_path.rsplit(" -> ").next().unwrap_or(&raw_path).to_string()
+        } else {
+            raw_path
+        };
 
         if index == '?' {
             untracked.push(path);
+            continue;
+        }
+        // Handle merge conflicts (UU, AA, DD, AU, UA, DU, UD)
+        if index == 'U' || work == 'U' || (index == 'A' && work == 'A') || (index == 'D' && work == 'D') {
+            unstaged.push(GitFileChange {
+                path,
+                status: "conflict".to_string(),
+            });
             continue;
         }
         if index != ' ' && index != '?' {
             staged.push(GitFileChange {
                 path: path.clone(),
                 status: match index {
-                    'M' => "modified", 'A' => "added", 'D' => "deleted", 'R' => "renamed", _ => "modified",
+                    'A' => "added", 'D' => "deleted",
+                    'R' => "renamed", 'C' => "copied", _ => "modified",
                 }.to_string(),
             });
         }
@@ -1138,7 +1332,7 @@ pub async fn git_status(working_dir: String) -> Result<GitStatusInfo, String> {
             unstaged.push(GitFileChange {
                 path,
                 status: match work {
-                    'M' => "modified", 'D' => "deleted", _ => "modified",
+                    'D' => "deleted", _ => "modified",
                 }.to_string(),
             });
         }
@@ -1154,12 +1348,46 @@ pub async fn git_status(working_dir: String) -> Result<GitStatusInfo, String> {
 #[tauri::command]
 pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String, String> {
     let dir = validate_dir(&working_dir)?;
-    if set_upstream {
-        let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-        run_git(&dir, &["push", "-u", "origin", &branch])
+    let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+
+    // Check if there is an upstream tracking branch configured
+    let has_upstream = run_git(&dir, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")]).is_ok();
+
+    // Use run_git_push which sets GIT_TERMINAL_PROMPT=0 to prevent hangs
+    // when credentials are unavailable (no TTY in a GUI app).
+    let args: Vec<&str> = if set_upstream || !has_upstream {
+        vec!["push", "-u", "origin", &branch]
     } else {
-        run_git(&dir, &["push"])
+        vec!["push"]
+    };
+
+    let env = shell_env();
+    let output = std::process::Command::new("git")
+        .args(&args)
+        .current_dir(&dir)
+        .envs(&env)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to run git push: {e}"))?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if !output.status.success() {
+        let msg = if stderr.is_empty() { stdout } else { stderr };
+        return Err(msg);
     }
+
+    // git push writes all its output (progress, remote info) to stderr.
+    // Return stderr so the frontend knows what happened.
+    let result = if stdout.is_empty() && !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        "Push completed".to_string()
+    };
+    Ok(result)
 }
 
 #[tauri::command]
@@ -1189,7 +1417,10 @@ pub async fn git_stage_file(working_dir: String, file_path: String) -> Result<()
 pub async fn git_unstage_file(working_dir: String, file_path: String) -> Result<(), String> {
     let dir = validate_dir(&working_dir)?;
     validate_file_path(&file_path)?;
-    run_git(&dir, &["reset", "HEAD", &file_path])?;
+    // "reset HEAD" fails in repos with no commits; fall back to "rm --cached"
+    if run_git(&dir, &["reset", "HEAD", "--", &file_path]).is_err() {
+        run_git(&dir, &["rm", "--cached", "--", &file_path])?;
+    }
     Ok(())
 }
 
@@ -1231,8 +1462,8 @@ pub async fn git_list_branches(working_dir: String) -> Result<Vec<GitBranchInfo>
 
     let current = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
 
-    // Local branches
-    let local_out = run_git(&dir, &["branch", "--format=%(refname:short)\t%(objectname:short)\t%(subject)"])?;
+    // Local branches (may be empty in repos with no commits)
+    let local_out = run_git(&dir, &["branch", "--format=%(refname:short)\t%(objectname:short)\t%(subject)"]).unwrap_or_default();
     let mut branches: Vec<GitBranchInfo> = local_out
         .lines()
         .filter(|l| !l.is_empty())
@@ -1253,6 +1484,9 @@ pub async fn git_list_branches(working_dir: String) -> Result<Vec<GitBranchInfo>
         if line.is_empty() || line.contains("HEAD") { continue; }
         let parts: Vec<&str> = line.splitn(3, '\t').collect();
         let name = parts.first().unwrap_or(&"").to_string();
+        // Skip symbolic refs like origin/HEAD which %(refname:short) resolves to just
+        // the remote name (e.g. "origin") without a slash -- not a real branch.
+        if !name.contains('/') { continue; }
         // Skip if local branch exists with matching name (e.g. "origin/main" -> "main")
         let short_name = name.split('/').skip(1).collect::<Vec<_>>().join("/");
         if branches.iter().any(|b| b.name == short_name) { continue; }
@@ -1271,13 +1505,19 @@ pub async fn git_list_branches(working_dir: String) -> Result<Vec<GitBranchInfo>
 pub async fn git_log(working_dir: String, count: u32) -> Result<Vec<GitLogEntry>, String> {
     let dir = validate_dir(&working_dir)?;
     let n = format!("-{}", count.min(50));
-    let out = run_git(&dir, &["log", &n, "--format=%H\t%h\t%s\t%an\t%cr"])?;
+    // In empty repos (no commits yet), git log exits with an error; return empty list.
+    // Use ASCII record separator (\x1e) as delimiter instead of tab, because commit
+    // messages can contain tab characters which would break tab-delimited parsing.
+    let out = match run_git(&dir, &["log", &n, "--format=%H%x1e%h%x1e%s%x1e%an%x1e%cr"]) {
+        Ok(o) => o,
+        Err(_) => return Ok(Vec::new()),
+    };
 
     Ok(out
         .lines()
         .filter(|l| !l.is_empty())
         .map(|line| {
-            let parts: Vec<&str> = line.splitn(5, '\t').collect();
+            let parts: Vec<&str> = line.splitn(5, '\x1e').collect();
             GitLogEntry {
                 hash: parts.first().unwrap_or(&"").to_string(),
                 short_hash: parts.get(1).unwrap_or(&"").to_string(),
@@ -1293,7 +1533,28 @@ pub async fn git_log(working_dir: String, count: u32) -> Result<Vec<GitLogEntry>
 pub async fn git_discard_file(working_dir: String, file_path: String) -> Result<(), String> {
     let dir = validate_dir(&working_dir)?;
     validate_file_path(&file_path)?;
-    run_git(&dir, &["checkout", "--", &file_path])?;
+    // Try checkout first (works for tracked modified files)
+    if run_git(&dir, &["checkout", "--", &file_path]).is_err() {
+        // For untracked files, checkout fails; remove the file directly
+        let full_path = std::path::Path::new(&dir).join(&file_path);
+        if full_path.exists() {
+            // Verify the resolved path is still under the working directory
+            let canonical = full_path.canonicalize()
+                .map_err(|e| format!("Cannot resolve path: {e}"))?;
+            let dir_canonical = std::path::Path::new(&dir).canonicalize()
+                .map_err(|e| format!("Cannot resolve dir: {e}"))?;
+            if !canonical.starts_with(&dir_canonical) {
+                return Err("Path escapes working directory".to_string());
+            }
+            if full_path.is_dir() {
+                std::fs::remove_dir_all(&full_path)
+                    .map_err(|e| format!("Failed to remove directory: {e}"))?;
+            } else {
+                std::fs::remove_file(&full_path)
+                    .map_err(|e| format!("Failed to remove file: {e}"))?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1315,9 +1576,15 @@ pub async fn git_diff_file(working_dir: String, file_path: String, staged: bool)
             // For untracked files or empty diff, try to show file content as all-additions
             let full_path = std::path::Path::new(&dir).join(&file_path);
             if full_path.exists() {
+                // Guard against extremely large files consuming too much memory
+                let meta = std::fs::metadata(&full_path)
+                    .map_err(|e| format!("Failed to stat file: {e}"))?;
+                if meta.len() > MAX_FILE_SIZE {
+                    return Err(format!("File too large ({:.1} MB)", meta.len() as f64 / (1024.0 * 1024.0)));
+                }
                 let content = std::fs::read_to_string(&full_path)
-                    .map_err(|e| format!("Failed to read file: {}", e))?;
-                let lines: Vec<String> = content.lines().map(|l| format!("+{}", l)).collect();
+                    .map_err(|e| format!("Failed to read file: {e}"))?;
+                let lines: Vec<String> = content.lines().map(|l| format!("+{l}")).collect();
                 let header = format!(
                     "--- /dev/null\n+++ b/{}\n@@ -0,0 +1,{} @@\n{}",
                     file_path,
@@ -1330,6 +1597,177 @@ pub async fn git_diff_file(working_dir: String, file_path: String, staged: bool)
             }
         }
     }
+}
+
+#[tauri::command]
+pub async fn git_stage_all(working_dir: String) -> Result<(), String> {
+    let dir = validate_dir(&working_dir)?;
+    run_git(&dir, &["add", "-A"])?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn git_show_commit(working_dir: String, hash: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    // Validate commit hash - only allow hex chars
+    if hash.is_empty() || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid commit hash".to_string());
+    }
+    run_git(&dir, &["show", "--stat", "--format=%H%n%an <%ae>%n%cr%n%n%s%n%n%b", &hash])
+}
+
+// === Quick Publish / Save Commands ===
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct QuickPublishResult {
+    pub success: bool,
+    pub message: String,
+    pub commit_hash: String,
+    pub files_changed: u32,
+}
+
+/// Generate a human-friendly commit message from the list of changed files.
+fn generate_commit_message(dir: &str) -> String {
+    let stat = run_git(dir, &["diff", "--cached", "--stat"]).unwrap_or_default();
+    let files: Vec<&str> = stat.lines()
+        .filter(|l| l.contains('|'))
+        .map(|l| l.split('|').next().unwrap_or("").trim())
+        .filter(|f| !f.is_empty())
+        .collect();
+
+    if files.is_empty() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        return format!("Update {ts}");
+    }
+
+    let short_names: Vec<String> = files.iter()
+        .map(|f| f.rsplit('/').next().unwrap_or(f).to_string())
+        .collect();
+
+    match short_names.len() {
+        1 => format!("Update {}", short_names[0]),
+        2 => format!("Update {} and {}", short_names[0], short_names[1]),
+        n => format!("Update {}, {}, and {} other files", short_names[0], short_names[1], n - 2),
+    }
+}
+
+#[tauri::command]
+pub async fn quick_publish(dir: String) -> Result<QuickPublishResult, String> {
+    let dir = validate_dir(&dir)?;
+
+    // Verify this is a git repo
+    run_git(&dir, &["rev-parse", "--is-inside-work-tree"])
+        .map_err(|_| "This folder is not a git repository.".to_string())?;
+
+    // Check for a remote
+    let remote_url = run_git(&dir, &["remote", "get-url", "origin"]).unwrap_or_default();
+    if remote_url.trim().is_empty() {
+        return Err("No remote configured. Connect to GitHub first.".to_string());
+    }
+
+    // Stage all changes
+    run_git(&dir, &["add", "-A"])
+        .map_err(|e| format!("Failed to stage changes: {e}"))?;
+
+    // Check what's staged via diff --cached --stat
+    let diff_stat = run_git(&dir, &["diff", "--cached", "--stat"]).unwrap_or_default();
+    let total_files = diff_stat.lines().filter(|l| l.contains('|')).count() as u32;
+
+    if total_files == 0 {
+        return Ok(QuickPublishResult {
+            success: true,
+            message: "No changes to publish.".to_string(),
+            commit_hash: String::new(),
+            files_changed: 0,
+        });
+    }
+
+    // Generate commit message
+    let message = generate_commit_message(&dir);
+
+    // Commit
+    run_git(&dir, &["commit", "-m", &message])
+        .map_err(|e| format!("Failed to commit: {e}"))?;
+
+    // Get commit hash
+    let commit_hash = run_git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+
+    // Push (with upstream setup if needed)
+    let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "main".to_string());
+    let has_upstream = run_git(&dir, &["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")]).is_ok();
+
+    let push_args: Vec<&str> = if has_upstream {
+        vec!["push"]
+    } else {
+        vec!["push", "-u", "origin", &branch]
+    };
+
+    let env = shell_env();
+    let output = std::process::Command::new("git")
+        .args(&push_args)
+        .current_dir(&dir)
+        .envs(&env)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| format!("Failed to push: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("Push failed: {}", if stderr.is_empty() { "unknown error".to_string() } else { stderr }));
+    }
+
+    Ok(QuickPublishResult {
+        success: true,
+        message: format!("Published! {} file{} saved to GitHub.", total_files, if total_files == 1 { "" } else { "s" }),
+        commit_hash,
+        files_changed: total_files,
+    })
+}
+
+#[tauri::command]
+pub async fn quick_save(dir: String) -> Result<QuickPublishResult, String> {
+    let dir = validate_dir(&dir)?;
+
+    // Verify this is a git repo
+    run_git(&dir, &["rev-parse", "--is-inside-work-tree"])
+        .map_err(|_| "This folder is not a git repository.".to_string())?;
+
+    // Stage all changes
+    run_git(&dir, &["add", "-A"])
+        .map_err(|e| format!("Failed to stage changes: {e}"))?;
+
+    // Check what's staged
+    let diff_stat = run_git(&dir, &["diff", "--cached", "--stat"]).unwrap_or_default();
+    let total_files = diff_stat.lines().filter(|l| l.contains('|')).count() as u32;
+
+    if total_files == 0 {
+        return Ok(QuickPublishResult {
+            success: true,
+            message: "No changes to save.".to_string(),
+            commit_hash: String::new(),
+            files_changed: 0,
+        });
+    }
+
+    // Generate commit message
+    let message = generate_commit_message(&dir);
+
+    // Commit
+    run_git(&dir, &["commit", "-m", &message])
+        .map_err(|e| format!("Failed to commit: {e}"))?;
+
+    // Get commit hash
+    let commit_hash = run_git(&dir, &["rev-parse", "--short", "HEAD"]).unwrap_or_default();
+
+    Ok(QuickPublishResult {
+        success: true,
+        message: format!("Saved! {} file{} committed.", total_files, if total_files == 1 { "" } else { "s" }),
+        commit_hash,
+        files_changed: total_files,
+    })
 }
 
 // === File Tree Commands ===
@@ -1358,7 +1796,7 @@ const ALWAYS_SKIP: &[&str] = &[
 ///   - negation lines are skipped (lines starting with `!`)
 ///   - comment lines starting with `#`
 fn parse_gitignore(root: &str) -> Vec<String> {
-    let path = format!("{}/.gitignore", root);
+    let path = format!("{root}/.gitignore");
     match std::fs::read_to_string(&path) {
         Ok(content) => content
             .lines()
@@ -1375,10 +1813,25 @@ fn matches_gitignore(name: &str, patterns: &[String]) -> bool {
         if pat == name {
             return true;
         }
-        // *.ext pattern
+        // Leading wildcard (e.g. "*.log")
         if let Some(suffix) = pat.strip_prefix('*') {
             if name.ends_with(suffix) {
                 return true;
+            }
+        }
+        // Trailing wildcard (e.g. ".env.*")
+        if let Some(prefix) = pat.strip_suffix('*') {
+            if name.starts_with(prefix) {
+                return true;
+            }
+        }
+        // Path-based patterns (e.g. "src-tauri/gen"):
+        // match if the last path component equals the name.
+        if pat.contains('/') {
+            if let Some(last) = pat.rsplit('/').next() {
+                if !last.is_empty() && last == name {
+                    return true;
+                }
             }
         }
     }
@@ -1418,7 +1871,7 @@ fn build_file_tree(
             continue;
         }
 
-        let path = format!("{}/{}", dir, name);
+        let path = format!("{dir}/{name}");
         let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
 
         if is_dir {
@@ -1488,16 +1941,31 @@ pub async fn list_directory(path: String, max_depth: Option<u32>) -> Result<Vec<
 
 fn validate_mcp_config_path(config_path: &str) -> Result<(), String> {
     let home = std::env::var("HOME").unwrap_or_default();
-    // Config path must be under home dir and end with .json
-    if !config_path.starts_with(&home) {
-        return Err("MCP config path must be under home directory".to_string());
+
+    // Reject null bytes and path traversal early
+    if config_path.contains('\0') || config_path.contains("..") {
+        return Err("MCP config path must not contain path traversal".to_string());
     }
     if !config_path.ends_with(".json") {
         return Err("MCP config path must be a .json file".to_string());
     }
-    if config_path.contains("..") {
-        return Err("MCP config path must not contain path traversal".to_string());
+
+    // Config path must be under home dir (check before and after canonicalization)
+    if !config_path.starts_with(&home) {
+        return Err("MCP config path must be under home directory".to_string());
     }
+
+    // If the file already exists, canonicalize and re-verify to block symlink escapes
+    let path = std::path::Path::new(config_path);
+    if path.exists() {
+        if let Ok(canonical) = path.canonicalize() {
+            let canonical_str = canonical.to_str().unwrap_or("");
+            if !canonical_str.starts_with(&home) {
+                return Err("MCP config path resolves outside home directory".to_string());
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1540,9 +2008,60 @@ pub struct McpServerEntry {
     pub headers: Option<std::collections::HashMap<String, String>>,
 }
 
+/// Strip single-line (//) and multi-line (/* */) comments from JSON text,
+/// without modifying string literals.
+fn strip_json_comments(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    let mut in_string = false;
+    let mut escape = false;
+    while i < len {
+        if escape {
+            result.push(bytes[i] as char);
+            escape = false;
+            i += 1;
+            continue;
+        }
+        if in_string {
+            if bytes[i] == b'\\' {
+                escape = true;
+            } else if bytes[i] == b'"' {
+                in_string = false;
+            }
+            result.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        if bytes[i] == b'"' {
+            in_string = true;
+            result.push('"');
+            i += 1;
+        } else if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            while i < len && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            if i + 1 < len {
+                i += 2;
+            }
+        } else {
+            result.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    result
+}
+
 fn read_mcp_file(path: &str) -> Option<McpConfigFile> {
     let content = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
+    let cleaned = strip_json_comments(&content);
+    serde_json::from_str(&cleaned).ok()
 }
 
 #[tauri::command]
@@ -1552,8 +2071,8 @@ pub async fn list_mcps(project_dir: Option<String>) -> Result<Vec<McpServerConfi
 
     // 1. Global MCPs: ~/.claude/mcp.json or ~/.claude.json
     let global_paths = [
-        format!("{}/.claude/mcp.json", home),
-        format!("{}/.claude.json", home),
+        format!("{home}/.claude/mcp.json"),
+        format!("{home}/.claude.json"),
     ];
 
     for gpath in &global_paths {
@@ -1583,17 +2102,17 @@ pub async fn list_mcps(project_dir: Option<String>) -> Result<Vec<McpServerConfi
 
     // 2. Project MCPs: <project>/.claude/mcp.json or <project>/.mcp.json
     if let Some(ref pdir) = project_dir {
-        let dir = expand_tilde(pdir);
+        let dir = validate_dir(pdir)?;
         let project_paths = [
-            format!("{}/.claude/mcp.json", dir),
-            format!("{}/.mcp.json", dir),
+            format!("{dir}/.claude/mcp.json"),
+            format!("{dir}/.mcp.json"),
         ];
 
         for ppath in &project_paths {
             if let Some(config) = read_mcp_file(ppath) {
                 for (name, entry) in &config.mcp_servers {
-                    // Check if already in list (project overrides global)
-                    servers.retain(|s| !(s.name == *name && s.scope == "global"));
+                    // Remove any global or earlier project duplicate with the same name
+                    servers.retain(|s| s.name != *name);
                     let stype = entry.server_type.clone().unwrap_or_else(|| {
                         if entry.url.is_some() { "http".to_string() } else { "stdio".to_string() }
                     });
@@ -1627,26 +2146,27 @@ pub async fn save_mcp_config(
     let path = std::path::Path::new(&config_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+            .map_err(|e| format!("Failed to create directory: {e}"))?;
     }
 
     // Preserve existing file structure if it exists
     let mut doc: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
-        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+        let cleaned = strip_json_comments(&content);
+        serde_json::from_str(&cleaned).unwrap_or_else(|_| serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
 
     let servers_value = serde_json::to_value(&servers)
-        .map_err(|e| format!("Failed to serialize servers: {}", e))?;
+        .map_err(|e| format!("Failed to serialize servers: {e}"))?;
     doc.as_object_mut()
         .ok_or("Config is not an object")?
         .insert("mcpServers".to_string(), servers_value);
 
     let json = serde_json::to_string_pretty(&doc)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&config_path, json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize: {e}"))?;
+    std::fs::write(&config_path, format!("{json}\n"))
+        .map_err(|e| format!("Failed to write config: {e}"))?;
     Ok(())
 }
 
@@ -1658,17 +2178,18 @@ pub async fn toggle_mcp_server(
 ) -> Result<(), String> {
     validate_mcp_config_path(&config_path)?;
     let content = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("Failed to read config: {}", e))?;
-    let mut doc: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse config: {}", e))?;
+        .map_err(|e| format!("Failed to read config: {e}"))?;
+    let cleaned = strip_json_comments(&content);
+    let mut doc: serde_json::Value = serde_json::from_str(&cleaned)
+        .map_err(|e| format!("Failed to parse config: {e}"))?;
 
     let servers = doc.get_mut("mcpServers")
         .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| format!("No mcpServers found in {}", config_path))?;
+        .ok_or_else(|| format!("No mcpServers found in {config_path}"))?;
 
     let server = servers.get_mut(&server_name)
         .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| format!("Server '{}' not found in {}", server_name, config_path))?;
+        .ok_or_else(|| format!("Server '{server_name}' not found in {config_path}"))?;
 
     if enabled {
         server.remove("disabled");
@@ -1677,9 +2198,9 @@ pub async fn toggle_mcp_server(
     }
 
     let json = serde_json::to_string_pretty(&doc)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&config_path, json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize: {e}"))?;
+    std::fs::write(&config_path, format!("{json}\n"))
+        .map_err(|e| format!("Failed to write config: {e}"))?;
     Ok(())
 }
 
@@ -1690,36 +2211,51 @@ pub async fn remove_mcp_server(
 ) -> Result<(), String> {
     validate_mcp_config_path(&config_path)?;
     let content = std::fs::read_to_string(&config_path)
-        .map_err(|e| format!("Failed to read config: {}", e))?;
-    let mut doc: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse config: {}", e))?;
+        .map_err(|e| format!("Failed to read config: {e}"))?;
+    let cleaned = strip_json_comments(&content);
+    let mut doc: serde_json::Value = serde_json::from_str(&cleaned)
+        .map_err(|e| format!("Failed to parse config: {e}"))?;
 
     let servers = doc.get_mut("mcpServers")
         .and_then(|v| v.as_object_mut())
-        .ok_or_else(|| format!("No mcpServers found in {}", config_path))?;
+        .ok_or_else(|| format!("No mcpServers found in {config_path}"))?;
 
     if servers.remove(&server_name).is_none() {
-        return Err(format!("Server '{}' not found in {}", server_name, config_path));
+        return Err(format!("Server '{server_name}' not found in {config_path}"));
     }
 
     let json = serde_json::to_string_pretty(&doc)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&config_path, json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize: {e}"))?;
+    std::fs::write(&config_path, format!("{json}\n"))
+        .map_err(|e| format!("Failed to write config: {e}"))?;
     Ok(())
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AddMcpServerParams {
+    pub config_path: String,
+    pub name: String,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: std::collections::HashMap<String, String>,
+    pub url: Option<String>,
+    pub server_type: Option<String>,
+    pub headers: Option<std::collections::HashMap<String, String>>,
+}
+
 #[tauri::command]
-pub async fn add_mcp_server(
-    config_path: String,
-    name: String,
-    command: Option<String>,
-    args: Vec<String>,
-    env: std::collections::HashMap<String, String>,
-    url: Option<String>,
-    server_type: Option<String>,
-    headers: Option<std::collections::HashMap<String, String>>,
-) -> Result<(), String> {
+pub async fn add_mcp_server(params: AddMcpServerParams) -> Result<(), String> {
+    let AddMcpServerParams {
+        config_path,
+        name,
+        command,
+        args,
+        env,
+        url,
+        server_type,
+        headers,
+    } = params;
+
     validate_mcp_config_path(&config_path)?;
 
     // Must provide either command (stdio) or url (http)
@@ -1729,8 +2265,16 @@ pub async fn add_mcp_server(
 
     // Validate command doesn't contain path traversal or shell tricks
     if let Some(ref cmd) = command {
-        if cmd.contains("..") || cmd.contains(';') || cmd.contains('|') || cmd.contains('&') {
+        if cmd.contains("..") || cmd.contains(';') || cmd.contains('|') || cmd.contains('&')
+            || cmd.contains('`') || cmd.contains("$(") || cmd.contains('\0') {
             return Err("Invalid command: contains prohibited characters".to_string());
+        }
+    }
+
+    // Validate args don't contain shell injection characters
+    for arg in &args {
+        if arg.contains('\0') || arg.contains('`') || arg.contains("$(") {
+            return Err("Invalid argument: contains prohibited characters".to_string());
         }
     }
 
@@ -1744,12 +2288,13 @@ pub async fn add_mcp_server(
     let path = std::path::Path::new(&config_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directory: {}", e))?;
+            .map_err(|e| format!("Failed to create directory: {e}"))?;
     }
 
     // Preserve existing file structure
     let mut doc: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
-        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+        let cleaned = strip_json_comments(&content);
+        serde_json::from_str(&cleaned).unwrap_or_else(|_| serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
@@ -1765,7 +2310,7 @@ pub async fn add_mcp_server(
     };
 
     let entry_value = serde_json::to_value(&new_entry)
-        .map_err(|e| format!("Failed to serialize entry: {}", e))?;
+        .map_err(|e| format!("Failed to serialize entry: {e}"))?;
 
     let obj = doc.as_object_mut().ok_or("Config is not an object")?;
     let servers = obj.entry("mcpServers")
@@ -1775,9 +2320,9 @@ pub async fn add_mcp_server(
         .insert(name, entry_value);
 
     let json = serde_json::to_string_pretty(&doc)
-        .map_err(|e| format!("Failed to serialize: {}", e))?;
-    std::fs::write(&config_path, json)
-        .map_err(|e| format!("Failed to write config: {}", e))?;
+        .map_err(|e| format!("Failed to serialize: {e}"))?;
+    std::fs::write(&config_path, format!("{json}\n"))
+        .map_err(|e| format!("Failed to write config: {e}"))?;
     Ok(())
 }
 
@@ -1867,8 +2412,8 @@ pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
     };
 
     let home = std::env::var("HOME").unwrap_or_default();
-    let ssh_key_exists = std::path::Path::new(&format!("{}/.ssh/id_ed25519.pub", home)).exists()
-        || std::path::Path::new(&format!("{}/.ssh/id_rsa.pub", home)).exists();
+    let ssh_key_exists = std::path::Path::new(&format!("{home}/.ssh/id_ed25519.pub")).exists()
+        || std::path::Path::new(&format!("{home}/.ssh/id_rsa.pub")).exists();
 
     Ok(GitSetupStatus {
         git_installed,
@@ -1897,7 +2442,7 @@ pub async fn set_git_config(name: String, email: String) -> Result<(), String> {
     let output = std::process::Command::new(&git_path)
         .args(["config", "--global", "user.name", &name])
         .output()
-        .map_err(|e| format!("Failed to set git user.name: {}", e))?;
+        .map_err(|e| format!("Failed to set git user.name: {e}"))?;
     if !output.status.success() {
         return Err(format!("Failed to set git user.name: {}", String::from_utf8_lossy(&output.stderr)));
     }
@@ -1905,7 +2450,7 @@ pub async fn set_git_config(name: String, email: String) -> Result<(), String> {
     let output = std::process::Command::new(&git_path)
         .args(["config", "--global", "user.email", &email])
         .output()
-        .map_err(|e| format!("Failed to set git user.email: {}", e))?;
+        .map_err(|e| format!("Failed to set git user.email: {e}"))?;
     if !output.status.success() {
         return Err(format!("Failed to set git user.email: {}", String::from_utf8_lossy(&output.stderr)));
     }
@@ -1915,20 +2460,18 @@ pub async fn set_git_config(name: String, email: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn run_gh_auth_login() -> Result<String, String> {
-    let gh_path = which::which("gh")
-        .map(|p| p.to_string_lossy().to_string())
-        .map_err(|_| "GitHub CLI (gh) not found".to_string())?;
+    let gh_path = resolve_gh_path()?;
 
     let output = std::process::Command::new(&gh_path)
         .args(["auth", "login", "--web", "-p", "https"])
         .output()
-        .map_err(|e| format!("Failed to run gh auth login: {}", e))?;
+        .map_err(|e| format!("Failed to run gh auth login: {e}"))?;
 
     if output.status.success() {
         Ok("Authentication successful".to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(format!("gh auth requires interactive login. Run 'gh auth login' in a terminal session. {}", stderr))
+        Err(format!("gh auth requires interactive login. Run 'gh auth login' in a terminal session. {stderr}"))
     }
 }
 
@@ -1967,25 +2510,33 @@ const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
 #[tauri::command]
 pub async fn read_file_contents(file_path: String) -> Result<String, String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !file_path.starts_with(&home) && !file_path.starts_with("/tmp") {
-        return Err("File must be under home directory".to_string());
-    }
-    if file_path.contains("..") {
+    if file_path.contains("..") || file_path.contains('\0') {
         return Err("Path traversal not allowed".to_string());
     }
 
+    // Canonicalize to resolve symlinks BEFORE checking the boundary constraint.
+    // This prevents symlink-based escapes (e.g. ~/evil_link -> /etc/shadow).
+    let canonical = std::path::Path::new(&file_path).canonicalize()
+        .map_err(|e| format!("Invalid path: {e}"))?;
+    let canonical_str = canonical.to_str()
+        .ok_or_else(|| "Path contains invalid characters".to_string())?;
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    if !home.is_empty() && !canonical_str.starts_with(&home) && !canonical_str.starts_with("/tmp") {
+        return Err("File must be under home directory".to_string());
+    }
+
     // Reject known binary extensions
-    let lower = file_path.to_lowercase();
+    let lower = canonical_str.to_lowercase();
     if let Some(ext) = lower.rsplit('.').next() {
         if BINARY_EXTENSIONS.contains(&ext) {
-            return Err(format!("Binary file type (.{}) cannot be displayed as text", ext));
+            return Err(format!("Binary file type (.{ext}) cannot be displayed as text"));
         }
     }
 
     // Check file size before reading
-    let metadata = std::fs::metadata(&file_path)
-        .map_err(|e| format!("Failed to stat file: {}", e))?;
+    let metadata = std::fs::metadata(canonical_str)
+        .map_err(|e| format!("Failed to stat file: {e}"))?;
     if metadata.len() > MAX_FILE_SIZE {
         return Err(format!(
             "File too large ({:.1} MB). Maximum is {} MB.",
@@ -1998,8 +2549,8 @@ pub async fn read_file_contents(file_path: String) -> Result<String, String> {
     }
 
     // Read the file; if it contains invalid UTF-8, report it as binary
-    let bytes = std::fs::read(&file_path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+    let bytes = std::fs::read(canonical_str)
+        .map_err(|e| format!("Failed to read file: {e}"))?;
     String::from_utf8(bytes)
         .map_err(|_| "Binary file: contents are not valid UTF-8 text".to_string())
 }

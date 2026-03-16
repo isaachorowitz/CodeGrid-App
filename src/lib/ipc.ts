@@ -12,6 +12,8 @@ export interface SessionInfo {
   created_at: string;
   pane_number: number;
   worktree_path: string | null;
+  /** User-assigned display name, persisted to DB. null = auto-detected. */
+  name: string | null;
 }
 
 export interface PtyOutput {
@@ -73,6 +75,16 @@ export async function getSessions(
   workspaceId: string,
 ): Promise<SessionInfo[]> {
   return invoke("get_sessions", { workspaceId });
+}
+
+/** Load sessions from the DB (all returned as status=dead). Used to restore layout on startup. */
+export async function getPersistedSessions(workspaceId: string): Promise<SessionInfo[]> {
+  return invoke("get_persisted_sessions", { workspaceId });
+}
+
+/** Persist a user-assigned name for a session tab (null to clear). */
+export async function renameSession(sessionId: string, name: string | null): Promise<void> {
+  return invoke("rename_session", { sessionId, name });
 }
 
 export async function updateSessionStatus(
@@ -241,6 +253,10 @@ export async function getHomeDir(): Promise<string> {
   return invoke("get_home_dir");
 }
 
+export async function createProjectDir(name: string): Promise<string> {
+  return invoke("create_project_dir", { name });
+}
+
 export async function listRecentDirs(): Promise<string[]> {
   return invoke("list_recent_dirs");
 }
@@ -339,6 +355,14 @@ export async function gitLog(workingDir: string, count: number = 20): Promise<Gi
 
 export async function gitDiscardFile(workingDir: string, filePath: string): Promise<void> {
   return invoke("git_discard_file", { workingDir, filePath });
+}
+
+export async function gitStageAll(workingDir: string): Promise<void> {
+  return invoke("git_stage_all", { workingDir });
+}
+
+export async function gitShowCommit(workingDir: string, hash: string): Promise<string> {
+  return invoke("git_show_commit", { workingDir, hash });
 }
 
 // === MCP Manager Commands ===
@@ -460,6 +484,23 @@ export interface GitHubIdentity {
 
 export async function getGithubIdentity(): Promise<GitHubIdentity> {
   return invoke("get_github_identity");
+}
+
+// === Quick Publish / Save ===
+
+export interface QuickPublishResult {
+  success: boolean;
+  message: string;
+  commit_hash: string;
+  files_changed: number;
+}
+
+export async function quickPublish(dir: string): Promise<QuickPublishResult> {
+  return invoke("quick_publish", { dir });
+}
+
+export async function quickSave(dir: string): Promise<QuickPublishResult> {
+  return invoke("quick_save", { dir });
 }
 
 // Event listeners

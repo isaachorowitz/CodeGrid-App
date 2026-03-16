@@ -1,7 +1,7 @@
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionStatus {
     Idle,
     Running,
@@ -21,6 +21,8 @@ pub struct Session {
     pub created_at: String,
     pub pane_number: u32,
     pub worktree_path: Option<String>,
+    /// User-assigned display name (e.g. "Backend API", "Frontend"). None = auto-detected.
+    pub name: Option<String>,
 }
 
 impl Session {
@@ -41,6 +43,7 @@ impl Session {
             created_at: Utc::now().to_rfc3339(),
             pane_number,
             worktree_path: None,
+            name: None,
         }
     }
 }

@@ -35,7 +35,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: "GridCode ${{ github.ref_name }}"
+          releaseName: "Code Grid ${{ github.ref_name }}"
           releaseBody: "See CHANGELOG.md for details."
           releaseDraft: true
           args: --target ${{ matrix.target }}
@@ -58,6 +58,6 @@ jobs:
   #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   #       with:
   #         tagName: ${{ github.ref_name }}
-  #         releaseName: "GridCode ${{ github.ref_name }}"
+  #         releaseName: "Code Grid ${{ github.ref_name }}"
   #         releaseBody: "See CHANGELOG.md for details."
   #         releaseDraft: true

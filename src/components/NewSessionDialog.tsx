@@ -4,6 +4,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
 import { useToastStore } from "../stores/toastStore";
 import type { GitHubRepo, RepoQuickStatus } from "../lib/ipc";
+import { vibeLabel } from "../lib/vibeMode";
 
 interface NewSessionDialogProps {
   onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => void;
@@ -136,12 +137,13 @@ export const NewSessionDialog = memo(function NewSessionDialog({
 
         setGhRepos(allRepos);
       } catch (e) {
-        console.error("Failed to load GitHub repos:", e);
+        addToast(`Failed to load GitHub repos: ${e}`, "error", 5000);
       } finally {
         setGhLoading(false);
       }
     })();
     setTimeout(() => ghSearchRef.current?.focus(), 100);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only load repos on tab switch
   }, [tab]);
 
   // GitHub search with debounce
@@ -156,7 +158,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
           const { listGithubRepos } = await import("../lib/ipc");
           const repos = await listGithubRepos(undefined, 30);
           setGhRepos(repos);
-        } catch {} finally {
+        } catch (e) { console.warn("Failed to load GitHub repos:", e); } finally {
           setGhLoading(false);
         }
       })();
@@ -169,12 +171,12 @@ export const NewSessionDialog = memo(function NewSessionDialog({
         const repos = await searchGithubRepos(query.trim(), 20);
         setGhRepos(repos);
       } catch (e) {
-        console.error("GitHub search failed:", e);
+        addToast(`GitHub search failed: ${e}`, "error", 4000);
       } finally {
         setGhLoading(false);
       }
     }, 400);
-  }, []);
+  }, [addToast]);
 
   const handleSubmit = useCallback(
     (dir?: string) => {
@@ -193,9 +195,9 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       onCreateSession(clonedPath, false, false, false);
       setNewSessionDialogOpen(false);
     } catch (e) {
-      console.error("Clone failed:", e);
+      addToast(`Clone failed: ${e}`, "error", 5000);
     }
-  }, [cloneUrl, onCreateSession, setNewSessionDialogOpen]);
+  }, [cloneUrl, onCreateSession, setNewSessionDialogOpen, addToast]);
 
   const handleGhCloneAndOpen = useCallback(async (repo: GitHubRepo) => {
     setGhCloning(repo.full_name);
@@ -266,13 +268,16 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       <div style={{ position: "absolute", inset: 0, background: "rgba(0, 0, 0, 0.6)" }} />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="New Session"
         style={{
           position: "relative",
           width: "580px",
           maxHeight: "600px",
           background: "#141414",
           border: "1px solid #ff8c00",
-          fontFamily: "'SF Mono', 'Menlo', monospace",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           zIndex: 1,
           display: "flex",
           flexDirection: "column",
@@ -301,7 +306,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                 border: `1px solid ${sessionType === type ? (type === "claude" ? "#ff8c00" : "#4a9eff") : "#2a2a2a"}`,
                 color: sessionType === type ? (type === "claude" ? "#ff8c00" : "#4a9eff") : "#888888",
                 fontSize: "12px",
-                fontFamily: "'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer",
                 textAlign: "center",
               }}
@@ -327,7 +332,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                 border: "1px solid #ff8c00",
                 color: "#ff8c00",
                 fontSize: "12px",
-                fontFamily: "'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer",
                 padding: "10px 12px",
                 fontWeight: "bold",
@@ -362,7 +367,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                 borderBottom: tab === t.id ? "2px solid #ff8c00" : "2px solid transparent",
                 color: tab === t.id ? "#ff8c00" : "#555555",
                 fontSize: "10px",
-                fontFamily: "'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer",
                 letterSpacing: "0.5px",
               }}
@@ -392,7 +397,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                     border: "1px solid #2a2a2a",
                     color: "#e0e0e0",
                     fontSize: "12px",
-                    fontFamily: "'SF Mono', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     padding: "8px",
                     outline: "none",
                     boxSizing: "border-box",
@@ -540,7 +545,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                     border: "1px solid #2a2a2a",
                     color: "#e0e0e0",
                     fontSize: "12px",
-                    fontFamily: "'SF Mono', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     padding: "8px",
                     outline: "none",
                     boxSizing: "border-box",
@@ -560,12 +565,12 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   <span style={{ fontSize: "9px", color: "#555", marginRight: "4px" }}>SHOWING:</span>
                   <button onClick={() => handleGhSearch("")} style={{
                     background: "#1e1e1e", border: "1px solid #00c853", color: "#00c853",
-                    fontSize: "9px", padding: "2px 6px", cursor: "pointer", fontFamily: "'SF Mono', monospace",
+                    fontSize: "9px", padding: "2px 6px", cursor: "pointer", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                   }}>{ghIdentity.username}</button>
                   {ghIdentity.orgs.map((org) => (
                     <button key={org} style={{
                       background: "#1e1e1e", border: "1px solid #4a9eff", color: "#4a9eff",
-                      fontSize: "9px", padding: "2px 6px", cursor: "default", fontFamily: "'SF Mono', monospace",
+                      fontSize: "9px", padding: "2px 6px", cursor: "default", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     }}>{org}</button>
                   ))}
                   <span style={{ fontSize: "9px", color: "#444", marginLeft: "auto" }}>{ghRepos.length} repos</span>
@@ -637,7 +642,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                       border: "none",
                       color: ghCloning === repo.full_name ? "#555555" : "#0a0a0a",
                       fontSize: "9px",
-                      fontFamily: "'SF Mono', monospace",
+                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                       cursor: ghCloning !== null ? "default" : "pointer",
                       padding: "6px 10px",
                       fontWeight: "bold",
@@ -671,7 +676,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                     border: "1px solid #2a2a2a",
                     color: "#e0e0e0",
                     fontSize: "13px",
-                    fontFamily: "'SF Mono', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     padding: "10px",
                     outline: "none",
                   }}
@@ -688,7 +693,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                     border: "1px solid #2a2a2a",
                     color: "#888888",
                     fontSize: "12px",
-                    fontFamily: "'SF Mono', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     cursor: "pointer",
                     padding: "10px 16px",
                     fontWeight: "bold",
@@ -715,7 +720,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   border: "none",
                   color: "#0a0a0a",
                   fontSize: "12px",
-                  fontFamily: "'SF Mono', monospace",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                   cursor: "pointer",
                   padding: "12px",
                   fontWeight: "bold",
@@ -745,7 +750,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                     border: "1px solid #2a2a2a",
                     color: "#e0e0e0",
                     fontSize: "13px",
-                    fontFamily: "'SF Mono', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     padding: "10px",
                     outline: "none",
                   }}
@@ -768,7 +773,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   border: "none",
                   color: cloneUrl.trim() ? "#0a0a0a" : "#555555",
                   fontSize: "12px",
-                  fontFamily: "'SF Mono', monospace",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                   cursor: cloneUrl.trim() ? "pointer" : "default",
                   padding: "12px",
                   fontWeight: "bold",
@@ -790,7 +795,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   border: "1px solid #2a2a2a",
                   color: "#888888",
                   fontSize: "11px",
-                  fontFamily: "'SF Mono', monospace",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                   cursor: "pointer",
                   padding: "10px",
                   marginTop: "8px",

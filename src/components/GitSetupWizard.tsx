@@ -11,7 +11,7 @@ import {
 
 type WizardStep = "status" | "identity" | "gh-auth" | "done";
 
-const FONT = "'SF Mono', 'Menlo', monospace";
+const FONT = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
 
 function CheckItem({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) {
   return (
@@ -461,7 +461,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
                     Authenticate with GitHub
                   </div>
                   <div style={{ color: "#888888", fontSize: "11px", marginBottom: "16px" }}>
-                    You can authenticate directly from GridCode, or run the command
+                    You can authenticate directly from Code Grid, or run the command
                     in a terminal session. The browser-based flow is the easiest.
                   </div>
 
@@ -474,7 +474,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
                     />
 
                     <div style={{ color: "#555555", fontSize: "10px", textAlign: "center", padding: "4px 0" }}>
-                      or run this in a GridCode terminal session:
+                      or run this in a Code Grid terminal session:
                     </div>
 
                     <div

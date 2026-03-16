@@ -2,24 +2,11 @@ import { memo, useCallback, useState, useMemo } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
-import { useAppStore } from "../stores/appStore";
-import { ModelSwitcher } from "./ModelSwitcher";
 import { QuickActions } from "./QuickActions";
 import { RunButton } from "./RunButton";
-import { createWorkspace, createWorkspaceWithRepo, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
 import { useToastStore } from "../stores/toastStore";
-
-const MODEL_COLORS: Record<string, string> = {
-  "claude-opus-4-6": "#d500f9",
-  "claude-sonnet-4-6": "#ff8c00",
-  "claude-haiku-4-5": "#00e5ff",
-};
-
-const MODEL_SHORT: Record<string, string> = {
-  "claude-opus-4-6": "OPU",
-  "claude-sonnet-4-6": "SON",
-  "claude-haiku-4-5": "HAI",
-};
+import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc } from "../lib/ipc";
+import { vibeLabel } from "../lib/vibeMode";
 
 const STATUS_COLORS: Record<string, string> = {
   idle: "#4a9eff",
@@ -44,23 +31,27 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     setCommandPaletteOpen,
     toggleSidebar,
     sidebarOpen,
+    vibeMode,
   } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const toggleBroadcast = useSessionStore((s) => s.toggleBroadcast);
+  const setSessionManualName = useSessionStore((s) => s.setSessionManualName);
   const applyPreset = useLayoutStore((s) => s.applyPreset);
-  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, setClaudeMdEditorOpen } = useAppStore();
+  const autoLayout = useLayoutStore((s) => s.autoLayout);
   const addToast = useToastStore((s) => s.addToast);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editSessionName, setEditSessionName] = useState("");
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
 
-  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
-
-  // Sessions for the active workspace
+  // Sessions for the active workspace, sorted by last-used (most recent first)
   const activeSessions = useMemo(
-    () => sessions.filter((s) => s.workspace_id === activeWorkspaceId),
+    () => sessions
+      .filter((s) => s.workspace_id === activeWorkspaceId)
+      .sort((a, b) => (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0)),
     [sessions, activeWorkspaceId],
   );
 
@@ -70,18 +61,15 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
       const ws = await createWorkspace(name);
       addWorkspace(ws);
     } catch (e) {
-      console.error("Failed to create workspace:", e);
+      addToast(`Failed to create workspace: ${e}`, "error");
     }
-  }, [workspaces.length, addWorkspace]);
+  }, [workspaces.length, addWorkspace, addToast]);
 
   const setLayouts = useLayoutStore((s) => s.setLayouts);
 
   const handleSwitchWorkspace = useCallback(async (wsId: string) => {
-    // Save current layout to the current workspace before switching
-    // (layout auto-persist in App.tsx will handle this, but switch is immediate)
     setActiveWorkspace(wsId);
 
-    // Restore layout for the target workspace
     const targetWs = workspaces.find((w) => w.id === wsId);
     if (targetWs?.layout_json) {
       try { setLayouts(JSON.parse(targetWs.layout_json)); } catch { setLayouts([]); }
@@ -89,7 +77,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
       setLayouts([]);
     }
 
-    try { await setActiveWorkspaceIpc(wsId); } catch {}
+    try { await setActiveWorkspaceIpc(wsId); } catch (e) { console.warn("Failed to set active workspace:", e); }
   }, [setActiveWorkspace, workspaces, setLayouts]);
 
   const handlePreset = useCallback(
@@ -100,6 +88,11 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     [activeSessions, applyPreset],
   );
 
+  const handleAutoLayout = useCallback(() => {
+    const ids = activeSessions.map((s) => s.id);
+    autoLayout(ids);
+  }, [activeSessions, autoLayout]);
+
   const handleRenameEnd = useCallback(
     async (id: string) => {
       if (editName.trim()) {
@@ -107,12 +100,27 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           await renameWorkspaceIpc(id, editName.trim());
           useWorkspaceStore.getState().updateWorkspace(id, { name: editName.trim() });
         } catch (e) {
-          console.error("Failed to rename workspace:", e);
+          addToast(`Failed to rename workspace: ${e}`, "error");
         }
       }
       setEditingId(null);
     },
-    [editName],
+    [editName, addToast],
+  );
+
+  const handleSessionRenameEnd = useCallback(
+    (sessionId: string) => {
+      const trimmed = editSessionName.trim();
+      if (trimmed) {
+        setSessionManualName(sessionId, trimmed);
+        // Persist to DB so the name survives app restarts
+        renameSessionIpc(sessionId, trimmed).catch((e) =>
+          console.warn("Failed to persist session name:", e)
+        );
+      }
+      setEditingSessionId(null);
+    },
+    [editSessionName, setSessionManualName],
   );
 
   const presets: { label: string; value: PresetLayout }[] = [
@@ -152,7 +160,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             background: "none", border: "none",
             color: sidebarOpen ? "#ff8c00" : "#555555",
             fontSize: "14px", cursor: "pointer", padding: "4px 6px",
-            fontFamily: "'SF Mono', monospace",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
           onMouseLeave={(e) => (e.currentTarget.style.color = sidebarOpen ? "#ff8c00" : "#555555")}
@@ -163,7 +171,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
         {/* Logo */}
         <div
           style={{
-            fontFamily: "'SF Mono', 'Menlo', monospace",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             fontSize: "12px",
             fontWeight: "bold",
             color: "#ff8c00",
@@ -171,8 +179,27 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             letterSpacing: "1px",
           }}
         >
-          GRIDCODE
+          CODEGRID
         </div>
+
+        {/* Vibe Mode badge */}
+        {vibeMode && (
+          <div
+            style={{
+              background: "linear-gradient(135deg, #ff8c00, #ff6600)",
+              color: "#0a0a0a",
+              fontSize: "9px",
+              fontWeight: "bold",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+              padding: "1px 6px",
+              letterSpacing: "1px",
+              marginRight: "4px",
+            }}
+            title="Vibe Mode is active — simplified interface for AI-assisted coding"
+          >
+            VIBE
+          </div>
+        )}
 
         {/* Workspace tabs */}
         <div style={{ display: "flex", gap: "1px", flex: 1, overflow: "hidden" }}>
@@ -188,7 +215,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
               style={{
                 padding: "4px 12px",
                 fontSize: "11px",
-                fontFamily: "'SF Mono', 'Menlo', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 color: ws.id === activeWorkspaceId ? "#ff8c00" : "#888888",
                 background: ws.id === activeWorkspaceId ? "#1e1e1e" : "transparent",
                 borderBottom: ws.id === activeWorkspaceId ? "2px solid #ff8c00" : "2px solid transparent",
@@ -216,7 +243,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
                   autoFocus
                   style={{
                     background: "transparent", border: "none", color: "#ff8c00",
-                    fontFamily: "'SF Mono', monospace", fontSize: "11px", outline: "none",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", fontSize: "11px", outline: "none",
                     width: "80px", padding: 0,
                   }}
                 />
@@ -230,7 +257,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             title="New Workspace (Cmd+Shift+N)"
             style={{
               background: "none", border: "none", color: "#555555", fontSize: "14px",
-              cursor: "pointer", padding: "4px 8px", fontFamily: "'SF Mono', monospace",
+              cursor: "pointer", padding: "4px 8px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
             onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
@@ -248,7 +275,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
               title={`Layout: ${p.value}`}
               style={{
                 background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-                fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+                fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
                 padding: "2px 5px", minWidth: "22px", textAlign: "center",
               }}
               onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
@@ -259,32 +286,47 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           ))}
         </div>
 
+        {/* Auto Layout button */}
+        <button
+          onClick={handleAutoLayout}
+          title="Auto Layout: automatically arrange all visible terminals in a clean grid"
+          style={{
+            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+            padding: "2px 6px", marginRight: "2px", letterSpacing: "0.5px",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          AUTO
+        </button>
+
         {/* Broadcast */}
         <button
           onClick={toggleBroadcast}
-          title="Broadcast: type in one terminal, send to all terminals simultaneously (Cmd+B)"
+          title={vibeMode ? "Type to All: type in one terminal, send to all terminals simultaneously (Cmd+B)" : "Broadcast: type in one terminal, send to all terminals simultaneously (Cmd+B)"}
           style={{
             background: broadcastMode ? "rgba(255, 140, 0, 0.2)" : "#1e1e1e",
             border: `1px solid ${broadcastMode ? "#ff8c00" : "#2a2a2a"}`,
             color: broadcastMode ? "#ff8c00" : "#555555",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
             padding: "2px 6px", marginRight: "2px", letterSpacing: "0.5px",
           }}
         >
-          BCAST
+          {vibeLabel("BCAST", vibeMode)}
         </button>
 
         {/* New session */}
         <button
           onClick={() => setNewSessionDialogOpen(true)}
-          title="New Session (Cmd+N)"
+          title={vibeMode ? "New Chat (Cmd+N)" : "New Session (Cmd+N)"}
           style={{
             background: "#ff8c00", border: "1px solid #ff8c00", color: "#0a0a0a",
-            fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
             padding: "2px 8px", fontWeight: "bold",
           }}
         >
-          + NEW
+          + {vibeMode ? "NEW CHAT" : "NEW"}
         </button>
 
         {/* Command palette */}
@@ -293,7 +335,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           title="Command Palette (Cmd+K)"
           style={{
             background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#555555",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
             padding: "2px 6px",
           }}
           onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
@@ -320,22 +362,24 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           {activeSessions.map((session) => {
             const isFocused = session.id === focusedSessionId;
             const isHovered = session.id === hoveredTab;
-            const isClaude = session.command?.includes("claude");
-            const modelColor = MODEL_COLORS[session.model ?? ""] ?? "#888888";
-            const modelLabel = MODEL_SHORT[session.model ?? ""] ?? "";
             const statusColor = STATUS_COLORS[session.status] ?? "#555555";
 
-            // Derive display name from working dir
-            const wd = session.working_dir;
-            const wtMatch = wd.match(/\/([^/]+)\/.worktrees\//);
-            const displayName = wtMatch ? wtMatch[1] : (wd.split("/").pop() || wd);
+            // Display name: manual name > activity name > fallback to working dir
+            const displayName = session.manualName
+              ?? session.activityName
+              ?? (session.working_dir.split("/").pop() || session.working_dir);
 
             return (
               <div
                 key={session.id}
                 onClick={() => onFocusSession(session.id)}
+                onDoubleClick={() => {
+                  setEditingSessionId(session.id);
+                  setEditSessionName(displayName);
+                }}
                 onMouseEnter={() => setHoveredTab(session.id)}
                 onMouseLeave={() => setHoveredTab(null)}
+                title={`Double-click to rename. Working dir: ${session.working_dir}`}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -345,10 +389,10 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
                   background: isFocused ? "#1e1e1e" : isHovered ? "#1a1a1a" : "transparent",
                   borderBottom: isFocused ? "2px solid #ff8c00" : "2px solid transparent",
                   borderTop: "2px solid transparent",
-                  fontFamily: "'SF Mono', 'Menlo', monospace",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                   fontSize: "10px",
                   whiteSpace: "nowrap",
-                  maxWidth: "180px",
+                  maxWidth: "200px",
                   position: "relative",
                 }}
               >
@@ -363,25 +407,31 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
                   [{session.pane_number}]
                 </span>
 
-                {/* Display name */}
-                <span style={{
-                  color: isFocused ? "#e0e0e0" : "#888888",
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                  fontSize: "10px",
-                }}>
-                  {displayName}
-                </span>
-
-                {/* Model badge for Claude sessions */}
-                {isClaude && modelLabel && (
+                {/* Display name -- editable on double-click */}
+                {editingSessionId === session.id ? (
+                  <input
+                    value={editSessionName}
+                    onChange={(e) => setEditSessionName(e.target.value)}
+                    onBlur={() => handleSessionRenameEnd(session.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleSessionRenameEnd(session.id);
+                      if (e.key === "Escape") setEditingSessionId(null);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    autoFocus
+                    style={{
+                      background: "transparent", border: "none", color: "#e0e0e0",
+                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      fontSize: "10px", outline: "none", width: "80px", padding: 0,
+                    }}
+                  />
+                ) : (
                   <span style={{
-                    color: modelColor, fontSize: "8px", fontWeight: "bold",
-                    padding: "0 3px", lineHeight: "12px",
-                    border: `1px solid ${modelColor}44`,
-                    background: `${modelColor}11`,
-                    flexShrink: 0,
+                    color: isFocused ? "#e0e0e0" : "#888888",
+                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    fontSize: "10px",
                   }}>
-                    {modelLabel}
+                    {displayName}
                   </span>
                 )}
 
@@ -393,7 +443,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
                     background: "none", border: "none",
                     color: "#333333", cursor: "pointer",
                     fontSize: "10px", padding: "0 1px",
-                    fontFamily: "'SF Mono', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     lineHeight: 1,
                     visibility: isHovered || isFocused ? "visible" : "hidden",
                     flexShrink: 0,
@@ -413,7 +463,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             title="New Session (Cmd+N)"
             style={{
               background: "none", border: "none", color: "#333333",
-              fontSize: "12px", fontFamily: "'SF Mono', monospace",
+              fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               cursor: "pointer", padding: "2px 6px", flexShrink: 0,
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
@@ -425,10 +475,8 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           {/* Spacer */}
           <div style={{ flex: 1 }} />
 
-          {/* Secondary controls: model switcher + quick actions */}
+          {/* Secondary controls: quick actions */}
           <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-            <ModelSwitcher />
-            <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
             <QuickActions />
             <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
             <RunButton />
@@ -449,8 +497,6 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             background: "#0f0f0f",
           }}
         >
-          <ModelSwitcher />
-          <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
           <QuickActions />
           <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
           <RunButton />

@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
-/* ===== Bloomberg Dark Global Theme ===== */
+/* ===== Code Grid Dark Theme ===== */
 
 :root {
   --bg-primary: #0a0a0a;
@@ -34,7 +34,7 @@ html, body, #root {
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace;
 }
 
-/* Remove all rounded corners — Bloomberg style */
+/* Remove all rounded corners — dense terminal style */
 * {
   border-radius: 0 !important;
 }
@@ -90,8 +90,8 @@ html, body, #root {
 }
 
 /* react-grid-layout overrides */
-.gridcode-layout {
-  background: var(--bg-primary);
+.codegrid-layout {
+  background: transparent;
 }
 
 .react-grid-item {
@@ -116,7 +116,7 @@ html, body, #root {
   border-color: var(--text-accent);
 }
 
-/* Disable all animations for Bloomberg-like snappiness */
+/* Disable all animations for snappy terminal feel */
 .react-grid-item.cssTransforms {
   transition-duration: 0ms !important;
 }

@@ -3,6 +3,7 @@ import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { useAppStore } from "../stores/appStore";
+import { useToastStore } from "../stores/toastStore";
 import { sendToSession } from "../lib/ipc";
 
 interface CommandItem {
@@ -17,8 +18,8 @@ export const CommandPalette = memo(function CommandPalette() {
   const sessions = useSessionStore((s) => s.sessions);
   const { setFocusedSession, toggleBroadcast, focusedSessionId } = useSessionStore();
   const { applyPreset, toggleMaximize } = useLayoutStore();
-  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, skills, models } = useAppStore();
-  const setSessionModel = useSessionStore((s) => s.setSessionModel);
+  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, skills } = useAppStore();
+  const addToast = useToastStore((s) => s.addToast);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -119,24 +120,6 @@ export const CommandPalette = memo(function CommandPalette() {
       });
     }
 
-    // Model switching for focused session
-    if (focusedSessionId) {
-      for (const m of models) {
-        items.push({
-          id: `model-${m.id}`,
-          label: `Switch to ${m.name} — ${m.description}`,
-          category: "Models",
-          action: async () => {
-            setSessionModel(focusedSessionId, m.id);
-            try {
-              await sendToSession(focusedSessionId, `/model ${m.id}`);
-            } catch {}
-            setCommandPaletteOpen(false);
-          },
-        });
-      }
-    }
-
     // Send skills to focused session
     if (focusedSessionId) {
       for (const skill of skills.slice(0, 10)) {
@@ -147,7 +130,7 @@ export const CommandPalette = memo(function CommandPalette() {
           action: async () => {
             try {
               await sendToSession(focusedSessionId, skill.name);
-            } catch {}
+            } catch (e) { addToast(`Failed to send skill: ${e}`, "error"); }
             setCommandPaletteOpen(false);
           },
         });
@@ -162,7 +145,7 @@ export const CommandPalette = memo(function CommandPalette() {
         category: "Sessions",
         action: () => {
           setFocusedSession(session.id);
-          window.dispatchEvent(new CustomEvent("gridcode:focus-terminal", { detail: { sessionId: session.id } }));
+          window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
           setCommandPaletteOpen(false);
         },
       });
@@ -183,7 +166,7 @@ export const CommandPalette = memo(function CommandPalette() {
         category: "Sessions",
         action: () => {
           for (const s of idleSessions) {
-            window.dispatchEvent(new CustomEvent("gridcode:close-session", { detail: { sessionId: s.id } }));
+            window.dispatchEvent(new CustomEvent("codegrid:close-session", { detail: { sessionId: s.id } }));
           }
           setCommandPaletteOpen(false);
         },
@@ -191,7 +174,7 @@ export const CommandPalette = memo(function CommandPalette() {
     }
 
     return items;
-  }, [sessions, focusedSessionId, skills, models]);
+  }, [sessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setFocusedSession, applyPreset, toggleMaximize, addToast]);
 
   const filtered = useMemo(() => {
     if (!query) return commands;
@@ -231,10 +214,13 @@ export const CommandPalette = memo(function CommandPalette() {
       <div style={{ position: "absolute", inset: 0, background: "rgba(0, 0, 0, 0.6)" }} />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command Palette"
         style={{
           position: "relative", width: "560px", maxHeight: "400px", background: "#141414",
           border: "1px solid #ff8c00", display: "flex", flexDirection: "column",
-          fontFamily: "'SF Mono', 'Menlo', monospace", zIndex: 1,
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", zIndex: 1,
         }}
       >
         <div style={{ borderBottom: "1px solid #2a2a2a" }}>
@@ -243,10 +229,10 @@ export const CommandPalette = memo(function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a command... (skills, models, layouts, sessions)"
+            placeholder="Type a command... (skills, layouts, sessions)"
             style={{
               width: "100%", background: "transparent", border: "none", color: "#e0e0e0",
-              fontSize: "13px", fontFamily: "'SF Mono', monospace", padding: "12px 16px", outline: "none",
+              fontSize: "13px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "12px 16px", outline: "none",
             }}
           />
         </div>

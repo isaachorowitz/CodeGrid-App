@@ -1,10 +1,11 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useState } from "react";
 import { TerminalView } from "./Terminal";
 import { StatusBar } from "./StatusBar";
-import { ModelSwitcher } from "./ModelSwitcher";
 import { useSessionStore } from "../stores/sessionStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import type { SessionWithModel } from "../stores/sessionStore";
+import { vibeLabel } from "../lib/vibeMode";
 
 interface PaneProps {
   session: SessionWithModel;
@@ -16,8 +17,17 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const setFocusedSession = useSessionStore((s) => s.setFocusedSession);
   const toggleMaximize = useLayoutStore((s) => s.toggleMaximize);
+  const minimizePane = useLayoutStore((s) => s.minimizePane);
+  const vibeMode = useWorkspaceStore((s) => s.vibeMode);
   const isFocused = focusedSessionId === session.id;
-  const isClaude = session.command?.includes("claude");
+
+  // Display name: manual name > activity name > fallback
+  const rawName = session.manualName
+    ?? session.activityName
+    ?? (session.command?.includes("claude") ? "claude" : "shell");
+  const displayName = vibeMode
+    ? (rawName === "claude" ? "AI" : rawName === "shell" ? "terminal" : rawName)
+    : rawName;
 
   const handleFocus = useCallback(() => {
     setFocusedSession(session.id);
@@ -31,15 +41,55 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
     [session.id, onClose],
   );
 
+  const handleMinimize = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      minimizePane(session.id);
+    },
+    [session.id, minimizePane],
+  );
+
   const handleDoubleClick = useCallback(() => {
     toggleMaximize(session.id);
   }, [session.id, toggleMaximize]);
+
+  const [restarting, setRestarting] = useState(false);
+
+  const handleRestart = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      setRestarting(true);
+      // Signal App.tsx to re-create this session with the same working_dir
+      window.dispatchEvent(
+        new CustomEvent("codegrid:restart-session", {
+          detail: {
+            sessionId: session.id,
+            workingDir: session.working_dir,
+            workspaceId: session.workspace_id,
+            isShell: !session.command.includes("claude"),
+            resume: false,
+          },
+        }),
+      );
+    },
+    [session],
+  );
+
+  // Status-based border color for at-a-glance state awareness
+  const statusColorMap: Record<string, string> = {
+    idle: "#4a9eff",      // blue
+    running: "#00c853",   // green
+    waiting: "#ffab00",   // yellow/orange
+    error: "#ff3d00",     // red
+    dead: "#555555",      // gray
+  };
+  const statusColor = statusColorMap[session.status ?? "idle"] ?? "#4a9eff";
 
   const borderColor = broadcastMode
     ? "#ff8c00"
     : isFocused
       ? "#ff8c00"
-      : "#2a2a2a";
+      : statusColor + "80"; // 50% opacity for unfocused status borders
 
   return (
     <div
@@ -66,13 +116,14 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
           justifyContent: "space-between",
           padding: "0 6px",
           background: isFocused ? "#1e1e1e" : "#141414",
+          borderLeft: isFocused ? "none" : `2px solid ${statusColor}`,
           borderBottom: "1px solid #2a2a2a",
           cursor: "move",
           userSelect: "none",
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", fontFamily: "'SF Mono', monospace" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace" }}>
           <span
             style={{
               color: "#ff8c00", fontWeight: "bold", fontSize: "10px",
@@ -82,33 +133,108 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
           >
             {session.pane_number}
           </span>
+          <span
+            style={{
+              width: "6px", height: "6px", borderRadius: "50%",
+              background: statusColor,
+              boxShadow: session.status === "running" ? `0 0 4px ${statusColor}` : "none",
+              flexShrink: 0,
+            }}
+          />
           <span style={{ color: "#888888" }}>
-            {isClaude ? "claude" : "shell"}
+            {displayName}
           </span>
-          {/* Per-pane model switcher for Claude sessions */}
-          {isClaude && (
-            <div onClick={(e) => e.stopPropagation()} style={{ cursor: "default" }}>
-              <ModelSwitcher sessionId={session.id} compact />
-            </div>
-          )}
         </div>
-        <button
-          onClick={handleClose}
-          title="Close pane (Cmd+W)"
-          style={{
-            background: "none", border: "none", color: "#555555", cursor: "pointer",
-            fontSize: "14px", padding: "0 2px", lineHeight: 1, fontFamily: "'SF Mono', monospace",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#ff3d00")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
-        >
-          x
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
+          {/* Minimize button */}
+          <button
+            onClick={handleMinimize}
+            title="Minimize pane"
+            aria-label={`Minimize pane ${session.pane_number}`}
+            style={{
+              background: "none", border: "none", color: "#555555", cursor: "pointer",
+              fontSize: "12px", padding: "0 3px", lineHeight: 1,
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#ffab00")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
+          >
+            _
+          </button>
+          {/* Close button */}
+          <button
+            onClick={handleClose}
+            title="Close pane (Cmd+W)"
+            aria-label={`Close pane ${session.pane_number}`}
+            style={{
+              background: "none", border: "none", color: "#555555", cursor: "pointer",
+              fontSize: "14px", padding: "0 2px", lineHeight: 1, fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#ff3d00")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
+          >
+            x
+          </button>
+        </div>
       </div>
 
       {/* Terminal */}
-      <div style={{ flex: 1, overflow: "hidden" }}>
+      <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
         <TerminalView sessionId={session.id} />
+
+        {/* Dead-session overlay: shown for sessions restored from DB on startup */}
+        {session.status === "dead" && (
+          <div
+            style={{
+              position: "absolute", inset: 0,
+              display: "flex", flexDirection: "column",
+              alignItems: "center", justifyContent: "center",
+              background: "rgba(10, 10, 10, 0.92)",
+              gap: "12px",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            }}
+          >
+            <div style={{ color: "#555555", fontSize: "11px", letterSpacing: "1px" }}>
+              {vibeMode ? "SESSION ENDED" : "DEAD"}
+            </div>
+            <div style={{ color: "#888888", fontSize: "10px", maxWidth: "200px", textAlign: "center", lineHeight: "1.5" }}>
+              {session.working_dir.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~")}
+            </div>
+            <button
+              onClick={handleRestart}
+              disabled={restarting}
+              style={{
+                background: restarting ? "#333333" : "#ff8c00",
+                border: "none",
+                color: restarting ? "#666666" : "#0a0a0a",
+                fontSize: "11px",
+                fontWeight: "bold",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                padding: "8px 20px",
+                cursor: restarting ? "default" : "pointer",
+                letterSpacing: "0.5px",
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => { if (!restarting) e.currentTarget.style.background = "#ffa040"; }}
+              onMouseLeave={(e) => { if (!restarting) e.currentTarget.style.background = "#ff8c00"; }}
+            >
+              {restarting ? "STARTING..." : (vibeMode ? "▶ RESTART" : "▶ RESTART SESSION")}
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); onClose(session.id); }}
+              style={{
+                background: "transparent", border: "1px solid #333333",
+                color: "#555555", fontSize: "9px",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                padding: "4px 12px", cursor: "pointer",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff3d00"; e.currentTarget.style.color = "#ff3d00"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#333333"; e.currentTarget.style.color = "#555555"; }}
+            >
+              CLOSE
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Status bar */}
@@ -119,12 +245,12 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
         <div
           style={{
             position: "absolute", top: "24px", right: "8px",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             color: "#ff8c00", background: "rgba(255, 140, 0, 0.15)",
             padding: "1px 4px", letterSpacing: "1px",
           }}
         >
-          BROADCAST
+          {vibeMode ? "TYPE TO ALL" : "BROADCAST"}
         </div>
       )}
     </div>

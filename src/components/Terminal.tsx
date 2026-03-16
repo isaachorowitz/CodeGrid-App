@@ -3,6 +3,12 @@ import { useTerminal } from "../hooks/useTerminal";
 import { usePty } from "../hooks/usePty";
 import { useSessionStore } from "../stores/sessionStore";
 import { updateSessionStatus } from "../lib/ipc";
+import { detectActivity } from "../lib/terminalActivity";
+
+// NOTE: Do NOT share a single TextDecoder across components when using
+// { stream: true } -- streaming mode keeps internal state for incomplete
+// multi-byte sequences, so sharing it between sessions would cause one
+// session's partial UTF-8 bytes to corrupt another session's output.
 
 interface TerminalProps {
   sessionId: string;
@@ -11,7 +17,13 @@ interface TerminalProps {
 export const TerminalView = memo(function TerminalView({ sessionId }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingOutputRef = useRef("");
+  // Each terminal needs its own TextDecoder because { stream: true } maintains
+  // internal state for incomplete multi-byte UTF-8 sequences.
+  const textDecoderRef = useRef(new TextDecoder());
   const updateSession = useSessionStore((s) => s.updateSession);
+  const setSessionActivityName = useSessionStore((s) => s.setSessionActivityName);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
 
   // Use refs to avoid stale closures in callbacks that reference each other
@@ -31,7 +43,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     (data: string) => {
       if (broadcastMode) {
         window.dispatchEvent(
-          new CustomEvent("gridcode:broadcast-input", { detail: { data } }),
+          new CustomEvent("codegrid:broadcast-input", { detail: { data } }),
         );
       } else {
         ptyControlsRef.current.write(data);
@@ -50,6 +62,25 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
       write(data);
       updateSession(sessionId, { status: "running" });
 
+      // Accumulate output for activity detection (debounced to avoid excessive processing)
+      const text = textDecoderRef.current.decode(data, { stream: true });
+      pendingOutputRef.current += text;
+      // Keep only the last 2000 chars to avoid unbounded growth
+      if (pendingOutputRef.current.length > 2000) {
+        pendingOutputRef.current = pendingOutputRef.current.slice(-2000);
+      }
+
+      // Debounce activity detection: wait 300ms after last output chunk
+      if (activityTimerRef.current) clearTimeout(activityTimerRef.current);
+      activityTimerRef.current = setTimeout(() => {
+        const detected = detectActivity(pendingOutputRef.current);
+        if (detected) {
+          setSessionActivityName(sessionId, detected);
+        }
+        // Clear accumulated output after processing
+        pendingOutputRef.current = "";
+      }, 300);
+
       // Reset idle timer
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
       statusTimerRef.current = setTimeout(() => {
@@ -57,7 +88,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
         updateSessionStatus(sessionId, "idle").catch(() => {});
       }, 10000);
     },
-    [sessionId, write, updateSession],
+    [sessionId, write, updateSession, setSessionActivityName],
   );
 
   const handleEnded = useCallback(() => {
@@ -75,10 +106,11 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   // Keep ref in sync
   ptyControlsRef.current = ptyControls;
 
-  // Clean up idle timer on unmount
+  // Clean up timers on unmount
   useEffect(() => {
     return () => {
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+      if (activityTimerRef.current) clearTimeout(activityTimerRef.current);
     };
   }, []);
 
@@ -90,18 +122,18 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
         focus();
       }
     };
-    window.addEventListener("gridcode:focus-terminal", handler);
-    return () => window.removeEventListener("gridcode:focus-terminal", handler);
+    window.addEventListener("codegrid:focus-terminal", handler);
+    return () => window.removeEventListener("codegrid:focus-terminal", handler);
   }, [sessionId, focus]);
 
-  // Listen for broadcast write — use ref to avoid stale closure
+  // Listen for broadcast write -- use ref to avoid stale closure
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       ptyControlsRef.current.write(detail.data);
     };
-    window.addEventListener("gridcode:broadcast-write", handler);
-    return () => window.removeEventListener("gridcode:broadcast-write", handler);
+    window.addEventListener("codegrid:broadcast-write", handler);
+    return () => window.removeEventListener("codegrid:broadcast-write", handler);
   }, []);
 
   // Fit on mount

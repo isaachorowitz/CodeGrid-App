@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
-import { BLOOMBERG_DARK } from "../lib/themes";
+import { CODEGRID_DARK } from "../lib/themes";
 
 interface UseTerminalOptions {
   onData: (data: string) => void;
@@ -18,6 +18,7 @@ export function useTerminal(
 ) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const disposedRef = useRef(false);
   // Use refs for callbacks to avoid recreating terminal on callback changes
   const onDataRef = useRef(options.onData);
   const onResizeRef = useRef(options.onResize);
@@ -25,11 +26,13 @@ export function useTerminal(
   onResizeRef.current = options.onResize;
 
   const write = useCallback((data: Uint8Array | string) => {
-    terminalRef.current?.write(data);
+    if (!disposedRef.current) {
+      terminalRef.current?.write(data);
+    }
   }, []);
 
   const fit = useCallback(() => {
-    if (fitAddonRef.current && containerRef.current) {
+    if (!disposedRef.current && fitAddonRef.current && containerRef.current) {
       try {
         fitAddonRef.current.fit();
         const term = terminalRef.current;
@@ -43,19 +46,25 @@ export function useTerminal(
   }, [containerRef]);
 
   const focus = useCallback(() => {
-    terminalRef.current?.focus();
+    if (!disposedRef.current) {
+      terminalRef.current?.focus();
+    }
   }, []);
 
   const clear = useCallback(() => {
-    terminalRef.current?.clear();
+    if (!disposedRef.current) {
+      terminalRef.current?.clear();
+    }
   }, []);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
+    disposedRef.current = false;
+
     const terminal = new Terminal({
-      theme: BLOOMBERG_DARK.terminal,
+      theme: CODEGRID_DARK.terminal,
       fontSize: options.fontSize ?? 13,
       fontFamily: options.fontFamily ?? "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
       cursorBlink: true,
@@ -87,25 +96,36 @@ export function useTerminal(
 
     // Fit to container
     requestAnimationFrame(() => {
-      try {
-        fitAddon.fit();
-        onResizeRef.current(terminal.cols, terminal.rows);
-      } catch {
-        // Ignore
+      if (!disposedRef.current) {
+        try {
+          fitAddon.fit();
+          onResizeRef.current(terminal.cols, terminal.rows);
+        } catch {
+          // Ignore
+        }
       }
     });
 
-    // Handle data input — use ref to avoid stale closure
+    // Handle data input -- use ref to avoid stale closure
     const dataDisposable = terminal.onData((data) => onDataRef.current(data));
 
-    // Handle resize
+    // Handle resize with debouncing to avoid thrashing during layout transitions.
+    // Without debouncing, rapid resize events (e.g. dragging a grid splitter)
+    // cause excessive fit() calls which can visually glitch and flood the PTY
+    // with SIGWINCH-equivalent resize sequences.
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
     const observer = new ResizeObserver(() => {
-      try {
-        fitAddon.fit();
-        onResizeRef.current(terminal.cols, terminal.rows);
-      } catch {
-        // Ignore
-      }
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        if (!disposedRef.current) {
+          try {
+            fitAddon.fit();
+            onResizeRef.current(terminal.cols, terminal.rows);
+          } catch {
+            // Ignore
+          }
+        }
+      }, 50);
     });
     observer.observe(container);
 
@@ -113,6 +133,8 @@ export function useTerminal(
     fitAddonRef.current = fitAddon;
 
     return () => {
+      disposedRef.current = true;
+      if (resizeTimer) clearTimeout(resizeTimer);
       dataDisposable.dispose();
       observer.disconnect();
       terminal.dispose();

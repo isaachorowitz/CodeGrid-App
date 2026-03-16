@@ -416,9 +416,11 @@ function Minimap({ content, scrollTop, clientHeight, scrollHeight, onSeek }: {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgImageRef = useRef<ImageData | null>(null);
   const MINIMAP_WIDTH = 60;
-  const MINIMAP_HEIGHT = 300;
+  // Derive minimap height from the visible area so it never overflows its container.
+  // Cap between 80px and 400px for usability.
+  const MINIMAP_HEIGHT = Math.max(80, Math.min(clientHeight > 0 ? clientHeight - 24 : 300, 400));
 
-  // Pre-render the code structure (only when content changes)
+  // Pre-render the code structure (only when content or height changes)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -457,7 +459,7 @@ function Minimap({ content, scrollTop, clientHeight, scrollHeight, onSeek }: {
 
     // Cache the rendered code structure
     bgImageRef.current = ctx.getImageData(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);
-  }, [content]);
+  }, [content, MINIMAP_HEIGHT]);
 
   // Overlay the viewport indicator (runs on scroll without re-rendering lines)
   useEffect(() => {
@@ -479,7 +481,7 @@ function Minimap({ content, scrollTop, clientHeight, scrollHeight, onSeek }: {
       ctx.lineWidth = 1;
       ctx.strokeRect(0, viewTop, MINIMAP_WIDTH, viewH);
     }
-  }, [content, scrollTop, clientHeight, scrollHeight]);
+  }, [content, scrollTop, clientHeight, scrollHeight, MINIMAP_HEIGHT]);
 
   const handleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -528,14 +530,13 @@ export const CodeViewer = memo(function CodeViewer() {
   const contentRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
-  // Sync viewMode with diffMode from store
+  // Sync viewMode with diffMode from store.
+  // Include codeViewerOpen so that re-opening the same file resets the mode.
   useEffect(() => {
-    if (codeViewerDiffMode) {
-      setViewMode("diff");
-    } else {
-      setViewMode("code");
+    if (codeViewerOpen) {
+      setViewMode(codeViewerDiffMode ? "diff" : "code");
     }
-  }, [codeViewerDiffMode, codeViewerFile]);
+  }, [codeViewerDiffMode, codeViewerFile, codeViewerOpen]);
 
   const fetchContent = useCallback(async () => {
     if (!codeViewerFile) return;
@@ -737,7 +738,7 @@ export const CodeViewer = memo(function CodeViewer() {
                 color: viewMode === "code" ? "#ff8c00" : "#555555",
                 fontSize: "10px",
                 fontWeight: "bold",
-                fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 letterSpacing: "1px",
                 padding: "2px 8px",
                 cursor: "pointer",
@@ -754,7 +755,7 @@ export const CodeViewer = memo(function CodeViewer() {
                   color: viewMode === "diff" ? "#ff8c00" : "#555555",
                   fontSize: "10px",
                   fontWeight: "bold",
-                  fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                   letterSpacing: "1px",
                   padding: "2px 8px",
                   cursor: "pointer",
@@ -816,7 +817,7 @@ export const CodeViewer = memo(function CodeViewer() {
                 border: wrapLines ? "1px solid #ff8c00" : "1px solid #2a2a2a",
                 color: wrapLines ? "#ff8c00" : "#555555",
                 fontSize: "9px",
-                fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 padding: "2px 6px",
                 cursor: "pointer",
               }}
@@ -832,7 +833,7 @@ export const CodeViewer = memo(function CodeViewer() {
               color: "#555555",
               fontSize: "14px",
               cursor: "pointer",
-              fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               padding: "0 4px",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
@@ -864,7 +865,7 @@ export const CodeViewer = memo(function CodeViewer() {
             )}
             {!loading && !error && (
               <div style={{ minWidth: wrapLines ? undefined : "fit-content", paddingRight: "68px" }}>
-                {lines.map((line, idx) => {
+                {lines.map((_line, idx) => {
                   const tokens = tokenizedLines[idx] ?? [];
                   const isHovered = hoveredLine === idx;
                   return (

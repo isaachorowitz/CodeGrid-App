@@ -60,9 +60,12 @@ export const ClaudeMdEditor = memo(function ClaudeMdEditor() {
       <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)" }} />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="CLAUDE.md Editor"
         style={{
           position: "relative", width: "700px", maxHeight: "650px", background: "#141414",
-          border: "1px solid #ff8c00", fontFamily: "'SF Mono', 'Menlo', monospace", zIndex: 1,
+          border: "1px solid #ff8c00", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", zIndex: 1,
           display: "flex", flexDirection: "column",
         }}
       >
@@ -86,7 +89,7 @@ export const ClaudeMdEditor = memo(function ClaudeMdEditor() {
               style={{
                 background: hasChanges ? "#ff8c00" : "#2a2a2a", border: "none",
                 color: hasChanges ? "#0a0a0a" : "#555555", fontSize: "10px",
-                fontFamily: "'SF Mono', monospace", cursor: hasChanges ? "pointer" : "default",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: hasChanges ? "pointer" : "default",
                 padding: "4px 12px", fontWeight: "bold",
               }}
             >
@@ -94,7 +97,7 @@ export const ClaudeMdEditor = memo(function ClaudeMdEditor() {
             </button>
             <button onClick={() => setClaudeMdEditorOpen(false)} style={{
               background: "none", border: "none", color: "#555555", fontSize: "14px", cursor: "pointer",
-              fontFamily: "'SF Mono', monospace", marginLeft: "8px",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", marginLeft: "8px",
             }}>x</button>
           </div>
         </div>
@@ -117,7 +120,7 @@ export const ClaudeMdEditor = memo(function ClaudeMdEditor() {
               spellCheck={false}
               style={{
                 flex: 1, width: "100%", background: "#0a0a0a", border: "none",
-                color: "#e0e0e0", fontSize: "12px", fontFamily: "'SF Mono', monospace",
+                color: "#e0e0e0", fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 padding: "12px 16px", outline: "none", resize: "none",
                 lineHeight: "1.6",
               }}

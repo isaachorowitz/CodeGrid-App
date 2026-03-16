@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Grid } from "./components/Grid";
 import { TopBar } from "./components/TopBar";
-import { Sidebar } from "./components/Sidebar";
+import { Sidebar, ACTIVITY_BAR_WIDTH } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { Settings } from "./components/Settings";
@@ -13,7 +13,7 @@ import { ClaudeMdEditor } from "./components/ClaudeMdEditor";
 import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
-import { useSessionStore } from "./stores/sessionStore";
+import { useSessionStore, MAX_TERMINALS_PER_WORKSPACE } from "./stores/sessionStore";
 import { useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useAppStore } from "./stores/appStore";
@@ -30,8 +30,11 @@ import {
   listRecentDirs,
   detectClaudeSkills,
   getAvailableModels,
-  setActiveWorkspace as setActiveWorkspaceIpc,
   checkGitSetup,
+  createProjectDir,
+  sendToSession,
+  getSetting,
+  getPersistedSessions,
 } from "./lib/ipc";
 
 export default function App() {
@@ -50,9 +53,11 @@ export default function App() {
     setActiveWorkspace,
     updateWorkspace,
     sidebarOpen,
+    activePanel,
     setNewSessionDialogOpen,
+    setVibeMode,
   } = useWorkspaceStore();
-  const { setSkills, setModels, setRecentDirs, defaultModel, setGitSetupWizardOpen } = useAppStore();
+  const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -77,8 +82,23 @@ export default function App() {
           const active = existing.find((w) => w.is_active) ?? existing[0];
           setActiveWorkspace(active.id);
           if (active.layout_json) {
-            try { setLayouts(JSON.parse(active.layout_json)); } catch {}
+            try { setLayouts(JSON.parse(active.layout_json)); } catch (e) { console.warn("Failed to parse layout JSON:", e); }
           }
+
+          // Restore persisted sessions (as dead) for ALL workspaces so switching
+          // workspaces shows the correct pane titles and layout placeholders.
+          try {
+            for (const ws of existing) {
+              const saved = await getPersistedSessions(ws.id);
+              for (const s of saved) {
+                // Only add if not already in memory (avoid duplicates on hot-reload)
+                const { sessions: current } = useSessionStore.getState();
+                if (!current.some((c) => c.id === s.id)) {
+                  useSessionStore.getState().addSession(s);
+                }
+              }
+            }
+          } catch (e) { console.warn("Failed to restore sessions:", e); }
         } else {
           const ws = await createWorkspace("Default");
           addWorkspace(ws);
@@ -93,13 +113,16 @@ export default function App() {
       }
 
       // Load skills
-      try { const skills = await detectClaudeSkills(); setSkills(skills); } catch {}
+      try { const skills = await detectClaudeSkills(); setSkills(skills); } catch (e) { console.warn("Failed to load skills:", e); }
 
       // Load models
-      try { const models = await getAvailableModels(); setModels(models); } catch {}
+      try { const models = await getAvailableModels(); setModels(models); } catch (e) { console.warn("Failed to load models:", e); }
 
       // Load recent dirs
-      try { const dirs = await listRecentDirs(); setRecentDirs(dirs); } catch {}
+      try { const dirs = await listRecentDirs(); setRecentDirs(dirs); } catch (e) { console.warn("Failed to load recent dirs:", e); }
+
+      // Load vibe mode setting
+      try { const vm = await getSetting("vibeMode"); if (vm === "true") setVibeMode(true); } catch (e) { console.warn("Failed to load vibe mode:", e); }
 
       // Auto-open Git Setup Wizard on first launch if git is not configured
       try {
@@ -107,7 +130,7 @@ export default function App() {
         if (!gitStatus.git_installed || !gitStatus.git_user_name || !gitStatus.git_user_email || !gitStatus.gh_authenticated) {
           setGitSetupWizardOpen(true);
         }
-      } catch {}
+      } catch (e) { console.warn("Failed to check git setup:", e); }
     };
     init();
   }, []);
@@ -142,11 +165,11 @@ export default function App() {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
       for (const session of sessions) {
-        window.dispatchEvent(new CustomEvent("gridcode:broadcast-write", { detail: { sessionId: session.id, data: detail.data } }));
+        window.dispatchEvent(new CustomEvent("codegrid:broadcast-write", { detail: { sessionId: session.id, data: detail.data } }));
       }
     };
-    window.addEventListener("gridcode:broadcast-input", handler);
-    return () => window.removeEventListener("gridcode:broadcast-input", handler);
+    window.addEventListener("codegrid:broadcast-input", handler);
+    return () => window.removeEventListener("codegrid:broadcast-input", handler);
   }, [sessions]);
 
   // New workspace events
@@ -155,11 +178,11 @@ export default function App() {
       try {
         const ws = await createWorkspace(`Workspace ${workspaces.length + 1}`);
         addWorkspace(ws);
-      } catch {}
+      } catch (e) { addToast(`Failed to create workspace: ${e}`, "error"); }
     };
-    window.addEventListener("gridcode:new-workspace", handler);
-    return () => window.removeEventListener("gridcode:new-workspace", handler);
-  }, [workspaces.length, addWorkspace]);
+    window.addEventListener("codegrid:new-workspace", handler);
+    return () => window.removeEventListener("codegrid:new-workspace", handler);
+  }, [workspaces.length, addWorkspace, addToast]);
 
   // New workspace with repo event
   useEffect(() => {
@@ -173,23 +196,21 @@ export default function App() {
         addToast(`Failed to create workspace: ${err}`, "error");
       }
     };
-    window.addEventListener("gridcode:new-workspace-with-repo", handler);
-    return () => window.removeEventListener("gridcode:new-workspace-with-repo", handler);
+    window.addEventListener("codegrid:new-workspace-with-repo", handler);
+    return () => window.removeEventListener("codegrid:new-workspace-with-repo", handler);
   }, [addWorkspace, addToast]);
-
-  // Quick session from Hub
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      handleCreateSession(detail.path, false, false, detail.type === "shell");
-    };
-    window.addEventListener("gridcode:quick-session", handler);
-    return () => window.removeEventListener("gridcode:quick-session", handler);
-  }, [activeWorkspaceId]);
 
   const handleCreateSession = useCallback(
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => {
       if (!activeWorkspaceId) return;
+
+      // Enforce max 9 terminals per workspace
+      const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
+      if (currentCount >= MAX_TERMINALS_PER_WORKSPACE) {
+        addToast("Maximum 9 terminals per workspace", "warning");
+        return;
+      }
+
       try {
         let session;
         if (isShell) {
@@ -197,22 +218,77 @@ export default function App() {
         } else {
           session = await createSession(workingDir, activeWorkspaceId, useWorktree, resume);
         }
-        addSession(session, defaultModel);
+        addSession(session);
         addPaneLayout(session.id);
         setFocusedSession(session.id);
         setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("gridcode:focus-terminal", { detail: { sessionId: session.id } }));
+          window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
         }, 200);
       } catch (e) {
         addToast(`Failed to create session: ${e}`, "error");
       }
     },
-    [activeWorkspaceId, addSession, addPaneLayout, setFocusedSession, defaultModel, addToast],
+    [activeWorkspaceId, addSession, addPaneLayout, setFocusedSession, addToast],
   );
+
+  // Quick session from Hub
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      handleCreateSession(detail.path, false, false, detail.type === "shell");
+    };
+    window.addEventListener("codegrid:quick-session", handler);
+    return () => window.removeEventListener("codegrid:quick-session", handler);
+  }, [handleCreateSession]);
+
+  // Restart a dead/restored session — replaces the dead entry with a live one
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        sessionId: string; workingDir: string; workspaceId: string;
+        isShell: boolean; resume: boolean;
+      };
+      try {
+        // Capture the dead session's name before removing it
+        const deadSession = useSessionStore.getState().sessions.find((s) => s.id === detail.sessionId);
+        const savedName = deadSession?.manualName ?? deadSession?.name ?? undefined;
+
+        // Remove dead session (layout stays — new session will reuse layout slot)
+        try { await killSession(detail.sessionId); } catch { /* already dead */ }
+        removeSession(detail.sessionId);
+        removePaneLayout(detail.sessionId);
+
+        // Create new live session in the same workspace
+        const session = detail.isShell
+          ? await spawnShellSession(detail.workingDir, detail.workspaceId)
+          : await createSession(detail.workingDir, detail.workspaceId, false, detail.resume);
+
+        addSession(session);
+        addPaneLayout(session.id);
+        setFocusedSession(session.id);
+
+        // Restore the custom name if it had one
+        if (savedName) {
+          useSessionStore.getState().setSessionManualName(session.id, savedName);
+          import("./lib/ipc").then(({ renameSession }) =>
+            renameSession(session.id, savedName).catch(() => {})
+          );
+        }
+
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
+        }, 200);
+      } catch (err) {
+        addToast(`Failed to restart session: ${err}`, "error");
+      }
+    };
+    window.addEventListener("codegrid:restart-session", handler);
+    return () => window.removeEventListener("codegrid:restart-session", handler);
+  }, [addSession, addPaneLayout, setFocusedSession, removeSession, removePaneLayout, addToast]);
 
   const handleCloseSession = useCallback(
     async (sessionId: string) => {
-      try { await killSession(sessionId); } catch {}
+      try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
       removeSession(sessionId);
       removePaneLayout(sessionId);
     },
@@ -225,19 +301,29 @@ export default function App() {
       const detail = (e as CustomEvent).detail;
       handleCloseSession(detail.sessionId);
     };
-    window.addEventListener("gridcode:close-session", handler);
-    return () => window.removeEventListener("gridcode:close-session", handler);
+    window.addEventListener("codegrid:close-session", handler);
+    return () => window.removeEventListener("codegrid:close-session", handler);
   }, [handleCloseSession]);
 
   const handleFocusSession = useCallback(
     (sessionId: string) => {
       setFocusedSession(sessionId);
-      window.dispatchEvent(new CustomEvent("gridcode:focus-terminal", { detail: { sessionId } }));
+      window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId } }));
     },
     [setFocusedSession],
   );
 
-  const gridWidth = sidebarOpen ? dimensions.width - 240 : dimensions.width;
+  const PANEL_WIDTHS: Record<string, number> = {
+    files: 220,
+    git: 240,
+    hub: 220,
+    mcp: 220,
+    settings: 220,
+  };
+  const panelWidth = (sidebarOpen && activePanel) ? (PANEL_WIDTHS[activePanel] ?? 220) : 0;
+  // Activity bar (40px) is always present; panel width is added when open
+  const sidebarTotalWidth = ACTIVITY_BAR_WIDTH + panelWidth + (panelWidth > 0 ? 1 : 0); // +1 for border
+  const gridWidth = dimensions.width - sidebarTotalWidth;
   const gridHeight = dimensions.height - 58;
 
   return (
@@ -247,7 +333,10 @@ export default function App() {
         <Sidebar />
         <div ref={containerRef} style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {sessions.length === 0 ? (
-            <EmptyState onNewSession={() => setNewSessionDialogOpen(true)} />
+            <EmptyState
+              onNewSession={() => setNewSessionDialogOpen(true)}
+              onCreateSession={handleCreateSession}
+            />
           ) : (
             <Grid width={gridWidth} height={gridHeight} onCloseSession={handleCloseSession} />
           )}
@@ -270,19 +359,331 @@ export default function App() {
   );
 }
 
-function EmptyState({ onNewSession }: { onNewSession: () => void }) {
+const VIBE_QUICK_CARDS = [
+  { label: "Web App", icon: "\u{1F310}", prompt: "Build me a modern web application with a clean UI. Include routing, a navigation bar, and a responsive layout. Use React with TypeScript." },
+  { label: "Mobile App", icon: "\u{1F4F1}", prompt: "Build me a mobile app using React Native with Expo. Include navigation, a home screen, and a settings page." },
+  { label: "API", icon: "\u{26A1}", prompt: "Build me a REST API with Node.js and Express. Include authentication, CRUD endpoints, and a database connection." },
+  { label: "Landing Page", icon: "\u{1F3AF}", prompt: "Build me a beautiful landing page with a hero section, features grid, testimonials, and a call-to-action. Make it responsive and modern." },
+  { label: "Chrome Extension", icon: "\u{1F9E9}", prompt: "Build me a Chrome extension with a popup UI, background script, and content script. Include a manifest.json for Manifest V3." },
+];
+
+const GLOW_KEYFRAMES = `
+@keyframes inputGlow {
+  0% { box-shadow: 0 0 5px rgba(255, 140, 0, 0.1), inset 0 0 5px rgba(255, 140, 0, 0.05); }
+  50% { box-shadow: 0 0 15px rgba(255, 140, 0, 0.25), inset 0 0 8px rgba(255, 140, 0, 0.1); }
+  100% { box-shadow: 0 0 5px rgba(255, 140, 0, 0.1), inset 0 0 5px rgba(255, 140, 0, 0.05); }
+}
+`;
+
+interface EmptyStateProps {
+  onNewSession: () => void;
+  onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => Promise<void>;
+}
+
+function EmptyState({ onNewSession, onCreateSession }: EmptyStateProps) {
   const { setHubBrowserOpen, setSkillsPanelOpen, recentDirs } = useAppStore();
-  const setNewSessionDialogOpen = useWorkspaceStore((s) => s.setNewSessionDialogOpen);
+  const { vibeMode, activeWorkspaceId } = useWorkspaceStore();
+  const addToast = useToastStore((s) => s.addToast);
+  const addSession = useSessionStore((s) => s.addSession);
+  const addPaneLayout = useLayoutStore((s) => s.addPaneLayout);
+  const setFocusedSession = useSessionStore((s) => s.setFocusedSession);
+
+  const [ideaText, setIdeaText] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const ideaInputRef = useRef<HTMLTextAreaElement>(null);
 
   const handleQuickOpen = (dir: string) => {
-    window.dispatchEvent(new CustomEvent("gridcode:quick-session", { detail: { path: dir, type: "claude" } }));
+    window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "claude" } }));
   };
 
   const handleCreateWorkspaceFromRepo = (dir: string) => {
     const name = dir.split("/").pop() ?? "Workspace";
-    window.dispatchEvent(new CustomEvent("gridcode:new-workspace-with-repo", { detail: { name, repoPath: dir } }));
+    window.dispatchEvent(new CustomEvent("codegrid:new-workspace-with-repo", { detail: { name, repoPath: dir } }));
   };
 
+  const handleOpenFolder = async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false, title: "Open a project folder" });
+      if (selected) {
+        window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: selected, type: "claude" } }));
+      }
+    } catch (e) {
+      addToast(`Failed to open folder picker: ${e}`, "error");
+    }
+  };
+
+  const handleStartBuilding = async () => {
+    const text = ideaText.trim();
+    if (!text || !activeWorkspaceId) return;
+
+    setIsCreating(true);
+    try {
+      // 1. Create the project directory
+      const projectPath = await createProjectDir(text);
+
+      // 2. Create a workspace for the project
+      const projectName = projectPath.split("/").pop() ?? "project";
+      const ws = await createWorkspaceWithRepo(projectName, projectPath);
+      useWorkspaceStore.getState().addWorkspace(ws);
+
+      // 3. Create a Claude Code session in that directory
+      const session = await createSession(projectPath, ws.id, false, false);
+      addSession(session);
+      addPaneLayout(session.id);
+      setFocusedSession(session.id);
+
+      // 4. Send the user's description as the first prompt after a short delay
+      setTimeout(async () => {
+        try {
+          await sendToSession(session.id, text);
+        } catch (e) {
+          console.warn("Failed to send initial prompt:", e);
+        }
+        window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
+      }, 1500);
+    } catch (e) {
+      addToast(`Failed to create project: ${e}`, "error");
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleCardClick = (prompt: string) => {
+    setIdeaText(prompt);
+    setTimeout(() => ideaInputRef.current?.focus(), 50);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ideaText.trim()) {
+      e.preventDefault();
+      handleStartBuilding();
+    }
+  };
+
+  const MONO = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
+
+  // === VIBE MODE EMPTY STATE ===
+  if (vibeMode) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "100%",
+          fontFamily: MONO,
+          color: "#e0e0e0",
+          padding: "40px 24px",
+          overflowY: "auto",
+        }}
+      >
+        <style>{GLOW_KEYFRAMES}</style>
+
+        {/* Heading */}
+        <div style={{ fontSize: "28px", fontWeight: "bold", color: "#e0e0e0", letterSpacing: "1px", marginBottom: "4px" }}>
+          What do you want to build?
+        </div>
+        <div style={{ fontSize: "13px", color: "#666666", marginBottom: "28px" }}>
+          Describe your idea and let AI handle the rest
+        </div>
+
+        {/* Main input */}
+        <div style={{ width: "100%", maxWidth: "560px", marginBottom: "12px" }}>
+          <textarea
+            ref={ideaInputRef}
+            value={ideaText}
+            onChange={(e) => setIdeaText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Describe your idea..."
+            rows={3}
+            style={{
+              width: "100%",
+              background: "#111111",
+              border: "1px solid #333333",
+              borderRadius: "8px",
+              color: "#e0e0e0",
+              fontSize: "15px",
+              fontFamily: MONO,
+              padding: "16px 18px",
+              resize: "none",
+              outline: "none",
+              animation: "inputGlow 3s ease-in-out infinite",
+              transition: "border-color 0.2s",
+              boxSizing: "border-box",
+            }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = "#333333"; }}
+          />
+        </div>
+
+        {/* Start Building button */}
+        <button
+          onClick={handleStartBuilding}
+          disabled={!ideaText.trim() || isCreating}
+          style={{
+            background: ideaText.trim() ? "#ff8c00" : "#2a2a2a",
+            border: "none",
+            borderRadius: "6px",
+            color: ideaText.trim() ? "#0a0a0a" : "#555555",
+            fontSize: "14px",
+            fontFamily: MONO,
+            fontWeight: "bold",
+            letterSpacing: "1px",
+            padding: "12px 32px",
+            cursor: ideaText.trim() && !isCreating ? "pointer" : "default",
+            transition: "all 0.2s",
+            marginBottom: "24px",
+            opacity: isCreating ? 0.7 : 1,
+          }}
+          onMouseEnter={(e) => { if (ideaText.trim() && !isCreating) e.currentTarget.style.background = "#ffa040"; }}
+          onMouseLeave={(e) => { if (ideaText.trim()) e.currentTarget.style.background = "#ff8c00"; }}
+        >
+          {isCreating ? "CREATING..." : "START BUILDING \u2192"}
+        </button>
+
+        {/* Divider */}
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%", maxWidth: "560px", marginBottom: "20px" }}>
+          <div style={{ flex: 1, height: "1px", background: "#2a2a2a" }} />
+          <span style={{ fontSize: "11px", color: "#555555" }}>or</span>
+          <div style={{ flex: 1, height: "1px", background: "#2a2a2a" }} />
+        </div>
+
+        {/* Open Project / From GitHub buttons */}
+        <div style={{ display: "flex", gap: "10px", marginBottom: "28px" }}>
+          <button
+            onClick={handleOpenFolder}
+            style={{
+              background: "#141414",
+              border: "1px solid #2a2a2a",
+              borderRadius: "6px",
+              color: "#e0e0e0",
+              fontSize: "12px",
+              fontFamily: MONO,
+              padding: "10px 20px",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; e.currentTarget.style.background = "#1e1e1e"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; e.currentTarget.style.background = "#141414"; }}
+          >
+            <span style={{ fontSize: "14px" }}>{"\uD83D\uDCC2"}</span> Open Project
+          </button>
+          <button
+            onClick={() => setHubBrowserOpen(true)}
+            style={{
+              background: "#141414",
+              border: "1px solid #2a2a2a",
+              borderRadius: "6px",
+              color: "#e0e0e0",
+              fontSize: "12px",
+              fontFamily: MONO,
+              padding: "10px 20px",
+              cursor: "pointer",
+              transition: "all 0.2s",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; e.currentTarget.style.background = "#1e1e1e"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; e.currentTarget.style.background = "#141414"; }}
+          >
+            <span style={{ fontSize: "14px" }}>{"\uD83D\uDD17"}</span> From GitHub
+          </button>
+        </div>
+
+        {/* Quick-start cards */}
+        <div style={{ width: "100%", maxWidth: "560px", marginBottom: "24px" }}>
+          <div style={{ fontSize: "10px", color: "#555555", letterSpacing: "1px", marginBottom: "8px", fontWeight: "bold" }}>
+            QUICK START
+          </div>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            {VIBE_QUICK_CARDS.map((card) => (
+              <button
+                key={card.label}
+                onClick={() => handleCardClick(card.prompt)}
+                style={{
+                  background: "#111111",
+                  border: "1px solid #2a2a2a",
+                  borderRadius: "6px",
+                  color: "#c0c0c0",
+                  fontSize: "11px",
+                  fontFamily: MONO,
+                  padding: "8px 14px",
+                  cursor: "pointer",
+                  transition: "all 0.2s",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = "#ff8c00";
+                  e.currentTarget.style.background = "#1a1a1a";
+                  e.currentTarget.style.color = "#ff8c00";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = "#2a2a2a";
+                  e.currentTarget.style.background = "#111111";
+                  e.currentTarget.style.color = "#c0c0c0";
+                }}
+              >
+                <span style={{ fontSize: "13px" }}>{card.icon}</span>
+                {card.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Recent projects */}
+        {recentDirs.length > 0 && (
+          <div style={{ width: "100%", maxWidth: "560px" }}>
+            <div style={{ fontSize: "10px", color: "#555555", letterSpacing: "1px", marginBottom: "8px", fontWeight: "bold" }}>
+              RECENT
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+              {recentDirs.slice(0, 5).map((dir) => (
+                <button
+                  key={dir}
+                  onClick={() => handleQuickOpen(dir)}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid transparent",
+                    borderRadius: "4px",
+                    color: "#999999",
+                    fontSize: "12px",
+                    fontFamily: MONO,
+                    padding: "6px 10px",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    transition: "all 0.15s",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "10px",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "#141414"; e.currentTarget.style.color = "#e0e0e0"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#999999"; e.currentTarget.style.borderColor = "transparent"; }}
+                >
+                  <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "12px", width: "18px", textAlign: "center" }}>
+                    {(dir.split("/").pop() || "?")[0]?.toUpperCase()}
+                  </span>
+                  <span style={{ fontWeight: "bold", color: "inherit" }}>{dir.split("/").pop()}</span>
+                  <span style={{ color: "#444444", fontSize: "10px", marginLeft: "auto" }}>
+                    {dir.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~")}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // === STANDARD EMPTY STATE (vibeMode OFF) ===
   return (
     <div
       style={{
@@ -291,7 +692,7 @@ function EmptyState({ onNewSession }: { onNewSession: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         height: "100%",
-        fontFamily: "'SF Mono', 'Menlo', monospace",
+        fontFamily: MONO,
         color: "#555555",
         gap: "16px",
         padding: "40px",
@@ -299,10 +700,10 @@ function EmptyState({ onNewSession }: { onNewSession: () => void }) {
     >
       {/* Logo */}
       <div style={{ fontSize: "48px", fontWeight: "bold", color: "#2a2a2a", letterSpacing: "4px" }}>
-        GRIDCODE
+        CODEGRID
       </div>
-      <div style={{ fontSize: "12px", color: "#555555", marginBottom: "8px" }}>
-        Bloomberg Terminal for Claude Code — multi-project AI workspaces
+      <div style={{ fontSize: "12px", color: "#666666", marginBottom: "8px" }}>
+        Your AI-powered terminal workspace
       </div>
 
       {/* Big action buttons */}
@@ -311,19 +712,19 @@ function EmptyState({ onNewSession }: { onNewSession: () => void }) {
           onClick={onNewSession}
           style={{
             background: "#ff8c00", border: "none", color: "#0a0a0a",
-            fontSize: "13px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            fontSize: "13px", fontFamily: MONO, cursor: "pointer",
             padding: "14px 28px", fontWeight: "bold", letterSpacing: "1px",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "#ffa040")}
           onMouseLeave={(e) => (e.currentTarget.style.background = "#ff8c00")}
         >
-          NEW SESSION
+          START A NEW SESSION
         </button>
         <button
           onClick={() => setHubBrowserOpen(true)}
           style={{
             background: "#1e1e1e", border: "1px solid #00c853", color: "#00c853",
-            fontSize: "13px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            fontSize: "13px", fontFamily: MONO, cursor: "pointer",
             padding: "14px 28px", fontWeight: "bold", letterSpacing: "1px",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "#00c85322")}
@@ -335,7 +736,7 @@ function EmptyState({ onNewSession }: { onNewSession: () => void }) {
           onClick={() => setSkillsPanelOpen(true)}
           style={{
             background: "#1e1e1e", border: "1px solid #4a9eff", color: "#4a9eff",
-            fontSize: "13px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+            fontSize: "13px", fontFamily: MONO, cursor: "pointer",
             padding: "14px 28px", fontWeight: "bold", letterSpacing: "1px",
           }}
           onMouseEnter={(e) => (e.currentTarget.style.background = "#4a9eff22")}
@@ -359,7 +760,7 @@ function EmptyState({ onNewSession }: { onNewSession: () => void }) {
                 onDoubleClick={(e) => { e.preventDefault(); handleCreateWorkspaceFromRepo(dir); }}
                 style={{
                   background: "#141414", border: "1px solid #2a2a2a", color: "#e0e0e0",
-                  fontSize: "11px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+                  fontSize: "11px", fontFamily: MONO, cursor: "pointer",
                   padding: "10px 12px", textAlign: "left", display: "flex", alignItems: "center",
                   gap: "8px",
                 }}

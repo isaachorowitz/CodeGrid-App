@@ -39,7 +39,7 @@ export const ToastContainer = memo(function ToastContainer() {
               color: colors.text,
               padding: "8px 12px",
               fontSize: "11px",
-              fontFamily: "'SF Mono', 'Menlo', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",

@@ -3,10 +3,16 @@ import type { Layout } from "react-grid-layout";
 
 export type PresetLayout = "1x1" | "2x2" | "3x3" | "1+2" | "1+3";
 
+/** Saved layout info for a minimized pane so we can restore it later */
+interface MinimizedPaneInfo {
+  layout: Layout;
+}
+
 interface LayoutState {
   layouts: Layout[];
   maximizedPane: string | null;
   savedLayouts: Layout[];  // Store layouts before maximize
+  minimizedPanes: Record<string, MinimizedPaneInfo>;  // pane id -> saved info
 
   setLayouts: (layouts: Layout[]) => void;
   addPaneLayout: (sessionId: string) => void;
@@ -14,6 +20,19 @@ interface LayoutState {
   applyPreset: (preset: PresetLayout, sessionIds: string[]) => void;
   toggleMaximize: (sessionId: string) => void;
   swapPanes: (id1: string, id2: string) => void;
+  minimizePane: (sessionId: string) => void;
+  restorePane: (sessionId: string) => void;
+  isMinimized: (sessionId: string) => boolean;
+  autoLayout: (sessionIds: string[]) => void;
+}
+
+/** Clamp a layout item so it stays within the 12-col, 12-row grid */
+function clampLayout(l: Layout): Layout {
+  const w = Math.max(l.w, l.minW ?? 2);
+  const h = Math.max(l.h, l.minH ?? 2);
+  const x = Math.max(0, Math.min(l.x, 12 - w));
+  const y = Math.max(0, Math.min(l.y, 12 - h));
+  return { ...l, x, y, w, h };
 }
 
 function generatePresetLayout(preset: PresetLayout, sessionIds: string[]): Layout[] {
@@ -53,37 +72,88 @@ function generatePresetLayout(preset: PresetLayout, sessionIds: string[]): Layou
   }
 }
 
+/**
+ * Compute an auto-layout grid for N visible panes.
+ * - 1 terminal: full screen
+ * - 2 terminals: side by side (50/50)
+ * - 3 terminals: 2 on top, 1 full-width bottom
+ * - 4 terminals: 2x2 grid
+ * - 5-6 terminals: 2 rows of 3
+ * - 7-9 terminals: 3x3 grid
+ */
+function computeAutoLayout(sessionIds: string[]): Layout[] {
+  const n = sessionIds.length;
+  if (n === 0) return [];
+
+  if (n === 1) {
+    return [{ i: sessionIds[0], x: 0, y: 0, w: 12, h: 12, minW: 2, minH: 2 }];
+  }
+  if (n === 2) {
+    return sessionIds.map((id, idx) => ({
+      i: id, x: idx * 6, y: 0, w: 6, h: 12, minW: 2, minH: 2,
+    }));
+  }
+  if (n === 3) {
+    return [
+      { i: sessionIds[0], x: 0, y: 0, w: 6, h: 6, minW: 2, minH: 2 },
+      { i: sessionIds[1], x: 6, y: 0, w: 6, h: 6, minW: 2, minH: 2 },
+      { i: sessionIds[2], x: 0, y: 6, w: 12, h: 6, minW: 2, minH: 2 },
+    ];
+  }
+  if (n === 4) {
+    return sessionIds.map((id, idx) => ({
+      i: id, x: (idx % 2) * 6, y: Math.floor(idx / 2) * 6, w: 6, h: 6, minW: 2, minH: 2,
+    }));
+  }
+  if (n <= 6) {
+    return sessionIds.map((id, idx) => ({
+      i: id, x: (idx % 3) * 4, y: Math.floor(idx / 3) * 6, w: 4, h: 6, minW: 2, minH: 2,
+    }));
+  }
+  // 7-9: 3x3
+  return sessionIds.map((id, idx) => ({
+    i: id, x: (idx % 3) * 4, y: Math.floor(idx / 3) * 4, w: 4, h: 4, minW: 2, minH: 2,
+  }));
+}
+
 export const useLayoutStore = create<LayoutState>((set, get) => ({
   layouts: [],
   maximizedPane: null,
   savedLayouts: [],
+  minimizedPanes: {},
 
-  setLayouts: (layouts) => set({ layouts }),
+  setLayouts: (layouts) => set({ layouts: layouts.map(clampLayout) }),
 
   addPaneLayout: (sessionId) =>
     set((state) => {
-      const existingCount = state.layouts.length;
-      // Auto-arrange: put new pane in next available slot
-      const cols = existingCount < 4 ? 2 : 3;
+      // Count only non-minimized layouts for placement
+      const visibleCount = state.layouts.filter(
+        (l) => !state.minimizedPanes[l.i],
+      ).length;
+      const cols = visibleCount < 4 ? 2 : 3;
       const w = Math.floor(12 / cols);
       const h = 6;
-      const x = (existingCount % cols) * w;
-      const y = Math.floor(existingCount / cols) * h;
+      const x = (visibleCount % cols) * w;
+      const y = Math.floor(visibleCount / cols) * h;
+
+      const newLayout = clampLayout({ i: sessionId, x, y, w, h, minW: 2, minH: 2 });
 
       return {
-        layouts: [
-          ...state.layouts,
-          { i: sessionId, x, y, w, h, minW: 2, minH: 2 },
-        ],
+        layouts: [...state.layouts, newLayout],
       };
     }),
 
   removePaneLayout: (sessionId) =>
-    set((state) => ({
-      layouts: state.layouts.filter((l) => l.i !== sessionId),
-      maximizedPane:
-        state.maximizedPane === sessionId ? null : state.maximizedPane,
-    })),
+    set((state) => {
+      const newMinimized = { ...state.minimizedPanes };
+      delete newMinimized[sessionId];
+      return {
+        layouts: state.layouts.filter((l) => l.i !== sessionId),
+        maximizedPane:
+          state.maximizedPane === sessionId ? null : state.maximizedPane,
+        minimizedPanes: newMinimized,
+      };
+    }),
 
   applyPreset: (preset, sessionIds) =>
     set({
@@ -125,6 +195,47 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
           if (l.i === id2) return { ...l, x: l1.x, y: l1.y, w: l1.w, h: l1.h };
           return l;
         }),
+      };
+    }),
+
+  minimizePane: (sessionId) =>
+    set((state) => {
+      const existing = state.layouts.find((l) => l.i === sessionId);
+      if (!existing) return state;
+      // Already minimized?
+      if (state.minimizedPanes[sessionId]) return state;
+      return {
+        minimizedPanes: {
+          ...state.minimizedPanes,
+          [sessionId]: { layout: { ...existing } },
+        },
+        // Remove from grid layouts so the pane is no longer rendered in the grid
+        layouts: state.layouts.filter((l) => l.i !== sessionId),
+      };
+    }),
+
+  restorePane: (sessionId) =>
+    set((state) => {
+      const info = state.minimizedPanes[sessionId];
+      if (!info) return state;
+      const newMinimized = { ...state.minimizedPanes };
+      delete newMinimized[sessionId];
+      return {
+        minimizedPanes: newMinimized,
+        layouts: [...state.layouts, clampLayout(info.layout)],
+      };
+    }),
+
+  isMinimized: (sessionId) => !!get().minimizedPanes[sessionId],
+
+  autoLayout: (sessionIds) =>
+    set((state) => {
+      // Only layout non-minimized panes; keep minimized panes minimized
+      const visibleIds = sessionIds.filter((id) => !state.minimizedPanes[id]);
+      const autoLayouts = computeAutoLayout(visibleIds);
+      return {
+        layouts: autoLayouts,
+        maximizedPane: null,
       };
     }),
 }));

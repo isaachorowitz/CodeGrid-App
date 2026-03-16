@@ -1,6 +1,6 @@
 import type { ITheme } from "@xterm/xterm";
 
-export interface GridCodeTheme {
+export interface CodeGridTheme {
   name: string;
   terminal: ITheme;
   ui: {
@@ -20,8 +20,8 @@ export interface GridCodeTheme {
   };
 }
 
-export const BLOOMBERG_DARK: GridCodeTheme = {
-  name: "Bloomberg Dark",
+export const CODEGRID_DARK: CodeGridTheme = {
+  name: "Code Grid Dark",
   terminal: {
     background: "#0a0a0a",
     foreground: "#d4d4d4",
@@ -63,10 +63,10 @@ export const BLOOMBERG_DARK: GridCodeTheme = {
   },
 };
 
-export const THEMES: Record<string, GridCodeTheme> = {
-  "bloomberg-dark": BLOOMBERG_DARK,
+export const THEMES: Record<string, CodeGridTheme> = {
+  "codegrid-dark": CODEGRID_DARK,
 };
 
-export function getTheme(name: string): GridCodeTheme {
-  return THEMES[name] ?? BLOOMBERG_DARK;
+export function getTheme(name: string): CodeGridTheme {
+  return THEMES[name] ?? CODEGRID_DARK;
 }

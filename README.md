@@ -1,17 +1,17 @@
-# GridCode — Bloomberg Terminal for Claude Code
+# Code Grid — Terminal workspace manager
 
 A dense, information-rich terminal multiplexer designed for power users running multiple Claude Code sessions simultaneously.
 
-![GridCode](https://img.shields.io/badge/GridCode-v0.1.0-ff8c00)
+![Code Grid](https://img.shields.io/badge/CodeGrid-v0.1.0-ff8c00)
 
-## What is GridCode?
+## What is Code Grid?
 
-GridCode is the **Bloomberg Terminal for AI coding agents**. Unlike traditional terminal multiplexers that use split panes or tabs, GridCode provides a **free-form 2D grid** where you can tile 4, 9, 16+ terminal instances in any arrangement.
+Code Grid is a **terminal workspace manager for AI coding agents**. Unlike traditional terminal multiplexers that use split panes or tabs, Code Grid provides a **free-form 2D grid** where you can tile 4, 9, 16+ terminal instances in any arrangement.
 
 ### Key Features
 
 - **True 2D Grid Layout** — Drag, resize, and arrange terminal panes in any configuration. Not split panes, not tabs. A real grid.
-- **Bloomberg Dark Aesthetic** — Dense, dark, orange accents. Monospace everything. No rounded corners. No wasted space.
+- **Dense Dark Aesthetic** — Dense, dark, orange accents. Monospace everything. No rounded corners. No wasted space.
 - **Broadcast Mode** — Type once, send to all panes simultaneously. Run `/review` across 5 projects at once.
 - **Git Worktree Isolation** — Multiple agents on the same repo without conflicts. Auto-creates worktrees for concurrent sessions.
 - **Command Palette** — `Cmd+K` for fuzzy-search across all actions, layouts, and sessions.
@@ -82,7 +82,7 @@ npm run tauri build
 
 - **1x1** — Single focused pane
 - **2x2** — Four equal quadrants
-- **3x3** — Nine panes (the Bloomberg look)
+- **3x3** — Nine panes (the dense grid look)
 - **1+2** — One large left, two stacked right
 - **1+3** — One large top, three small bottom
 

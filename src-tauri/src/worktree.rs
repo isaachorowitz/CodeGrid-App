@@ -51,20 +51,20 @@ impl WorktreeManager {
             .ok_or_else(|| "Not a git repository".to_string())?;
 
         let short_id = &session_id[..8.min(session_id.len())];
-        let branch_name = format!("gridcode/session-{}", short_id);
-        let worktree_dir = format!("{}/.worktrees/gridcode-{}", root, short_id);
+        let branch_name = format!("codegrid/session-{short_id}");
+        let worktree_dir = format!("{root}/.worktrees/codegrid-{short_id}");
 
         // Create the .worktrees directory
-        let worktrees_parent = format!("{}/.worktrees", root);
+        let worktrees_parent = format!("{root}/.worktrees");
         std::fs::create_dir_all(&worktrees_parent)
-            .map_err(|e| format!("Failed to create worktrees dir: {}", e))?;
+            .map_err(|e| format!("Failed to create worktrees dir: {e}"))?;
 
         // Create the worktree with a new branch
         let output = Command::new("git")
             .args(["worktree", "add", "-b", &branch_name, &worktree_dir])
             .current_dir(&root)
             .output()
-            .map_err(|e| format!("Failed to run git worktree add: {}", e))?;
+            .map_err(|e| format!("Failed to run git worktree add: {e}"))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -74,7 +74,7 @@ impl WorktreeManager {
                     .args(["worktree", "add", &worktree_dir, &branch_name])
                     .current_dir(&root)
                     .output()
-                    .map_err(|e| format!("Failed to run git worktree add: {}", e))?;
+                    .map_err(|e| format!("Failed to run git worktree add: {e}"))?;
 
                 if !output2.status.success() {
                     return Err(format!(
@@ -83,7 +83,7 @@ impl WorktreeManager {
                     ));
                 }
             } else {
-                return Err(format!("Failed to create worktree: {}", stderr));
+                return Err(format!("Failed to create worktree: {stderr}"));
             }
         }
 
@@ -97,7 +97,7 @@ impl WorktreeManager {
             .args(["status", "--porcelain"])
             .current_dir(worktree_path)
             .output()
-            .map_err(|e| format!("Failed to check git status: {}", e))?;
+            .map_err(|e| format!("Failed to check git status: {e}"))?;
 
         let status = String::from_utf8_lossy(&status_output.stdout);
         if !status.trim().is_empty() {
@@ -111,7 +111,7 @@ impl WorktreeManager {
             .args(["worktree", "remove", worktree_path, "--force"])
             .current_dir(&root)
             .output()
-            .map_err(|e| format!("Failed to remove worktree: {}", e))?;
+            .map_err(|e| format!("Failed to remove worktree: {e}"))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

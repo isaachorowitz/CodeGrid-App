@@ -34,14 +34,58 @@ interface ParsedServer {
   headers?: Record<string, string> | null;
 }
 
+function stripJsonComments(str: string): string {
+  // Remove single-line // comments and multi-line /* */ comments outside of strings
+  let result = "";
+  let inString = false;
+  let escape = false;
+  let i = 0;
+  while (i < str.length) {
+    if (escape) {
+      result += str[i];
+      escape = false;
+      i++;
+      continue;
+    }
+    if (inString) {
+      if (str[i] === "\\") escape = true;
+      else if (str[i] === '"') inString = false;
+      result += str[i];
+      i++;
+      continue;
+    }
+    if (str[i] === '"') {
+      inString = true;
+      result += str[i];
+      i++;
+    } else if (str[i] === "/" && str[i + 1] === "/") {
+      // Skip until end of line
+      while (i < str.length && str[i] !== "\n") i++;
+    } else if (str[i] === "/" && str[i + 1] === "*") {
+      // Skip until */
+      i += 2;
+      while (i < str.length - 1 && !(str[i] === "*" && str[i + 1] === "/")) i++;
+      i += 2; // skip the closing */
+    } else {
+      result += str[i];
+      i++;
+    }
+  }
+  return result;
+}
+
 function parseMcpJson(raw: string): { servers: ParsedServer[]; error: string | null } {
   const trimmed = raw.trim();
   if (!trimmed) return { servers: [], error: null };
 
+  // Strip // and /* */ comments, then remove trailing commas before ] or }
+  const stripped = stripJsonComments(trimmed);
+  const noTrailing = stripped.replace(/,\s*([}\]])/g, "$1");
+
   // Try to fix Format C: "server-name": { ... } by wrapping in braces
-  let jsonStr = trimmed;
-  if (/^"[^"]+"\s*:/.test(trimmed) && !trimmed.startsWith("{")) {
-    jsonStr = `{${trimmed}}`;
+  let jsonStr = noTrailing.trim();
+  if (/^"[^"]+"\s*:/.test(jsonStr) && !jsonStr.startsWith("{")) {
+    jsonStr = `{${jsonStr}}`;
   }
 
   let parsed: unknown;
@@ -181,7 +225,7 @@ export const McpManager = memo(function McpManager() {
   const handleAdd = useCallback(async () => {
     if (!newName.trim() || !newCommand.trim()) return;
     let homePath = "~";
-    try { homePath = await getHomeDir(); } catch {}
+    try { homePath = await getHomeDir(); } catch (e) { console.warn("Failed to get home dir:", e); }
     const configPath = newScope === "project" && dir
       ? `${dir}/.claude/mcp.json`
       : `${homePath}/.claude/mcp.json`;
@@ -209,7 +253,7 @@ export const McpManager = memo(function McpManager() {
   const handleAddParsed = useCallback(async (scope: "global" | "project") => {
     if (parsedServers.length === 0) return;
     let homePath = "~";
-    try { homePath = await getHomeDir(); } catch {}
+    try { homePath = await getHomeDir(); } catch (e) { console.warn("Failed to get home dir:", e); }
     const configPath = scope === "project" && dir
       ? `${dir}/.claude/mcp.json`
       : `${homePath}/.claude/mcp.json`;
@@ -248,7 +292,7 @@ export const McpManager = memo(function McpManager() {
         aria-label="MCP Server Manager"
         style={{
           position: "relative", width: "620px", maxHeight: "600px", background: "#141414",
-          border: "1px solid #d500f9", fontFamily: "'SF Mono', 'Menlo', monospace", zIndex: 1,
+          border: "1px solid #ff8c00", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", zIndex: 1,
           display: "flex", flexDirection: "column",
         }}
       >
@@ -270,7 +314,7 @@ export const McpManager = memo(function McpManager() {
           <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
             <button onClick={() => setShowPresets(!showPresets)} style={{
               background: showPresets ? "#d500f922" : "#1e1e1e", border: "1px solid #2a2a2a",
-              color: showPresets ? "#d500f9" : "#888888", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+              color: showPresets ? "#d500f9" : "#888888", fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
             }}
               onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#d500f9"; }}
@@ -280,14 +324,14 @@ export const McpManager = memo(function McpManager() {
             </button>
             <button onClick={() => setAdding(!adding)} style={{
               background: adding ? "#d500f9" : "#1e1e1e", border: "1px solid #d500f9",
-              color: adding ? "#0a0a0a" : "#d500f9", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+              color: adding ? "#0a0a0a" : "#d500f9", fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
             }}>
               {adding ? "CANCEL" : "+ ADD"}
             </button>
             <button onClick={() => setMcpManagerOpen(false)} style={{
               background: "none", border: "none", color: "#555555", fontSize: "14px", cursor: "pointer",
-              fontFamily: "'SF Mono', monospace", marginLeft: "8px",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", marginLeft: "8px",
             }}>x</button>
           </div>
         </div>
@@ -304,13 +348,13 @@ export const McpManager = memo(function McpManager() {
               <button onClick={() => setAddTab("paste")} style={{
                 flex: 1, padding: "6px", background: addTab === "paste" ? "#1e1e1e" : "transparent",
                 border: "none", borderBottom: addTab === "paste" ? "2px solid #d500f9" : "2px solid transparent",
-                color: addTab === "paste" ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                color: addTab === "paste" ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer", letterSpacing: "0.5px", fontWeight: "bold",
               }}>PASTE FROM DOCS</button>
               <button onClick={() => setAddTab("manual")} style={{
                 flex: 1, padding: "6px", background: addTab === "manual" ? "#1e1e1e" : "transparent",
                 border: "none", borderBottom: addTab === "manual" ? "2px solid #d500f9" : "2px solid transparent",
-                color: addTab === "manual" ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                color: addTab === "manual" ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer", letterSpacing: "0.5px", fontWeight: "bold",
               }}>MANUAL</button>
             </div>
@@ -327,7 +371,7 @@ export const McpManager = memo(function McpManager() {
                     border: `1px solid ${parseError ? "#ff3d00" : parsedServers.length > 0 ? "#00c853" : "#2a2a2a"}`,
                     color: "#e0e0e0",
                     fontSize: "11px",
-                    fontFamily: "'SF Mono', 'Menlo', monospace",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                     padding: "8px",
                     outline: "none",
                     resize: "vertical",
@@ -361,12 +405,12 @@ export const McpManager = memo(function McpManager() {
                     <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
                       <button onClick={() => handleAddParsed("global")} style={{
                         background: "#d500f9", border: "none", color: "#0a0a0a", fontSize: "10px",
-                        fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "6px 12px", fontWeight: "bold",
+                        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", padding: "6px 12px", fontWeight: "bold",
                       }}>ADD TO GLOBAL</button>
                       {dir && (
                         <button onClick={() => handleAddParsed("project")} style={{
                           background: "#1e1e1e", border: "1px solid #d500f9", color: "#d500f9", fontSize: "10px",
-                          fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "6px 12px", fontWeight: "bold",
+                          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", padding: "6px 12px", fontWeight: "bold",
                         }}>ADD TO PROJECT</button>
                       )}
                     </div>
@@ -377,23 +421,23 @@ export const McpManager = memo(function McpManager() {
               <div style={{ padding: "10px 16px", display: "flex", flexDirection: "column", gap: "6px" }}>
                 <div style={{ display: "flex", gap: "4px" }}>
                   <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Server name"
-                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }}
                     onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
                     onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                   />
                   <select value={newScope} onChange={(e) => setNewScope(e.target.value as "global" | "project")}
-                    style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "4px 8px" }}>
+                    style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "4px 8px" }}>
                     <option value="global">Global</option>
                     {dir && <option value="project">Project</option>}
                   </select>
                 </div>
                 <input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Command (e.g. npx, uvx, docker)"
-                  style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                  style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }}
                   onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
                   onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                 />
                 <input value={newArgs} onChange={(e) => setNewArgs(e.target.value)} placeholder="Arguments (space-separated)"
-                  style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                  style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }}
                   onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
                   onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
@@ -401,7 +445,7 @@ export const McpManager = memo(function McpManager() {
                 <button onClick={handleAdd} disabled={!newName.trim() || !newCommand.trim()} style={{
                   background: newName.trim() && newCommand.trim() ? "#d500f9" : "#2a2a2a", border: "none",
                   color: newName.trim() && newCommand.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
-                  fontFamily: "'SF Mono', monospace", cursor: newName.trim() && newCommand.trim() ? "pointer" : "default",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: newName.trim() && newCommand.trim() ? "pointer" : "default",
                   padding: "6px 12px", fontWeight: "bold", alignSelf: "flex-end",
                 }}>ADD SERVER</button>
               </div>
@@ -421,7 +465,7 @@ export const McpManager = memo(function McpManager() {
                   key={preset.name}
                   onClick={async () => {
                     let homePath = "~";
-                    try { homePath = await getHomeDir(); } catch {}
+                    try { homePath = await getHomeDir(); } catch (e) { console.warn("Failed to get home dir:", e); }
                     const configPath = `${homePath}/.claude/mcp.json`;
                     try {
                       await addMcpServer(configPath, preset.name, preset.command, preset.args, {});
@@ -431,7 +475,7 @@ export const McpManager = memo(function McpManager() {
                   }}
                   style={{
                     background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
-                    fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+                    fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
                     padding: "6px 8px", textAlign: "left",
                   }}
                   onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#d500f9"; }}
@@ -455,7 +499,7 @@ export const McpManager = memo(function McpManager() {
             <button key={t.id} onClick={() => setFilter(t.id)} style={{
               flex: 1, padding: "8px", background: filter === t.id ? "#1e1e1e" : "transparent",
               border: "none", borderBottom: filter === t.id ? "2px solid #d500f9" : "2px solid transparent",
-              color: filter === t.id ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+              color: filter === t.id ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               cursor: "pointer", letterSpacing: "0.5px",
             }}>
               {t.label} ({t.count})
@@ -517,7 +561,7 @@ export const McpManager = memo(function McpManager() {
                 {/* Remove */}
                 <button onClick={() => handleRemove(srv)} style={{
                   background: "none", border: "1px solid #ff3d0044", color: "#ff3d00", fontSize: "8px",
-                  fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "2px 6px", flexShrink: 0,
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", padding: "2px 6px", flexShrink: 0,
                 }}
                   onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#ff3d00")}
                   onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#ff3d0044")}

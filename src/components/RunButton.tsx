@@ -46,7 +46,7 @@ export const RunButton = memo(function RunButton() {
           color: focusedSessionId ? "#0a0a0a" : "#333333",
           fontSize: "10px",
           fontWeight: "bold",
-          fontFamily: "'SF Mono', 'Menlo', monospace",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           cursor: focusedSessionId ? "pointer" : "default",
           padding: "2px 8px",
           letterSpacing: "0.5px",
@@ -71,7 +71,7 @@ export const RunButton = memo(function RunButton() {
         <span
           style={{
             fontSize: "9px",
-            fontFamily: "'SF Mono', 'Menlo', monospace",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             color: "#00c853",
             letterSpacing: "0.3px",
           }}

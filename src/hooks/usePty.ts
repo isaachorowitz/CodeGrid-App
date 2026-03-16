@@ -8,6 +8,9 @@ interface UsePtyOptions {
   onEnded: () => void;
 }
 
+// Reuse a single TextEncoder instance across all usePty hooks
+const textEncoder = new TextEncoder();
+
 export function usePty(options: UsePtyOptions) {
   const { sessionId, onOutput, onEnded } = options;
   const unlistenOutputRef = useRef<(() => void) | null>(null);
@@ -22,20 +25,19 @@ export function usePty(options: UsePtyOptions) {
     let mounted = true;
 
     const setupListeners = async () => {
+      // Clean up any previous listeners before setting up new ones
       unlistenOutputRef.current?.();
+      unlistenOutputRef.current = null;
       unlistenEndedRef.current?.();
-
-      console.log(`[usePty] Setting up listeners for session ${sessionId}`);
+      unlistenEndedRef.current = null;
 
       const unlistenOutput = await onPtyOutput((data: PtyOutput) => {
         if (mounted && data.session_id === sessionId) {
-          console.log(`[usePty] Received ${data.data.length} bytes for session ${sessionId}`);
           onOutputRef.current(new Uint8Array(data.data));
         }
       });
 
       const unlistenEnded = await onSessionEnded((data) => {
-        console.log(`[usePty] Session ended event for ${data.session_id}`);
         if (mounted && data.session_id === sessionId) {
           onEndedRef.current();
         }
@@ -44,13 +46,12 @@ export function usePty(options: UsePtyOptions) {
       if (mounted) {
         unlistenOutputRef.current = unlistenOutput;
         unlistenEndedRef.current = unlistenEnded;
-        console.log(`[usePty] Listeners ready, calling connectPty for ${sessionId}`);
-        connectPty(sessionId).then(() => {
-          console.log(`[usePty] connectPty resolved for ${sessionId}`);
-        }).catch((err) => {
+        // Signal the backend that listeners are ready so it can flush buffered output
+        connectPty(sessionId).catch((err) => {
           console.error(`[usePty] connectPty failed for ${sessionId}:`, err);
         });
       } else {
+        // Component unmounted during async setup -- clean up immediately
         unlistenOutput();
         unlistenEnded();
       }
@@ -61,14 +62,15 @@ export function usePty(options: UsePtyOptions) {
     return () => {
       mounted = false;
       unlistenOutputRef.current?.();
+      unlistenOutputRef.current = null;
       unlistenEndedRef.current?.();
+      unlistenEndedRef.current = null;
     };
   }, [sessionId]);
 
   const write = useCallback(
     (data: string) => {
-      const encoder = new TextEncoder();
-      writeToPty(sessionId, encoder.encode(data)).catch(console.error);
+      writeToPty(sessionId, textEncoder.encode(data)).catch(console.error);
     },
     [sessionId],
   );

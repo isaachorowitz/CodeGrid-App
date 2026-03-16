@@ -35,6 +35,8 @@ pub fn run() {
             commands::resize_pty,
             commands::kill_session,
             commands::get_sessions,
+            commands::get_persisted_sessions,
+            commands::rename_session,
             commands::update_session_status,
             commands::create_workspace,
             commands::get_workspaces,
@@ -51,6 +53,7 @@ pub fn run() {
             commands::spawn_shell_session,
             commands::clone_repo,
             commands::get_home_dir,
+            commands::create_project_dir,
             commands::list_recent_dirs,
             commands::detect_claude_skills,
             commands::get_available_models,
@@ -68,6 +71,8 @@ pub fn run() {
             commands::git_list_branches,
             commands::git_log,
             commands::git_discard_file,
+            commands::git_stage_all,
+            commands::git_show_commit,
             commands::git_fetch,
             commands::git_stash,
             commands::git_diff_stat,
@@ -99,13 +104,16 @@ pub fn run() {
             // Repo quick status
             commands::check_repo_status,
             commands::get_github_identity,
+            // Quick publish / save
+            commands::quick_publish,
+            commands::quick_save,
         ])
         .build(tauri::generate_context!())
-        .expect("error while building GridCode");
+        .expect("error while building CodeGrid");
 
     app.run(|app_handle, event| {
         if let RunEvent::Exit = event {
-            eprintln!("[GridCode] App exiting, cleaning up PTY sessions");
+            eprintln!("[CodeGrid] App exiting, cleaning up PTY sessions");
             if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
                 state.pty_manager.kill_all();
             }

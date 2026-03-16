@@ -1,6 +1,7 @@
 import { memo, useState, useMemo, useCallback } from "react";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
+import { useToastStore } from "../stores/toastStore";
 import { sendToSession } from "../lib/ipc";
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -14,6 +15,7 @@ const CATEGORY_COLORS: Record<string, string> = {
 export const SkillsPanel = memo(function SkillsPanel() {
   const { skillsPanelOpen, setSkillsPanelOpen, skills } = useAppStore();
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
+  const addToast = useToastStore((s) => s.addToast);
   const [filter, setFilter] = useState("");
   const [sentSkill, setSentSkill] = useState<string | null>(null);
 
@@ -44,11 +46,11 @@ export const SkillsPanel = memo(function SkillsPanel() {
         await sendToSession(focusedSessionId, skillName);
         setSentSkill(skillName);
         setTimeout(() => setSentSkill(null), 1500);
-      } catch {
-        // Ignore
+      } catch (e) {
+        addToast(`Failed to send skill: ${e}`, "error");
       }
     },
-    [focusedSessionId],
+    [focusedSessionId, addToast],
   );
 
   if (!skillsPanelOpen) return null;
@@ -74,13 +76,16 @@ export const SkillsPanel = memo(function SkillsPanel() {
       />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Claude Code Skills"
         style={{
           position: "relative",
           width: "520px",
           maxHeight: "520px",
           background: "#141414",
           border: "1px solid #ff8c00",
-          fontFamily: "'SF Mono', 'Menlo', monospace",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           zIndex: 1,
           display: "flex",
           flexDirection: "column",
@@ -112,7 +117,7 @@ export const SkillsPanel = memo(function SkillsPanel() {
               color: "#555555",
               fontSize: "14px",
               cursor: "pointer",
-              fontFamily: "'SF Mono', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
           >
             x
@@ -132,7 +137,7 @@ export const SkillsPanel = memo(function SkillsPanel() {
               border: "1px solid #2a2a2a",
               color: "#e0e0e0",
               fontSize: "12px",
-              fontFamily: "'SF Mono', monospace",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
               padding: "6px 8px",
               outline: "none",
             }}

@@ -1,8 +1,10 @@
 import { memo, useState, useEffect, useCallback } from "react";
 import { useAppStore } from "../stores/appStore";
 import { useToastStore } from "../stores/toastStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { SessionWithModel } from "../stores/sessionStore";
 import { gitPush, gitPull } from "../lib/ipc";
+import { vibeLabel } from "../lib/vibeMode";
 
 interface StatusBarProps {
   session: SessionWithModel;
@@ -47,22 +49,11 @@ const STATUS_LABELS: Record<string, string> = {
   dead: "DEAD",
 };
 
-const MODEL_COLORS: Record<string, string> = {
-  "claude-opus-4-6": "#d500f9",
-  "claude-sonnet-4-6": "#ff8c00",
-  "claude-haiku-4-5": "#00e5ff",
-};
-
-const MODEL_SHORT: Record<string, string> = {
-  "claude-opus-4-6": "OPUS",
-  "claude-sonnet-4-6": "SONNET",
-  "claude-haiku-4-5": "HAIKU",
-};
-
 export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
   const [uptime, setUptime] = useState(formatUptime(session.created_at));
   const addToast = useToastStore((s) => s.addToast);
   const setGitManagerOpen = useAppStore((s) => s.setGitManagerOpen);
+  const vibeMode = useWorkspaceStore((s) => s.vibeMode);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -92,10 +83,8 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
   }, [session.working_dir, addToast]);
 
   const statusColor = STATUS_COLORS[session.status] ?? "#555555";
-  const statusLabel = STATUS_LABELS[session.status] ?? "UNKNOWN";
-  const modelColor = MODEL_COLORS[session.model ?? ""] ?? "#888888";
-  const modelShort = MODEL_SHORT[session.model ?? ""] ?? "";
-  const isClaude = session.command?.includes("claude");
+  const rawLabel = STATUS_LABELS[session.status] ?? "UNKNOWN";
+  const statusLabel = vibeLabel(rawLabel, vibeMode);
 
   return (
     <div
@@ -105,7 +94,7 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
         alignItems: "center",
         gap: "8px",
         padding: "0 8px",
-        fontFamily: "'SF Mono', 'Menlo', monospace",
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
         fontSize: "11px",
         color: "#888888",
         background: "#141414",
@@ -127,19 +116,20 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
       >
         {statusLabel}
       </span>
-      {isClaude && modelShort && (
+      {/* Activity name badge */}
+      {session.activityName && (
         <span
           style={{
-            color: modelColor,
+            color: "#ff8c00",
             fontSize: "9px",
             fontWeight: "bold",
             letterSpacing: "0.5px",
             padding: "0 3px",
-            border: `1px solid ${modelColor}44`,
-            background: `${modelColor}11`,
+            border: "1px solid #ff8c0044",
+            background: "#ff8c0011",
           }}
         >
-          {modelShort}
+          {session.activityName.toUpperCase()}
         </span>
       )}
       <span style={{ color: "#e0e0e0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -160,26 +150,26 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
             title="Quick Pull"
             style={{
               background: "none", border: "1px solid #2a2a2a", color: "#4a9eff",
-              fontSize: "8px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+              fontSize: "8px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
               padding: "0 3px", lineHeight: "14px",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4a9eff")}
             onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
           >
-            PULL
+            {vibeLabel("PULL", vibeMode)}
           </button>
           <button
             onClick={handleQuickPush}
             title="Quick Push"
             style={{
               background: "none", border: "1px solid #2a2a2a", color: "#00c853",
-              fontSize: "8px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+              fontSize: "8px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
               padding: "0 3px", lineHeight: "14px",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#00c853")}
             onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
           >
-            PUSH
+            {vibeLabel("PUSH", vibeMode)}
           </button>
         </>
       )}

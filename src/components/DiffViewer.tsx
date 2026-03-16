@@ -179,7 +179,7 @@ export const DiffViewer = memo(function DiffViewer({
           maxHeight: "85vh",
           background: "#141414",
           border: "1px solid #ff8c00",
-          fontFamily: "'JetBrains Mono', 'JetBrains Mono', 'SF Mono', monospace",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           zIndex: 1,
           display: "flex",
           flexDirection: "column",

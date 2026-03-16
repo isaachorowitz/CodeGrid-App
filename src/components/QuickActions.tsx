@@ -1,6 +1,5 @@
 import { memo, useCallback } from "react";
 import { useSessionStore } from "../stores/sessionStore";
-import { useAppStore } from "../stores/appStore";
 import { sendToSession } from "../lib/ipc";
 
 interface QuickAction {
@@ -62,8 +61,8 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
       if (!targetId) return;
       try {
         await sendToSession(targetId, command);
-      } catch {
-        // Ignore
+      } catch (e) {
+        console.warn("Failed to send quick action:", e);
       }
     },
     [targetId],
@@ -81,7 +80,7 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
         style={{
           fontSize: "9px",
           color: "#e0e0e0",
-          fontFamily: "'SF Mono', monospace",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
           marginRight: "2px",
           letterSpacing: "0.5px",
           fontWeight: "bold",
@@ -101,7 +100,7 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
             color: targetId ? action.color : "#333333",
             fontSize: "9px",
             fontWeight: "bold",
-            fontFamily: "'SF Mono', monospace",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             cursor: targetId ? "pointer" : "default",
             padding: "2px 6px",
             letterSpacing: "0.3px",
@@ -115,7 +114,7 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = "#1e1e1e";
-            e.currentTarget.style.borderColor = "#2a2a2a";
+            e.currentTarget.style.borderColor = targetId ? "#444444" : "#2a2a2a";
           }}
         >
           {action.label}

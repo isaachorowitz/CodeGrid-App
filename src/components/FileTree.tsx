@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useEffect, useRef } from "react";
+import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { listDirectory, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 
@@ -219,10 +219,11 @@ const FileTreeNode = memo(function FileTreeNode({
             <div
               style={{
                 paddingLeft: `${(depth + 1) * 14 + 22}px`,
+                paddingTop: "2px",
+                paddingBottom: "2px",
                 color: "#444444",
                 fontSize: "10px",
                 fontStyle: "italic",
-                padding: "2px 0",
               }}
             >
               (empty)
@@ -250,8 +251,10 @@ export const FileTree = memo(function FileTree({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [showPath, setShowPath] = useState(false);
   const filterRef = useRef<HTMLInputElement>(null);
+  const showPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const gitChanges = externalGitChanges ?? new Map<string, string>();
+  const emptyMap = useMemo(() => new Map<string, string>(), []);
+  const gitChanges = externalGitChanges ?? emptyMap;
 
   const loadTree = useCallback(async () => {
     if (!rootPath) return;
@@ -270,13 +273,26 @@ export const FileTree = memo(function FileTree({
     loadTree();
   }, [loadTree]);
 
+  // Clean up the show-path timer on unmount to avoid state updates after unmount
+  useEffect(() => {
+    return () => {
+      if (showPathTimerRef.current) {
+        clearTimeout(showPathTimerRef.current);
+      }
+    };
+  }, []);
+
   const setCodeViewerOpen = useAppStore((s) => s.setCodeViewerOpen);
 
   const handleFileClick = useCallback((path: string) => {
     setSelectedPath((prev) => (prev === path ? null : path));
     setShowPath(true);
+    // Clear any previous timer before starting a new one
+    if (showPathTimerRef.current) {
+      clearTimeout(showPathTimerRef.current);
+    }
     // Auto-hide path after 3 seconds
-    setTimeout(() => setShowPath(false), 3000);
+    showPathTimerRef.current = setTimeout(() => setShowPath(false), 3000);
     // Open CodeViewer for the selected file, passing workingDir so DIFF mode works
     setCodeViewerOpen(true, path, { workingDir: rootPath });
   }, [setCodeViewerOpen, rootPath]);
