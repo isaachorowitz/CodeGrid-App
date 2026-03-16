@@ -65,7 +65,7 @@ export const RunButton = memo(function RunButton() {
           }
         }}
       >
-        {"\u25B6"} RUN
+        {"\u25B6"} RUN LOCALHOST
       </button>
       {runningPort !== null && (
         <span

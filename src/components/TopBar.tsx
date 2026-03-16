@@ -1,8 +1,7 @@
-import { memo, useCallback, useState, useMemo } from "react";
+import { memo, useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
-import { QuickActions } from "./QuickActions";
 import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
 import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc } from "../lib/ipc";
@@ -46,6 +45,44 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editSessionName, setEditSessionName] = useState("");
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
+
+  // Context menu state
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number; y: number;
+    type: "workspace" | "session";
+    id: string; currentName: string;
+  } | null>(null);
+  const ctxRef = useRef<HTMLDivElement>(null);
+
+  // Close context menu on outside click or Escape
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent) { if (e.key === "Escape") setCtxMenu(null); return; }
+      if (ctxRef.current && !ctxRef.current.contains(e.target as Node)) setCtxMenu(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", close); };
+  }, [ctxMenu]);
+
+  const openCtxMenu = useCallback((e: React.MouseEvent, type: "workspace" | "session", id: string, currentName: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY, type, id, currentName });
+  }, []);
+
+  const startRenameFromCtx = useCallback(() => {
+    if (!ctxMenu) return;
+    if (ctxMenu.type === "workspace") {
+      setEditingId(ctxMenu.id);
+      setEditName(ctxMenu.currentName);
+    } else {
+      setEditingSessionId(ctxMenu.id);
+      setEditSessionName(ctxMenu.currentName);
+    }
+    setCtxMenu(null);
+  }, [ctxMenu]);
 
   // Sessions for the active workspace, sorted by last-used (most recent first)
   const activeSessions = useMemo(
@@ -207,10 +244,8 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             <div
               key={ws.id}
               onClick={() => handleSwitchWorkspace(ws.id)}
-              onDoubleClick={() => {
-                setEditingId(ws.id);
-                setEditName(ws.name);
-              }}
+              onDoubleClick={() => { setEditingId(ws.id); setEditName(ws.name); }}
+              onContextMenu={(e) => openCtxMenu(e, "workspace", ws.id, ws.name)}
               title={ws.repo_path ? ws.repo_path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~") : ws.name}
               style={{
                 padding: "4px 12px",
@@ -373,13 +408,11 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
               <div
                 key={session.id}
                 onClick={() => onFocusSession(session.id)}
-                onDoubleClick={() => {
-                  setEditingSessionId(session.id);
-                  setEditSessionName(displayName);
-                }}
+                onDoubleClick={() => { setEditingSessionId(session.id); setEditSessionName(displayName); }}
+                onContextMenu={(e) => openCtxMenu(e, "session", session.id, displayName)}
                 onMouseEnter={() => setHoveredTab(session.id)}
                 onMouseLeave={() => setHoveredTab(null)}
-                title={`Double-click to rename. Working dir: ${session.working_dir}`}
+                title={`Right-click or double-click to rename. Dir: ${session.working_dir}`}
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -475,31 +508,56 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           {/* Spacer */}
           <div style={{ flex: 1 }} />
 
-          {/* Secondary controls: quick actions */}
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
-            <QuickActions />
-            <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
+          {/* Run button */}
+          <div style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
             <RunButton />
           </div>
         </div>
       )}
 
-      {/* If no sessions, still show secondary bar */}
-      {activeSessions.length === 0 && (
+      {/* Context menu */}
+      {ctxMenu && (
         <div
+          ref={ctxRef}
           style={{
-            height: "26px",
-            display: "flex",
-            alignItems: "center",
-            padding: "0 8px",
-            gap: "12px",
-            borderTop: "1px solid #1e1e1e",
-            background: "#0f0f0f",
+            position: "fixed",
+            top: ctxMenu.y,
+            left: ctxMenu.x,
+            zIndex: 9999,
+            background: "#1e1e1e",
+            border: "1px solid #2a2a2a",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            minWidth: "140px",
+            padding: "4px 0",
           }}
         >
-          <QuickActions />
-          <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
-          <RunButton />
+          <div
+            style={{
+              padding: "4px 12px",
+              fontSize: "9px",
+              color: "#555555",
+              letterSpacing: "1px",
+              borderBottom: "1px solid #2a2a2a",
+              marginBottom: "2px",
+            }}
+          >
+            {ctxMenu.type === "workspace" ? "WORKSPACE" : "TERMINAL"}
+          </div>
+          <button
+            onClick={startRenameFromCtx}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              background: "transparent", border: "none",
+              color: "#e0e0e0", fontSize: "11px",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+              padding: "6px 14px", cursor: "pointer",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#ff8c0020"; e.currentTarget.style.color = "#ff8c00"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#e0e0e0"; }}
+          >
+            ✎ Rename
+          </button>
         </div>
       )}
     </div>
