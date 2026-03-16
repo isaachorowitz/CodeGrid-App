@@ -148,3 +148,45 @@ button {
   font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
   border-radius: 0 !important;
 }
+
+/* Accessibility: respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .xterm {
+    cursor: auto;
+  }
+}
+
+/* Accessibility: high contrast mode */
+@media (prefers-contrast: high) {
+  :root {
+    --bg-primary: #000000;
+    --bg-secondary: #1a1a1a;
+    --bg-tertiary: #333333;
+    --text-primary: #ffffff;
+    --text-secondary: #cccccc;
+    --border-default: #666666;
+    --border-focus: #ffaa00;
+  }
+  :focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+}
+
+/* Font smoothing for macOS */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Firefox selection */
+::-moz-selection {
+  background: rgba(255, 140, 0, 0.3);
+  color: #ffffff;
+}
