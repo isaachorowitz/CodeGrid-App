@@ -1,5 +1,8 @@
-import { memo, useState, useEffect } from "react";
+import { memo, useState, useEffect, useCallback } from "react";
+import { useAppStore } from "../stores/appStore";
+import { useToastStore } from "../stores/toastStore";
 import type { SessionWithModel } from "../stores/sessionStore";
+import { gitPush, gitPull } from "../lib/ipc";
 
 interface StatusBarProps {
   session: SessionWithModel;
@@ -58,6 +61,8 @@ const MODEL_SHORT: Record<string, string> = {
 
 export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
   const [uptime, setUptime] = useState(formatUptime(session.created_at));
+  const addToast = useToastStore((s) => s.addToast);
+  const setGitManagerOpen = useAppStore((s) => s.setGitManagerOpen);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -65,6 +70,26 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
     }, 30000);
     return () => clearInterval(interval);
   }, [session.created_at]);
+
+  const handleQuickPush = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await gitPush(session.working_dir, false);
+      addToast("Pushed", "success");
+    } catch (err) {
+      addToast(`Push failed: ${err}`, "error");
+    }
+  }, [session.working_dir, addToast]);
+
+  const handleQuickPull = useCallback(async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await gitPull(session.working_dir);
+      addToast("Pulled", "success");
+    } catch (err) {
+      addToast(`Pull failed: ${err}`, "error");
+    }
+  }, [session.working_dir, addToast]);
 
   const statusColor = STATUS_COLORS[session.status] ?? "#555555";
   const statusLabel = STATUS_LABELS[session.status] ?? "UNKNOWN";
@@ -117,13 +142,46 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
           {modelShort}
         </span>
       )}
-      <span style={{ color: "#e0e0e0" }}>
+      <span style={{ color: "#e0e0e0", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {shortenPath(session.working_dir)}
       </span>
       {session.git_branch && (
-        <span style={{ color: "#d500f9" }}>
-          ({session.git_branch})
-        </span>
+        <>
+          <span
+            style={{ color: "#d500f9", cursor: "pointer" }}
+            onClick={(e) => { e.stopPropagation(); setGitManagerOpen(true, session.working_dir); }}
+            title="Open Git Manager"
+          >
+            ({session.git_branch})
+          </span>
+          {/* Quick git buttons */}
+          <button
+            onClick={handleQuickPull}
+            title="Quick Pull"
+            style={{
+              background: "none", border: "1px solid #2a2a2a", color: "#4a9eff",
+              fontSize: "8px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+              padding: "0 3px", lineHeight: "14px",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#4a9eff")}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+          >
+            PULL
+          </button>
+          <button
+            onClick={handleQuickPush}
+            title="Quick Push"
+            style={{
+              background: "none", border: "1px solid #2a2a2a", color: "#00c853",
+              fontSize: "8px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
+              padding: "0 3px", lineHeight: "14px",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#00c853")}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+          >
+            PUSH
+          </button>
+        </>
       )}
       <span style={{ marginLeft: "auto" }}>
         {uptime}

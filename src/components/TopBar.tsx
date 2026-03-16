@@ -5,7 +5,8 @@ import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { useAppStore } from "../stores/appStore";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { QuickActions } from "./QuickActions";
-import { createWorkspace, renameWorkspace as renameWorkspaceIpc } from "../lib/ipc";
+import { createWorkspace, createWorkspaceWithRepo, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
+import { useToastStore } from "../stores/toastStore";
 
 export const TopBar = memo(function TopBar() {
   const {
@@ -15,14 +16,19 @@ export const TopBar = memo(function TopBar() {
     addWorkspace,
     setNewSessionDialogOpen,
     setCommandPaletteOpen,
+    toggleSidebar,
+    sidebarOpen,
   } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const toggleBroadcast = useSessionStore((s) => s.toggleBroadcast);
   const applyPreset = useLayoutStore((s) => s.applyPreset);
-  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen } = useAppStore();
+  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, setClaudeMdEditorOpen } = useAppStore();
+  const addToast = useToastStore((s) => s.addToast);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+
+  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
 
   const handleNewWorkspace = useCallback(async () => {
     const name = `Workspace ${workspaces.length + 1}`;
@@ -33,6 +39,11 @@ export const TopBar = memo(function TopBar() {
       console.error("Failed to create workspace:", e);
     }
   }, [workspaces.length, addWorkspace]);
+
+  const handleSwitchWorkspace = useCallback(async (wsId: string) => {
+    setActiveWorkspace(wsId);
+    try { await setActiveWorkspaceIpc(wsId); } catch {}
+  }, [setActiveWorkspace]);
 
   const handlePreset = useCallback(
     (preset: PresetLayout) => {
@@ -86,6 +97,22 @@ export const TopBar = memo(function TopBar() {
           gap: "4px",
         }}
       >
+        {/* Toggle sidebar */}
+        <button
+          onClick={() => toggleSidebar()}
+          title="Toggle Sidebar (Cmd+S)"
+          style={{
+            background: "none", border: "none",
+            color: sidebarOpen ? "#ff8c00" : "#555555",
+            fontSize: "14px", cursor: "pointer", padding: "4px 6px",
+            fontFamily: "'SF Mono', monospace",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = sidebarOpen ? "#ff8c00" : "#555555")}
+        >
+          {sidebarOpen ? "«" : "»"}
+        </button>
+
         {/* Logo */}
         <div
           style={{
@@ -105,11 +132,12 @@ export const TopBar = memo(function TopBar() {
           {workspaces.map((ws) => (
             <div
               key={ws.id}
-              onClick={() => setActiveWorkspace(ws.id)}
+              onClick={() => handleSwitchWorkspace(ws.id)}
               onDoubleClick={() => {
                 setEditingId(ws.id);
                 setEditName(ws.name);
               }}
+              title={ws.repo_path ? ws.repo_path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~") : ws.name}
               style={{
                 padding: "4px 12px",
                 fontSize: "11px",
@@ -119,8 +147,16 @@ export const TopBar = memo(function TopBar() {
                 borderBottom: ws.id === activeWorkspaceId ? "2px solid #ff8c00" : "2px solid transparent",
                 cursor: "pointer",
                 whiteSpace: "nowrap",
+                display: "flex",
+                alignItems: "center",
+                gap: "4px",
               }}
             >
+              {ws.repo_path && (
+                <span style={{ color: ws.id === activeWorkspaceId ? "#d500f9" : "#555555", fontSize: "9px" }}>
+                  {ws.repo_path ? "R" : ""}
+                </span>
+              )}
               {editingId === ws.id ? (
                 <input
                   value={editName}
@@ -189,72 +225,6 @@ export const TopBar = memo(function TopBar() {
           }}
         >
           BCAST
-        </button>
-
-        {/* Hub button */}
-        <button
-          onClick={() => setHubBrowserOpen(true)}
-          title="Browse & clone popular repos"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
-            padding: "2px 6px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#00c853"; e.currentTarget.style.borderColor = "#00c853"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          HUB
-        </button>
-
-        {/* Skills button */}
-        <button
-          onClick={() => setSkillsPanelOpen(true)}
-          title="View Claude Code skills and slash commands"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
-            padding: "2px 6px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#4a9eff"; e.currentTarget.style.borderColor = "#4a9eff"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          SKILLS
-        </button>
-
-        {/* Git Manager button */}
-        <button
-          onClick={() => {
-            const focused = sessions.find((s) => s.id === useSessionStore.getState().focusedSessionId);
-            setGitManagerOpen(true, focused?.working_dir);
-          }}
-          title="Git Manager — push, pull, commit, branch"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
-            padding: "2px 6px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          GIT
-        </button>
-
-        {/* MCP Manager button */}
-        <button
-          onClick={() => {
-            const focused = sessions.find((s) => s.id === useSessionStore.getState().focusedSessionId);
-            setMcpManagerOpen(true, focused?.working_dir);
-          }}
-          title="MCP Manager — manage MCP servers per project"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-            fontSize: "9px", fontFamily: "'SF Mono', monospace", cursor: "pointer",
-            padding: "2px 6px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#d500f9"; e.currentTarget.style.borderColor = "#d500f9"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          MCP
         </button>
 
         {/* New session */}

@@ -25,6 +25,7 @@ export interface WorkspaceInfo {
   layout_json: string | null;
   created_at: string;
   is_active: boolean;
+  repo_path: string | null;
 }
 
 // Session commands
@@ -106,6 +107,42 @@ export async function renameWorkspace(
   name: string,
 ): Promise<void> {
   return invoke("rename_workspace", { workspaceId, name });
+}
+
+export async function setWorkspaceRepo(
+  workspaceId: string,
+  repoPath: string | null,
+): Promise<void> {
+  return invoke("set_workspace_repo", { workspaceId, repoPath });
+}
+
+export async function createWorkspaceWithRepo(
+  name: string,
+  repoPath: string | null,
+): Promise<WorkspaceInfo> {
+  return invoke("create_workspace_with_repo", { name, repoPath });
+}
+
+// CLAUDE.md management
+export async function readClaudeMd(projectDir: string): Promise<string | null> {
+  return invoke("read_claude_md", { projectDir });
+}
+
+export async function writeClaudeMd(projectDir: string, content: string): Promise<void> {
+  return invoke("write_claude_md", { projectDir, content });
+}
+
+// Additional git commands
+export async function gitFetch(workingDir: string): Promise<string> {
+  return invoke("git_fetch", { workingDir });
+}
+
+export async function gitStash(workingDir: string, pop: boolean = false): Promise<string> {
+  return invoke("git_stash", { workingDir, pop });
+}
+
+export async function gitDiffStat(workingDir: string): Promise<string> {
+  return invoke("git_diff_stat", { workingDir });
 }
 
 // Utility commands

@@ -30,6 +30,7 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.init_tables()?;
+        db.migrate_tables()?;
         Ok(db)
     }
 
@@ -37,6 +38,13 @@ impl Database {
         let mut path = dirs_path();
         path.push("gridcode.db");
         path
+    }
+
+    fn migrate_tables(&self) -> Result<(), String> {
+        let conn = self.conn()?;
+        // Add repo_path column if it doesn't exist (migration for existing DBs)
+        let _ = conn.execute("ALTER TABLE workspaces ADD COLUMN repo_path TEXT", []);
+        Ok(())
     }
 
     fn init_tables(&self) -> Result<(), String> {
@@ -48,7 +56,8 @@ impl Database {
                 name TEXT NOT NULL,
                 layout_json TEXT,
                 created_at TEXT NOT NULL,
-                is_active INTEGER DEFAULT 0
+                is_active INTEGER DEFAULT 0,
+                repo_path TEXT
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
@@ -77,8 +86,8 @@ impl Database {
     pub fn save_workspace(&self, workspace: &Workspace) -> Result<(), String> {
         let conn = self.conn()?;
         conn.execute(
-            "INSERT OR REPLACE INTO workspaces (id, name, layout_json, created_at, is_active) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![workspace.id, workspace.name, workspace.layout_json, workspace.created_at, workspace.is_active as i32],
+            "INSERT OR REPLACE INTO workspaces (id, name, layout_json, created_at, is_active, repo_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![workspace.id, workspace.name, workspace.layout_json, workspace.created_at, workspace.is_active as i32, workspace.repo_path],
         )
         .map_err(|e| format!("Failed to save workspace: {}", e))?;
         Ok(())
@@ -87,7 +96,7 @@ impl Database {
     pub fn load_workspaces(&self) -> Result<Vec<Workspace>, String> {
         let conn = self.conn()?;
         let mut stmt = conn
-            .prepare("SELECT id, name, layout_json, created_at, is_active FROM workspaces ORDER BY created_at")
+            .prepare("SELECT id, name, layout_json, created_at, is_active, repo_path FROM workspaces ORDER BY created_at")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
         let workspaces = stmt
@@ -98,6 +107,7 @@ impl Database {
                     layout_json: row.get(2)?,
                     created_at: row.get(3)?,
                     is_active: row.get::<_, i32>(4)? != 0,
+                    repo_path: row.get(5)?,
                 })
             })
             .map_err(|e| format!("Failed to query workspaces: {}", e))?
