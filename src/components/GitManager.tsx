@@ -7,6 +7,12 @@ import {
   gitFetch, gitStash,
   type GitStatusInfo, type GitBranchInfo, type GitLogEntry,
 } from "../lib/ipc";
+// DiffViewer is now integrated into CodeViewer
+
+function resolveFilePath(dir: string, relativePath: string): string {
+  if (relativePath.startsWith("/")) return relativePath;
+  return dir.endsWith("/") ? dir + relativePath : dir + "/" + relativePath;
+}
 
 type Tab = "changes" | "branches" | "log";
 
@@ -114,7 +120,19 @@ export const GitManager = memo(function GitManager() {
     try { await gitUnstageFile(dir, path); await refresh(); } catch (e) { setError(String(e)); }
   }, [dir, refresh]);
 
+  const { setCodeViewerOpen } = useAppStore();
   const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
+
+  const handleViewFile = useCallback((relativePath: string) => {
+    const fullPath = resolveFilePath(dir, relativePath);
+    setCodeViewerOpen(true, fullPath, { workingDir: dir });
+  }, [dir, setCodeViewerOpen]);
+
+  const handleViewDiff = useCallback((relativePath: string, _staged: boolean) => {
+    const fullPath = resolveFilePath(dir, relativePath);
+    setCodeViewerOpen(true, fullPath, { diffMode: true, workingDir: dir });
+  }, [dir, setCodeViewerOpen]);
+
 
   const handleDiscard = useCallback(async (path: string) => {
     if (confirmDiscard !== path) {
@@ -164,7 +182,7 @@ export const GitManager = memo(function GitManager() {
         aria-label="Git Manager"
         style={{
           position: "relative", width: "600px", maxHeight: "600px", background: "#141414",
-          border: "1px solid #ff8c00", fontFamily: "'SF Mono', 'Menlo', monospace", zIndex: 1,
+          border: "1px solid #ff8c00", fontFamily: "'JetBrains Mono', 'JetBrains Mono', 'SF Mono', monospace", zIndex: 1,
           display: "flex", flexDirection: "column",
         }}
       >
@@ -195,7 +213,7 @@ export const GitManager = memo(function GitManager() {
               setLoading("");
             }} disabled={loading === "fetch"} style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "fetch" ? "#ffab00" : "#888888",
-              fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 8px",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "4px 8px",
             }}>
               {loading === "fetch" ? "..." : "FETCH"}
             </button>
@@ -205,26 +223,26 @@ export const GitManager = memo(function GitManager() {
               setLoading("");
             }} style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-              fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 8px",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "4px 8px",
             }}>
               STASH
             </button>
             <button onClick={handlePull} disabled={loading === "pull"} aria-label="Pull from remote" style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "pull" ? "#ffab00" : "#4a9eff",
-              fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
             }}>
               {loading === "pull" ? "PULLING..." : "PULL"}
             </button>
             <button onClick={handlePush} disabled={loading === "push"} aria-label="Push to remote" style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "push" ? "#ffab00" : "#00c853",
-              fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
             }}>
               {loading === "push" ? "PUSHING..." : "PUSH"}
               {status && status.ahead > 0 && <span style={{ marginLeft: "4px", opacity: 0.7 }}>({status.ahead})</span>}
             </button>
             <button onClick={() => setGitManagerOpen(false)} style={{
               background: "none", border: "none", color: "#555555", fontSize: "14px", cursor: "pointer",
-              fontFamily: "'SF Mono', monospace", marginLeft: "8px",
+              fontFamily: "'JetBrains Mono', 'SF Mono', monospace", marginLeft: "8px",
             }}>x</button>
           </div>
         </div>
@@ -243,7 +261,7 @@ export const GitManager = memo(function GitManager() {
             <button key={t.id} onClick={() => setTab(t.id)} style={{
               flex: 1, padding: "8px", background: tab === t.id ? "#1e1e1e" : "transparent",
               border: "none", borderBottom: tab === t.id ? "2px solid #ff8c00" : "2px solid transparent",
-              color: tab === t.id ? "#ff8c00" : "#555555", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+              color: tab === t.id ? "#ff8c00" : "#555555", fontSize: "10px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
               cursor: "pointer", letterSpacing: "0.5px",
             }}>
               {t.label}{t.count !== undefined ? ` (${t.count})` : ""}
@@ -262,7 +280,7 @@ export const GitManager = memo(function GitManager() {
                     value={commitMsg}
                     onChange={(e) => setCommitMsg(e.target.value)}
                     placeholder="Commit message..."
-                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
                     onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
                     onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                     onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleCommit(); }}
@@ -270,7 +288,7 @@ export const GitManager = memo(function GitManager() {
                   <button onClick={handleCommit} disabled={!commitMsg.trim() || loading === "commit"} style={{
                     background: commitMsg.trim() ? "#ff8c00" : "#2a2a2a", border: "none",
                     color: commitMsg.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
-                    fontFamily: "'SF Mono', monospace", cursor: commitMsg.trim() ? "pointer" : "default",
+                    fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: commitMsg.trim() ? "pointer" : "default",
                     padding: "6px 12px", fontWeight: "bold",
                   }}>
                     {loading === "commit" ? "..." : "COMMIT ALL"}
@@ -284,7 +302,8 @@ export const GitManager = memo(function GitManager() {
                 <div>
                   <div style={{ padding: "6px 16px", fontSize: "9px", color: "#00c853", letterSpacing: "1px", fontWeight: "bold" }}>STAGED ({status.staged.length})</div>
                   {status.staged.map((f) => (
-                    <FileRow key={`s-${f.path}`} path={f.path} status={f.status} onAction={() => handleUnstage(f.path)} actionLabel="UNSTAGE" actionColor="#ffab00" />
+                    <FileRow key={`s-${f.path}`} path={f.path} status={f.status} onAction={() => handleUnstage(f.path)} actionLabel="UNSTAGE" actionColor="#ffab00"
+                      onDiff={() => handleViewDiff(f.path, true)} onView={() => handleViewFile(f.path)} />
                   ))}
                 </div>
               )}
@@ -295,7 +314,8 @@ export const GitManager = memo(function GitManager() {
                   <div style={{ padding: "6px 16px", fontSize: "9px", color: "#ffab00", letterSpacing: "1px", fontWeight: "bold" }}>MODIFIED ({status.unstaged.length})</div>
                   {status.unstaged.map((f) => (
                     <FileRow key={`u-${f.path}`} path={f.path} status={f.status} onAction={() => handleStage(f.path)} actionLabel="STAGE"
-                      actionColor="#00c853" secondAction={() => handleDiscard(f.path)} secondLabel={confirmDiscard === f.path ? "CONFIRM?" : "DISCARD"} />
+                      actionColor="#00c853" secondAction={() => handleDiscard(f.path)} secondLabel={confirmDiscard === f.path ? "CONFIRM?" : "DISCARD"}
+                      onDiff={() => handleViewDiff(f.path, false)} onView={() => handleViewFile(f.path)} />
                   ))}
                 </div>
               )}
@@ -305,7 +325,8 @@ export const GitManager = memo(function GitManager() {
                 <div>
                   <div style={{ padding: "6px 16px", fontSize: "9px", color: "#4a9eff", letterSpacing: "1px", fontWeight: "bold" }}>UNTRACKED ({status.untracked.length})</div>
                   {status.untracked.map((p) => (
-                    <FileRow key={`t-${p}`} path={p} status="added" onAction={() => handleStage(p)} actionLabel="STAGE" actionColor="#00c853" />
+                    <FileRow key={`t-${p}`} path={p} status="added" onAction={() => handleStage(p)} actionLabel="STAGE" actionColor="#00c853"
+                      onDiff={() => handleViewDiff(p, false)} onView={() => handleViewFile(p)} />
                   ))}
                 </div>
               )}
@@ -326,13 +347,13 @@ export const GitManager = memo(function GitManager() {
                   value={newBranch}
                   onChange={(e) => setNewBranch(e.target.value)}
                   placeholder="New branch name..."
-                  style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                  style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
                   onKeyDown={(e) => { if (e.key === "Enter") handleNewBranch(); }}
                 />
                 <button onClick={handleNewBranch} disabled={!newBranch.trim()} style={{
                   background: newBranch.trim() ? "#ff8c00" : "#2a2a2a", border: "none",
                   color: newBranch.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
-                  fontFamily: "'SF Mono', monospace", cursor: newBranch.trim() ? "pointer" : "default",
+                  fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: newBranch.trim() ? "pointer" : "default",
                   padding: "6px 12px", fontWeight: "bold",
                 }}>CREATE</button>
               </div>
@@ -395,33 +416,47 @@ export const GitManager = memo(function GitManager() {
           )}
         </div>
       </div>
+
     </div>
   );
 });
 
 // File row component
-function FileRow({ path, status, onAction, actionLabel, actionColor, secondAction, secondLabel }: {
+function FileRow({ path, status, onAction, actionLabel, actionColor, secondAction, secondLabel, onDiff, onView }: {
   path: string; status: string; onAction: () => void; actionLabel: string; actionColor: string;
-  secondAction?: () => void; secondLabel?: string;
+  secondAction?: () => void; secondLabel?: string; onDiff?: () => void; onView?: () => void;
 }) {
   const icon = STATUS_ICON[status] ?? { label: "?", color: "#888888" };
   return (
     <div
-      style={{ display: "flex", alignItems: "center", padding: "4px 16px", gap: "8px", fontSize: "11px" }}
+      style={{ display: "flex", alignItems: "center", padding: "4px 16px", gap: "8px", fontSize: "11px", cursor: onDiff ? "pointer" : "default" }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "#1a1a1a")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      onClick={onDiff}
     >
       <span style={{ color: icon.color, fontWeight: "bold", width: "14px", textAlign: "center", fontSize: "10px" }}>{icon.label}</span>
       <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{path}</span>
+      {onView && (
+        <button onClick={(e) => { e.stopPropagation(); onView(); }} style={{
+          background: "none", border: "1px solid #4a9eff66", color: "#4a9eff", fontSize: "8px",
+          fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "1px 4px",
+        }}>VIEW</button>
+      )}
+      {onDiff && (
+        <button onClick={(e) => { e.stopPropagation(); onDiff(); }} style={{
+          background: "none", border: "1px solid #ff8c0066", color: "#ff8c00", fontSize: "8px",
+          fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "1px 4px",
+        }}>DIFF</button>
+      )}
       {secondAction && (
         <button onClick={(e) => { e.stopPropagation(); secondAction(); }} style={{
           background: "none", border: "1px solid #ff3d0066", color: "#ff3d00", fontSize: "8px",
-          fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "1px 4px",
+          fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "1px 4px",
         }}>{secondLabel}</button>
       )}
       <button onClick={(e) => { e.stopPropagation(); onAction(); }} style={{
         background: "none", border: `1px solid ${actionColor}66`, color: actionColor, fontSize: "8px",
-        fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "1px 4px",
+        fontFamily: "'JetBrains Mono', 'SF Mono', monospace", cursor: "pointer", padding: "1px 4px",
       }}>{actionLabel}</button>
     </div>
   );

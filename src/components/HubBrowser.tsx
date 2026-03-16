@@ -1,6 +1,7 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useEffect } from "react";
 import { useAppStore } from "../stores/appStore";
-import { cloneRepo } from "../lib/ipc";
+import { cloneRepo, listGithubRepos, searchGithubRepos } from "../lib/ipc";
+import type { GitHubRepo } from "../lib/ipc";
 
 interface HubRepo {
   name: string;
@@ -11,7 +12,6 @@ interface HubRepo {
 }
 
 const FEATURED_REPOS: HubRepo[] = [
-  // AI / Claude
   {
     name: "claude-code",
     url: "https://github.com/anthropics/claude-code",
@@ -27,21 +27,6 @@ const FEATURED_REPOS: HubRepo[] = [
     stars: "8k+",
   },
   {
-    name: "anthropic-sdk-python",
-    url: "https://github.com/anthropics/anthropic-sdk-python",
-    description: "Official Python SDK for the Anthropic API",
-    category: "AI Tools",
-    stars: "3k+",
-  },
-  {
-    name: "anthropic-sdk-typescript",
-    url: "https://github.com/anthropics/anthropic-sdk-typescript",
-    description: "Official TypeScript SDK for the Anthropic API",
-    category: "AI Tools",
-    stars: "2k+",
-  },
-  // Popular frameworks
-  {
     name: "next.js",
     url: "https://github.com/vercel/next.js",
     description: "The React framework for the web",
@@ -49,48 +34,11 @@ const FEATURED_REPOS: HubRepo[] = [
     stars: "130k+",
   },
   {
-    name: "create-t3-app",
-    url: "https://github.com/t3-oss/create-t3-app",
-    description: "Full-stack typesafe Next.js starter",
-    category: "Starters",
-    stars: "26k+",
-  },
-  {
     name: "shadcn-ui",
     url: "https://github.com/shadcn-ui/ui",
     description: "Beautiful UI components built with Radix + Tailwind",
     category: "UI",
     stars: "80k+",
-  },
-  {
-    name: "FastAPI",
-    url: "https://github.com/fastapi/fastapi",
-    description: "Modern Python web framework, fast and easy",
-    category: "Frameworks",
-    stars: "80k+",
-  },
-  // AI projects
-  {
-    name: "langchain",
-    url: "https://github.com/langchain-ai/langchain",
-    description: "Build apps with LLMs through composability",
-    category: "AI Tools",
-    stars: "100k+",
-  },
-  {
-    name: "open-webui",
-    url: "https://github.com/open-webui/open-webui",
-    description: "User-friendly AI interface",
-    category: "AI Tools",
-    stars: "70k+",
-  },
-  // Starter templates
-  {
-    name: "vite",
-    url: "https://github.com/vitejs/vite",
-    description: "Next generation frontend tooling",
-    category: "Frameworks",
-    stars: "70k+",
   },
   {
     name: "tauri",
@@ -101,30 +49,96 @@ const FEATURED_REPOS: HubRepo[] = [
   },
 ];
 
-const CATEGORY_ORDER = ["AI Tools", "Frameworks", "Starters", "UI"];
+type Tab = "my-repos" | "featured";
 
 export const HubBrowser = memo(function HubBrowser() {
   const { hubBrowserOpen, setHubBrowserOpen } = useAppStore();
+  const [tab, setTab] = useState<Tab>("my-repos");
   const [filter, setFilter] = useState("");
   const [customUrl, setCustomUrl] = useState("");
   const [cloning, setCloning] = useState<string | null>(null);
   const [cloned, setCloned] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
 
-  const filtered = filter
+  // GitHub repos state
+  const [ghRepos, setGhRepos] = useState<GitHubRepo[]>([]);
+  const [ghLoading, setGhLoading] = useState(false);
+  const [ghError, setGhError] = useState<string | null>(null);
+
+  // Fetch GitHub repos when hub opens
+  useEffect(() => {
+    if (hubBrowserOpen && ghRepos.length === 0) {
+      setGhLoading(true);
+      setGhError(null);
+      listGithubRepos(undefined, 100)
+        .then((repos) => {
+          setGhRepos(repos);
+          setGhLoading(false);
+        })
+        .catch((err) => {
+          setGhError(String(err));
+          setGhLoading(false);
+        });
+    }
+  }, [hubBrowserOpen]);
+
+  // Org repos loading
+  const [orgName, setOrgName] = useState("");
+  const [orgLoading, setOrgLoading] = useState(false);
+
+  const loadOrgRepos = useCallback(async (org: string) => {
+    if (!org.trim()) return;
+    setOrgLoading(true);
+    setGhError(null);
+    try {
+      const repos = await listGithubRepos(org.trim(), 100);
+      setGhRepos((prev) => {
+        const existing = new Set(prev.map((r) => r.full_name));
+        const newRepos = repos.filter((r) => !existing.has(r.full_name));
+        return [...prev, ...newRepos];
+      });
+    } catch (err) {
+      setGhError(String(err));
+    }
+    setOrgLoading(false);
+  }, []);
+
+  // GitHub search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<GitHubRepo[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  const handleSearch = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setGhError(null);
+    try {
+      const results = await searchGithubRepos(searchQuery.trim(), 30);
+      setSearchResults(results);
+    } catch (err) {
+      setGhError(String(err));
+    }
+    setSearching(false);
+  }, [searchQuery]);
+
+  const displayedRepos = searchResults.length > 0 ? searchResults : (
+    filter
+      ? ghRepos.filter(
+          (r) =>
+            r.name.toLowerCase().includes(filter.toLowerCase()) ||
+            r.description.toLowerCase().includes(filter.toLowerCase()) ||
+            r.language.toLowerCase().includes(filter.toLowerCase()),
+        )
+      : ghRepos
+  );
+
+  const filteredFeatured = filter
     ? FEATURED_REPOS.filter(
         (r) =>
           r.name.toLowerCase().includes(filter.toLowerCase()) ||
-          r.description.toLowerCase().includes(filter.toLowerCase()) ||
-          r.category.toLowerCase().includes(filter.toLowerCase()),
+          r.description.toLowerCase().includes(filter.toLowerCase()),
       )
     : FEATURED_REPOS;
-
-  const grouped: Record<string, HubRepo[]> = {};
-  for (const repo of filtered) {
-    if (!grouped[repo.category]) grouped[repo.category] = [];
-    grouped[repo.category].push(repo);
-  }
 
   const handleClone = useCallback(
     async (url: string, name: string) => {
@@ -151,7 +165,6 @@ export const HubBrowser = memo(function HubBrowser() {
   const handleOpenInGridCode = useCallback(
     (path: string) => {
       setHubBrowserOpen(false);
-      // Trigger new session with this path
       window.dispatchEvent(
         new CustomEvent("gridcode:quick-session", {
           detail: { path, type: "claude" },
@@ -162,6 +175,17 @@ export const HubBrowser = memo(function HubBrowser() {
   );
 
   if (!hubBrowserOpen) return null;
+
+  const timeAgo = (dateStr: string) => {
+    if (!dateStr) return "";
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const days = Math.floor(diff / 86400000);
+    if (days === 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 30) return `${days}d ago`;
+    if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+    return `${Math.floor(days / 365)}y ago`;
+  };
 
   return (
     <div
@@ -182,8 +206,8 @@ export const HubBrowser = memo(function HubBrowser() {
         onClick={(e) => e.stopPropagation()}
         style={{
           position: "relative",
-          width: "640px",
-          maxHeight: "600px",
+          width: "700px",
+          maxHeight: "650px",
           background: "#141414",
           border: "1px solid #ff8c00",
           fontFamily: "'SF Mono', 'Menlo', monospace",
@@ -207,7 +231,7 @@ export const HubBrowser = memo(function HubBrowser() {
               HUB — CLONE & OPEN
             </div>
             <div style={{ color: "#555555", fontSize: "10px", marginTop: "2px" }}>
-              Clone any repo and start coding with Claude instantly
+              Browse your GitHub repos or clone any URL
             </div>
           </div>
           <button
@@ -223,15 +247,11 @@ export const HubBrowser = memo(function HubBrowser() {
 
         {/* Custom URL input */}
         <div style={{ padding: "12px 16px", borderBottom: "1px solid #2a2a2a" }}>
-          <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>
-            PASTE ANY GITHUB URL
-          </div>
           <div style={{ display: "flex", gap: "4px" }}>
             <input
               value={customUrl}
               onChange={(e) => setCustomUrl(e.target.value)}
               placeholder="https://github.com/user/repo"
-              autoFocus
               style={{
                 flex: 1,
                 background: "#0a0a0a",
@@ -272,12 +292,38 @@ export const HubBrowser = memo(function HubBrowser() {
           )}
         </div>
 
+        {/* Tabs */}
+        <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a" }}>
+          {(["my-repos", "featured"] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              style={{
+                flex: 1,
+                padding: "8px",
+                background: tab === t ? "#1e1e1e" : "transparent",
+                border: "none",
+                borderBottom: tab === t ? "2px solid #ff8c00" : "2px solid transparent",
+                color: tab === t ? "#ff8c00" : "#555555",
+                fontSize: "11px",
+                fontWeight: "bold",
+                fontFamily: "'SF Mono', monospace",
+                cursor: "pointer",
+                letterSpacing: "1px",
+              }}
+            >
+              {t === "my-repos" ? `MY REPOS${ghRepos.length ? ` (${ghRepos.length})` : ""}` : "FEATURED"}
+            </button>
+          ))}
+        </div>
+
         {/* Search */}
         <div style={{ padding: "8px 16px", borderBottom: "1px solid #2a2a2a" }}>
           <input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            placeholder="Search featured repos..."
+            placeholder={tab === "my-repos" ? "Search your repos..." : "Search featured repos..."}
+            autoFocus
             style={{
               width: "100%",
               background: "transparent",
@@ -291,50 +337,140 @@ export const HubBrowser = memo(function HubBrowser() {
           />
         </div>
 
-        {/* Repos list */}
+        {/* Content */}
         <div style={{ flex: 1, overflow: "auto", padding: "4px 0" }}>
-          {CATEGORY_ORDER.filter((c) => grouped[c]).map((category) => (
-            <div key={category}>
-              <div
-                style={{
-                  padding: "6px 16px 2px",
-                  fontSize: "9px",
-                  color: "#ff8c00",
-                  letterSpacing: "1px",
-                  fontWeight: "bold",
-                  textTransform: "uppercase",
-                }}
-              >
-                {category}
+          {tab === "my-repos" && (
+            <>
+              {/* GitHub Search + Org loader */}
+              <div style={{ padding: "8px 16px", borderBottom: "1px solid #1e1e1e", display: "flex", gap: "4px" }}>
+                <input
+                  value={searchQuery}
+                  onChange={(e) => { setSearchQuery(e.target.value); if (!e.target.value) setSearchResults([]); }}
+                  placeholder="Search GitHub (all repos, orgs)..."
+                  style={{
+                    flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
+                    fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none",
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleSearch(); }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                />
+                <button
+                  onClick={handleSearch}
+                  disabled={!searchQuery.trim() || searching}
+                  style={{
+                    background: searchQuery.trim() ? "#ff8c00" : "#2a2a2a", border: "none",
+                    color: searchQuery.trim() ? "#0a0a0a" : "#555", fontSize: "10px",
+                    fontFamily: "'SF Mono', monospace", padding: "6px 12px", fontWeight: "bold", cursor: "pointer",
+                  }}
+                >
+                  {searching ? "..." : "SEARCH"}
+                </button>
               </div>
-              {grouped[category].map((repo) => {
+              <div style={{ padding: "6px 16px", borderBottom: "1px solid #1e1e1e", display: "flex", gap: "4px", alignItems: "center" }}>
+                <span style={{ color: "#555", fontSize: "9px", whiteSpace: "nowrap" }}>ORG:</span>
+                <input
+                  value={orgName}
+                  onChange={(e) => setOrgName(e.target.value)}
+                  placeholder="organization name"
+                  style={{
+                    flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
+                    fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "4px 8px", outline: "none",
+                  }}
+                  onKeyDown={(e) => { if (e.key === "Enter") loadOrgRepos(orgName); }}
+                />
+                <button
+                  onClick={() => loadOrgRepos(orgName)}
+                  disabled={!orgName.trim() || orgLoading}
+                  style={{
+                    background: orgName.trim() ? "#1e1e1e" : "#1a1a1a", border: "1px solid #2a2a2a",
+                    color: orgName.trim() ? "#4a9eff" : "#555", fontSize: "10px",
+                    fontFamily: "'SF Mono', monospace", padding: "4px 10px", cursor: "pointer",
+                  }}
+                >
+                  {orgLoading ? "..." : "LOAD"}
+                </button>
+              </div>
+              {searchResults.length > 0 && (
+                <div style={{ padding: "4px 16px", color: "#4a9eff", fontSize: "9px", borderBottom: "1px solid #1e1e1e" }}>
+                  {searchResults.length} search results for "{searchQuery}" — <button onClick={() => { setSearchResults([]); setSearchQuery(""); }} style={{ background: "none", border: "none", color: "#ff8c00", fontSize: "9px", cursor: "pointer", fontFamily: "'SF Mono', monospace", padding: 0 }}>CLEAR</button>
+                </div>
+              )}
+              {ghLoading && (
+                <div style={{ padding: "24px 16px", color: "#ffab00", fontSize: "11px", textAlign: "center" }}>
+                  Loading your GitHub repos...
+                </div>
+              )}
+              {ghError && (
+                <div style={{ padding: "24px 16px", color: "#ff3d00", fontSize: "11px", textAlign: "center" }}>
+                  {ghError}
+                  <div style={{ color: "#555555", marginTop: "8px" }}>
+                    Make sure GitHub CLI is installed and authenticated: gh auth login
+                  </div>
+                </div>
+              )}
+              {!ghLoading && !ghError && displayedRepos.length === 0 && (
+                <div style={{ padding: "24px 16px", color: "#555555", fontSize: "11px", textAlign: "center" }}>
+                  {filter || searchQuery ? "No repos match" : "No repos found"}
+                </div>
+              )}
+              {displayedRepos.map((repo) => {
                 const isCloning = cloning === repo.name;
                 const clonedPath = cloned[repo.name];
                 return (
                   <div
-                    key={repo.name}
+                    key={repo.full_name}
                     style={{
                       display: "flex",
                       alignItems: "center",
-                      padding: "8px 16px",
+                      padding: "10px 16px",
                       gap: "12px",
                     }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = "#1e1e1e")}
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                   >
-                    <div style={{ flex: 1 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                         <span style={{ color: "#e0e0e0", fontSize: "12px", fontWeight: "bold" }}>
                           {repo.name}
                         </span>
-                        {repo.stars && (
+                        {repo.is_private && (
+                          <span style={{
+                            color: "#ffab00", fontSize: "8px", border: "1px solid #ffab00",
+                            padding: "0 4px", lineHeight: "14px",
+                          }}>
+                            PRIVATE
+                          </span>
+                        )}
+                        {repo.is_fork && (
+                          <span style={{
+                            color: "#4a9eff", fontSize: "8px", border: "1px solid #4a9eff",
+                            padding: "0 4px", lineHeight: "14px",
+                          }}>
+                            FORK
+                          </span>
+                        )}
+                        {repo.language && (
+                          <span style={{ color: "#888888", fontSize: "9px" }}>
+                            {repo.language}
+                          </span>
+                        )}
+                        {repo.stars > 0 && (
                           <span style={{ color: "#ffab00", fontSize: "9px" }}>
                             {repo.stars}
                           </span>
                         )}
                       </div>
-                      <div style={{ color: "#888888", fontSize: "10px", marginTop: "2px" }}>
-                        {repo.description}
+                      {repo.description && (
+                        <div style={{
+                          color: "#888888", fontSize: "10px", marginTop: "2px",
+                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}>
+                          {repo.description}
+                        </div>
+                      )}
+                      <div style={{ color: "#444444", fontSize: "9px", marginTop: "2px" }}>
+                        {repo.full_name} · {timeAgo(repo.updated_at)}
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
@@ -342,14 +478,9 @@ export const HubBrowser = memo(function HubBrowser() {
                         <button
                           onClick={() => handleOpenInGridCode(clonedPath)}
                           style={{
-                            background: "#00c853",
-                            border: "none",
-                            color: "#0a0a0a",
-                            fontSize: "10px",
-                            fontFamily: "'SF Mono', monospace",
-                            cursor: "pointer",
-                            padding: "4px 10px",
-                            fontWeight: "bold",
+                            background: "#00c853", border: "none", color: "#0a0a0a",
+                            fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                            cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
                           }}
                         >
                           OPEN
@@ -387,8 +518,88 @@ export const HubBrowser = memo(function HubBrowser() {
                   </div>
                 );
               })}
-            </div>
-          ))}
+            </>
+          )}
+
+          {tab === "featured" && (
+            <>
+              {filteredFeatured.map((repo) => {
+                const isCloning = cloning === repo.name;
+                const clonedPath = cloned[repo.name];
+                return (
+                  <div
+                    key={repo.name}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      padding: "10px 16px",
+                      gap: "12px",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#1e1e1e")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ color: "#e0e0e0", fontSize: "12px", fontWeight: "bold" }}>
+                          {repo.name}
+                        </span>
+                        {repo.stars && (
+                          <span style={{ color: "#ffab00", fontSize: "9px" }}>
+                            {repo.stars}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ color: "#888888", fontSize: "10px", marginTop: "2px" }}>
+                        {repo.description}
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
+                      {clonedPath ? (
+                        <button
+                          onClick={() => handleOpenInGridCode(clonedPath)}
+                          style={{
+                            background: "#00c853", border: "none", color: "#0a0a0a",
+                            fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                            cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
+                          }}
+                        >
+                          OPEN
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleClone(repo.url, repo.name)}
+                          disabled={isCloning}
+                          style={{
+                            background: isCloning ? "#2a2a2a" : "#1e1e1e",
+                            border: "1px solid #2a2a2a",
+                            color: isCloning ? "#ffab00" : "#888888",
+                            fontSize: "10px",
+                            fontFamily: "'SF Mono', monospace",
+                            cursor: isCloning ? "default" : "pointer",
+                            padding: "4px 10px",
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!isCloning) {
+                              e.currentTarget.style.borderColor = "#ff8c00";
+                              e.currentTarget.style.color = "#ff8c00";
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!isCloning) {
+                              e.currentTarget.style.borderColor = "#2a2a2a";
+                              e.currentTarget.style.color = "#888888";
+                            }
+                          }}
+                        >
+                          {isCloning ? "CLONING..." : "CLONE"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
         </div>
       </div>
     </div>

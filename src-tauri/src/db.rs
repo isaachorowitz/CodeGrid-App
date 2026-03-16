@@ -149,6 +149,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn load_sessions(&self, workspace_id: &str) -> Result<Vec<Session>, String> {
         let conn = self.conn()?;
         let mut stmt = conn

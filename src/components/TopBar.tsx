@@ -1,14 +1,40 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useState, useMemo } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { useAppStore } from "../stores/appStore";
 import { ModelSwitcher } from "./ModelSwitcher";
 import { QuickActions } from "./QuickActions";
+import { RunButton } from "./RunButton";
 import { createWorkspace, createWorkspaceWithRepo, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
 import { useToastStore } from "../stores/toastStore";
 
-export const TopBar = memo(function TopBar() {
+const MODEL_COLORS: Record<string, string> = {
+  "claude-opus-4-6": "#d500f9",
+  "claude-sonnet-4-6": "#ff8c00",
+  "claude-haiku-4-5": "#00e5ff",
+};
+
+const MODEL_SHORT: Record<string, string> = {
+  "claude-opus-4-6": "OPU",
+  "claude-sonnet-4-6": "SON",
+  "claude-haiku-4-5": "HAI",
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  idle: "#4a9eff",
+  running: "#00c853",
+  waiting: "#ffab00",
+  error: "#ff3d00",
+  dead: "#555555",
+};
+
+interface TopBarProps {
+  onFocusSession: (sessionId: string) => void;
+  onCloseSession: (sessionId: string) => void;
+}
+
+export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: TopBarProps) {
   const {
     workspaces,
     activeWorkspaceId,
@@ -20,6 +46,7 @@ export const TopBar = memo(function TopBar() {
     sidebarOpen,
   } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
+  const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const toggleBroadcast = useSessionStore((s) => s.toggleBroadcast);
   const applyPreset = useLayoutStore((s) => s.applyPreset);
@@ -27,8 +54,15 @@ export const TopBar = memo(function TopBar() {
   const addToast = useToastStore((s) => s.addToast);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
+  const [hoveredTab, setHoveredTab] = useState<string | null>(null);
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
+
+  // Sessions for the active workspace
+  const activeSessions = useMemo(
+    () => sessions.filter((s) => s.workspace_id === activeWorkspaceId),
+    [sessions, activeWorkspaceId],
+  );
 
   const handleNewWorkspace = useCallback(async () => {
     const name = `Workspace ${workspaces.length + 1}`;
@@ -40,17 +74,30 @@ export const TopBar = memo(function TopBar() {
     }
   }, [workspaces.length, addWorkspace]);
 
+  const setLayouts = useLayoutStore((s) => s.setLayouts);
+
   const handleSwitchWorkspace = useCallback(async (wsId: string) => {
+    // Save current layout to the current workspace before switching
+    // (layout auto-persist in App.tsx will handle this, but switch is immediate)
     setActiveWorkspace(wsId);
+
+    // Restore layout for the target workspace
+    const targetWs = workspaces.find((w) => w.id === wsId);
+    if (targetWs?.layout_json) {
+      try { setLayouts(JSON.parse(targetWs.layout_json)); } catch { setLayouts([]); }
+    } else {
+      setLayouts([]);
+    }
+
     try { await setActiveWorkspaceIpc(wsId); } catch {}
-  }, [setActiveWorkspace]);
+  }, [setActiveWorkspace, workspaces, setLayouts]);
 
   const handlePreset = useCallback(
     (preset: PresetLayout) => {
-      const ids = sessions.map((s) => s.id);
+      const ids = activeSessions.map((s) => s.id);
       applyPreset(preset, ids);
     },
-    [sessions, applyPreset],
+    [activeSessions, applyPreset],
   );
 
   const handleRenameEnd = useCallback(
@@ -110,7 +157,7 @@ export const TopBar = memo(function TopBar() {
           onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
           onMouseLeave={(e) => (e.currentTarget.style.color = sidebarOpen ? "#ff8c00" : "#555555")}
         >
-          {sidebarOpen ? "«" : "»"}
+          {sidebarOpen ? "\u00AB" : "\u00BB"}
         </button>
 
         {/* Logo */}
@@ -215,7 +262,7 @@ export const TopBar = memo(function TopBar() {
         {/* Broadcast */}
         <button
           onClick={toggleBroadcast}
-          title="Broadcast Mode — type once, send to all panes (Cmd+B)"
+          title="Broadcast: type in one terminal, send to all terminals simultaneously (Cmd+B)"
           style={{
             background: broadcastMode ? "rgba(255, 140, 0, 0.2)" : "#1e1e1e",
             border: `1px solid ${broadcastMode ? "#ff8c00" : "#2a2a2a"}`,
@@ -256,22 +303,159 @@ export const TopBar = memo(function TopBar() {
         </button>
       </div>
 
-      {/* Secondary bar: model switcher + quick actions */}
-      <div
-        style={{
-          height: "26px",
-          display: "flex",
-          alignItems: "center",
-          padding: "0 8px",
-          gap: "12px",
-          borderTop: "1px solid #1e1e1e",
-          background: "#0f0f0f",
-        }}
-      >
-        <ModelSwitcher />
-        <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
-        <QuickActions />
-      </div>
+      {/* Session tab bar */}
+      {activeSessions.length > 0 && (
+        <div
+          style={{
+            height: "26px",
+            display: "flex",
+            alignItems: "center",
+            padding: "0 8px",
+            gap: "1px",
+            borderTop: "1px solid #1e1e1e",
+            background: "#0f0f0f",
+            overflow: "hidden",
+          }}
+        >
+          {activeSessions.map((session) => {
+            const isFocused = session.id === focusedSessionId;
+            const isHovered = session.id === hoveredTab;
+            const isClaude = session.command?.includes("claude");
+            const modelColor = MODEL_COLORS[session.model ?? ""] ?? "#888888";
+            const modelLabel = MODEL_SHORT[session.model ?? ""] ?? "";
+            const statusColor = STATUS_COLORS[session.status] ?? "#555555";
+
+            // Derive display name from working dir
+            const wd = session.working_dir;
+            const wtMatch = wd.match(/\/([^/]+)\/.worktrees\//);
+            const displayName = wtMatch ? wtMatch[1] : (wd.split("/").pop() || wd);
+
+            return (
+              <div
+                key={session.id}
+                onClick={() => onFocusSession(session.id)}
+                onMouseEnter={() => setHoveredTab(session.id)}
+                onMouseLeave={() => setHoveredTab(null)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  padding: "2px 8px",
+                  cursor: "pointer",
+                  background: isFocused ? "#1e1e1e" : isHovered ? "#1a1a1a" : "transparent",
+                  borderBottom: isFocused ? "2px solid #ff8c00" : "2px solid transparent",
+                  borderTop: "2px solid transparent",
+                  fontFamily: "'SF Mono', 'Menlo', monospace",
+                  fontSize: "10px",
+                  whiteSpace: "nowrap",
+                  maxWidth: "180px",
+                  position: "relative",
+                }}
+              >
+                {/* Status dot */}
+                <div style={{
+                  width: "5px", height: "5px", borderRadius: "50%",
+                  background: statusColor, flexShrink: 0,
+                }} />
+
+                {/* Pane number */}
+                <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "9px" }}>
+                  [{session.pane_number}]
+                </span>
+
+                {/* Display name */}
+                <span style={{
+                  color: isFocused ? "#e0e0e0" : "#888888",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  fontSize: "10px",
+                }}>
+                  {displayName}
+                </span>
+
+                {/* Model badge for Claude sessions */}
+                {isClaude && modelLabel && (
+                  <span style={{
+                    color: modelColor, fontSize: "8px", fontWeight: "bold",
+                    padding: "0 3px", lineHeight: "12px",
+                    border: `1px solid ${modelColor}44`,
+                    background: `${modelColor}11`,
+                    flexShrink: 0,
+                  }}>
+                    {modelLabel}
+                  </span>
+                )}
+
+                {/* Close button */}
+                <button
+                  onClick={(e) => { e.stopPropagation(); onCloseSession(session.id); }}
+                  aria-label={`Close session ${session.pane_number}`}
+                  style={{
+                    background: "none", border: "none",
+                    color: "#333333", cursor: "pointer",
+                    fontSize: "10px", padding: "0 1px",
+                    fontFamily: "'SF Mono', monospace",
+                    lineHeight: 1,
+                    visibility: isHovered || isFocused ? "visible" : "hidden",
+                    flexShrink: 0,
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.color = "#ff3d00")}
+                  onMouseLeave={(e) => (e.currentTarget.style.color = "#333333")}
+                >
+                  x
+                </button>
+              </div>
+            );
+          })}
+
+          {/* Add session button at end of tabs */}
+          <button
+            onClick={() => setNewSessionDialogOpen(true)}
+            title="New Session (Cmd+N)"
+            style={{
+              background: "none", border: "none", color: "#333333",
+              fontSize: "12px", fontFamily: "'SF Mono', monospace",
+              cursor: "pointer", padding: "2px 6px", flexShrink: 0,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#ff8c00")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "#333333")}
+          >
+            +
+          </button>
+
+          {/* Spacer */}
+          <div style={{ flex: 1 }} />
+
+          {/* Secondary controls: model switcher + quick actions */}
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+            <ModelSwitcher />
+            <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
+            <QuickActions />
+            <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
+            <RunButton />
+          </div>
+        </div>
+      )}
+
+      {/* If no sessions, still show secondary bar */}
+      {activeSessions.length === 0 && (
+        <div
+          style={{
+            height: "26px",
+            display: "flex",
+            alignItems: "center",
+            padding: "0 8px",
+            gap: "12px",
+            borderTop: "1px solid #1e1e1e",
+            background: "#0f0f0f",
+          }}
+        >
+          <ModelSwitcher />
+          <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
+          <QuickActions />
+          <div style={{ width: "1px", height: "14px", background: "#2a2a2a" }} />
+          <RunButton />
+        </div>
+      )}
     </div>
   );
 });

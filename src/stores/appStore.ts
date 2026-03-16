@@ -11,6 +11,11 @@ interface AppState {
   gitManagerOpen: boolean;
   mcpManagerOpen: boolean;
   claudeMdEditorOpen: boolean;
+  gitSetupWizardOpen: boolean;
+  codeViewerOpen: boolean;
+  codeViewerFile: string | null;
+  codeViewerDiffMode: boolean;
+  codeViewerWorkingDir: string | null;
   gitManagerDir: string | null;
   mcpManagerDir: string | null;
   claudeMdDir: string | null;
@@ -24,6 +29,8 @@ interface AppState {
   setGitManagerOpen: (open: boolean, dir?: string) => void;
   setMcpManagerOpen: (open: boolean, dir?: string) => void;
   setClaudeMdEditorOpen: (open: boolean, dir?: string) => void;
+  setGitSetupWizardOpen: (open: boolean) => void;
+  setCodeViewerOpen: (open: boolean, filePath?: string, opts?: { diffMode?: boolean; workingDir?: string }) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -36,6 +43,11 @@ export const useAppStore = create<AppState>((set) => ({
   gitManagerOpen: false,
   mcpManagerOpen: false,
   claudeMdEditorOpen: false,
+  gitSetupWizardOpen: false,
+  codeViewerOpen: false,
+  codeViewerFile: null,
+  codeViewerDiffMode: false,
+  codeViewerWorkingDir: null,
   gitManagerDir: null,
   mcpManagerDir: null,
   claudeMdDir: null,
@@ -49,4 +61,11 @@ export const useAppStore = create<AppState>((set) => ({
   setGitManagerOpen: (open, dir) => set({ gitManagerOpen: open, gitManagerDir: dir ?? null }),
   setMcpManagerOpen: (open, dir) => set({ mcpManagerOpen: open, mcpManagerDir: dir ?? null }),
   setClaudeMdEditorOpen: (open, dir) => set({ claudeMdEditorOpen: open, claudeMdDir: dir ?? null }),
+  setGitSetupWizardOpen: (open) => set({ gitSetupWizardOpen: open }),
+  setCodeViewerOpen: (open, filePath, opts) => set({
+    codeViewerOpen: open,
+    codeViewerFile: filePath ?? null,
+    codeViewerDiffMode: opts?.diffMode ?? false,
+    codeViewerWorkingDir: opts?.workingDir ?? null,
+  }),
 }));

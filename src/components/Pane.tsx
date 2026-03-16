@@ -86,7 +86,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
             {isClaude ? "claude" : "shell"}
           </span>
           {/* Per-pane model switcher for Claude sessions */}
-          {isClaude && isFocused && (
+          {isClaude && (
             <div onClick={(e) => e.stopPropagation()} style={{ cursor: "default" }}>
               <ModelSwitcher sessionId={session.id} compact />
             </div>

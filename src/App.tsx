@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Grid } from "./components/Grid";
 import { TopBar } from "./components/TopBar";
 import { Sidebar } from "./components/Sidebar";
@@ -10,6 +10,8 @@ import { HubBrowser } from "./components/HubBrowser";
 import { GitManager } from "./components/GitManager";
 import { McpManager } from "./components/McpManager";
 import { ClaudeMdEditor } from "./components/ClaudeMdEditor";
+import { GitSetupWizard } from "./components/GitSetupWizard";
+import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
 import { useSessionStore } from "./stores/sessionStore";
 import { useLayoutStore } from "./stores/layoutStore";
@@ -29,11 +31,12 @@ import {
   detectClaudeSkills,
   getAvailableModels,
   setActiveWorkspace as setActiveWorkspaceIpc,
+  checkGitSetup,
 } from "./lib/ipc";
 
 export default function App() {
   const {
-    sessions,
+    sessions: allSessions,
     addSession,
     removeSession,
     setFocusedSession,
@@ -45,14 +48,21 @@ export default function App() {
     setWorkspaces,
     addWorkspace,
     setActiveWorkspace,
+    updateWorkspace,
     sidebarOpen,
     setNewSessionDialogOpen,
   } = useWorkspaceStore();
-  const { setSkills, setModels, setRecentDirs, defaultModel } = useAppStore();
+  const { setSkills, setModels, setRecentDirs, defaultModel, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
+
+  // Filter sessions to only those belonging to the active workspace
+  const sessions = useMemo(
+    () => allSessions.filter((s) => s.workspace_id === activeWorkspaceId),
+    [allSessions, activeWorkspaceId],
+  );
 
   useKeyboardNav();
 
@@ -90,6 +100,14 @@ export default function App() {
 
       // Load recent dirs
       try { const dirs = await listRecentDirs(); setRecentDirs(dirs); } catch {}
+
+      // Auto-open Git Setup Wizard on first launch if git is not configured
+      try {
+        const gitStatus = await checkGitSetup();
+        if (!gitStatus.git_installed || !gitStatus.git_user_name || !gitStatus.git_user_email || !gitStatus.gh_authenticated) {
+          setGitSetupWizardOpen(true);
+        }
+      } catch {}
     };
     init();
   }, []);
@@ -107,16 +125,19 @@ export default function App() {
     return () => observer.disconnect();
   }, []);
 
-  // Persist layout
+  // Persist layout (including empty layouts so closing all sessions clears saved state)
   useEffect(() => {
-    if (!activeWorkspaceId || layouts.length === 0) return;
+    if (!activeWorkspaceId) return;
+    const layoutJson = JSON.stringify(layouts);
+    // Keep workspace store in sync so workspace switching can read current layout
+    updateWorkspace(activeWorkspaceId, { layout_json: layoutJson });
     const timer = setTimeout(() => {
-      saveLayoutIpc(activeWorkspaceId, JSON.stringify(layouts)).catch(() => {});
+      saveLayoutIpc(activeWorkspaceId, layoutJson).catch(() => {});
     }, 1000);
     return () => clearTimeout(timer);
-  }, [layouts, activeWorkspaceId]);
+  }, [layouts, activeWorkspaceId, updateWorkspace]);
 
-  // Broadcast input routing
+  // Broadcast input routing (only to sessions in the active workspace)
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
@@ -127,16 +148,6 @@ export default function App() {
     window.addEventListener("gridcode:broadcast-input", handler);
     return () => window.removeEventListener("gridcode:broadcast-input", handler);
   }, [sessions]);
-
-  // Close session events
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      handleCloseSession(detail.sessionId);
-    };
-    window.addEventListener("gridcode:close-session", handler);
-    return () => window.removeEventListener("gridcode:close-session", handler);
-  }, []);
 
   // New workspace events
   useEffect(() => {
@@ -208,6 +219,16 @@ export default function App() {
     [removeSession, removePaneLayout],
   );
 
+  // Close session events (must be after handleCloseSession declaration)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      handleCloseSession(detail.sessionId);
+    };
+    window.addEventListener("gridcode:close-session", handler);
+    return () => window.removeEventListener("gridcode:close-session", handler);
+  }, [handleCloseSession]);
+
   const handleFocusSession = useCallback(
     (sessionId: string) => {
       setFocusedSession(sessionId);
@@ -221,9 +242,9 @@ export default function App() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw", background: "#0a0a0a", overflow: "hidden" }}>
-      <TopBar />
+      <TopBar onFocusSession={handleFocusSession} onCloseSession={handleCloseSession} />
       <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
-        <Sidebar onFocusSession={handleFocusSession} onCloseSession={handleCloseSession} />
+        <Sidebar />
         <div ref={containerRef} style={{ flex: 1, overflow: "hidden", position: "relative" }}>
           {sessions.length === 0 ? (
             <EmptyState onNewSession={() => setNewSessionDialogOpen(true)} />
@@ -242,6 +263,8 @@ export default function App() {
       <GitManager />
       <McpManager />
       <ClaudeMdEditor />
+      <GitSetupWizard />
+      <CodeViewer />
       <ToastContainer />
     </div>
   );

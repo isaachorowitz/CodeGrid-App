@@ -57,7 +57,7 @@ export function useTerminal(
     const terminal = new Terminal({
       theme: BLOOMBERG_DARK.terminal,
       fontSize: options.fontSize ?? 13,
-      fontFamily: options.fontFamily ?? "'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
+      fontFamily: options.fontFamily ?? "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
       cursorBlink: true,
       cursorStyle: "block",
       scrollback: 10000,

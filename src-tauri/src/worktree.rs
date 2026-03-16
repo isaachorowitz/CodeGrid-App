@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::process::Command;
 
 pub struct WorktreeManager;
@@ -108,16 +107,22 @@ impl WorktreeManager {
         let root = Self::git_root(repo_dir)
             .ok_or_else(|| "Not a git repository".to_string())?;
 
-        Command::new("git")
+        let output = Command::new("git")
             .args(["worktree", "remove", worktree_path, "--force"])
             .current_dir(&root)
             .output()
             .map_err(|e| format!("Failed to remove worktree: {}", e))?;
 
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Failed to remove worktree: {}", stderr.trim()));
+        }
+
         Ok(())
     }
 
     /// List active worktrees
+    #[allow(dead_code)]
     pub fn list_worktrees(repo_dir: &str) -> Vec<String> {
         Command::new("git")
             .args(["worktree", "list", "--porcelain"])

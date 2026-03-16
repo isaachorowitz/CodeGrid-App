@@ -3,6 +3,7 @@ import GridLayout from "react-grid-layout";
 import { Pane } from "./Pane";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore } from "../stores/layoutStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { Layout } from "react-grid-layout";
 
 import "react-grid-layout/css/styles.css";
@@ -14,7 +15,12 @@ interface GridProps {
 }
 
 export const Grid = memo(function Grid({ width, height, onCloseSession }: GridProps) {
-  const sessions = useSessionStore((s) => s.sessions);
+  const allSessions = useSessionStore((s) => s.sessions);
+  const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
+  const sessions = useMemo(
+    () => allSessions.filter((s) => s.workspace_id === activeWorkspaceId),
+    [allSessions, activeWorkspaceId],
+  );
   const layouts = useLayoutStore((s) => s.layouts);
   const maximizedPane = useLayoutStore((s) => s.maximizedPane);
   const setLayouts = useLayoutStore((s) => s.setLayouts);

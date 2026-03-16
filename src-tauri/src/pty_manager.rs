@@ -175,6 +175,7 @@ impl PtyManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_alive(&self, session_id: &str) -> bool {
         let Ok(mut instances) = lock_instances(&self.instances) else {
             return false;
@@ -190,7 +191,19 @@ impl PtyManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn session_count(&self) -> usize {
         lock_instances(&self.instances).map(|i| i.len()).unwrap_or(0)
+    }
+
+    /// Kill all PTY sessions. Called on app exit to prevent zombie processes.
+    pub fn kill_all(&self) {
+        if let Ok(mut instances) = self.instances.lock() {
+            for (sid, mut instance) in instances.drain() {
+                eprintln!("[GridCode] Killing PTY session {} on shutdown", sid);
+                let _ = instance.child.kill();
+                let _ = instance.child.wait();
+            }
+        }
     }
 }

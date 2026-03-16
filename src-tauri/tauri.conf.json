@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
@@ -44,7 +44,7 @@
       "frameworks": [],
       "exceptionDomain": "",
       "signingIdentity": null,
-      "entitlements": null
+      "entitlements": "Entitlements.plist"
     },
     "category": "DeveloperTool",
     "shortDescription": "Bloomberg Terminal for Claude Code — multi-session AI terminal multiplexer",
@@ -53,9 +53,6 @@
   },
   "plugins": {
     "shell": {
-      "open": true
-    },
-    "dialog": {
       "open": true
     }
   }

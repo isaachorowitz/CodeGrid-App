@@ -31,7 +31,7 @@ html, body, #root {
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--text-primary);
-  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Courier New', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace;
 }
 
 /* Remove all rounded corners — Bloomberg style */
@@ -145,7 +145,7 @@ input[type="checkbox"] {
 
 /* Dense UI: reduce all padding */
 button {
-  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace;
   border-radius: 0 !important;
 }
 

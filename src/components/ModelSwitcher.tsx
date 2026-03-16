@@ -1,6 +1,7 @@
 import { memo, useCallback } from "react";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
+import { useToastStore } from "../stores/toastStore";
 import { sendToSession } from "../lib/ipc";
 
 const MODEL_COLORS: Record<string, string> = {
@@ -29,6 +30,7 @@ export const ModelSwitcher = memo(function ModelSwitcher({
   const setDefaultModel = useAppStore((s) => s.setDefaultModel);
   const sessions = useSessionStore((s) => s.sessions);
   const setSessionModel = useSessionStore((s) => s.setSessionModel);
+  const addToast = useToastStore((s) => s.addToast);
 
   const currentModel = sessionId
     ? sessions.find((s) => s.id === sessionId)?.model ?? defaultModel
@@ -36,6 +38,7 @@ export const ModelSwitcher = memo(function ModelSwitcher({
 
   const handleSwitch = useCallback(
     async (modelId: string) => {
+      const modelName = MODEL_SHORT[modelId] ?? modelId;
       if (sessionId) {
         setSessionModel(sessionId, modelId);
         // Send /model command to the active Claude session
@@ -44,11 +47,13 @@ export const ModelSwitcher = memo(function ModelSwitcher({
         } catch {
           // Session may not be a Claude session
         }
+        addToast(`Switched to ${modelName}`, "success", 2000);
       } else {
         setDefaultModel(modelId);
+        addToast(`Default model set to ${modelName}`, "success", 2000);
       }
     },
-    [sessionId, setSessionModel, setDefaultModel],
+    [sessionId, setSessionModel, setDefaultModel, addToast],
   );
 
   if (models.length === 0) {

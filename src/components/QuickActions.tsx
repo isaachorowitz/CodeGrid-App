@@ -80,10 +80,11 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
       <span
         style={{
           fontSize: "9px",
-          color: "#555555",
+          color: "#e0e0e0",
           fontFamily: "'SF Mono', monospace",
           marginRight: "2px",
           letterSpacing: "0.5px",
+          fontWeight: "bold",
         }}
       >
         QUICK
@@ -96,9 +97,10 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
           disabled={!targetId}
           style={{
             background: "#1e1e1e",
-            border: "1px solid #2a2a2a",
+            border: `1px solid ${targetId ? "#444444" : "#2a2a2a"}`,
             color: targetId ? action.color : "#333333",
             fontSize: "9px",
+            fontWeight: "bold",
             fontFamily: "'SF Mono', monospace",
             cursor: targetId ? "pointer" : "default",
             padding: "2px 6px",

@@ -53,6 +53,10 @@ export async function writeToPty(
   });
 }
 
+export async function connectPty(sessionId: string): Promise<void> {
+  return invoke("connect_pty", { sessionId });
+}
+
 export async function resizePty(
   sessionId: string,
   cols: number,
@@ -145,6 +149,10 @@ export async function gitDiffStat(workingDir: string): Promise<string> {
   return invoke("git_diff_stat", { workingDir });
 }
 
+export async function gitDiffFile(workingDir: string, filePath: string, staged: boolean): Promise<string> {
+  return invoke("git_diff_file", { workingDir, filePath, staged });
+}
+
 // Utility commands
 export async function getGitBranch(
   workingDir: string,
@@ -193,6 +201,33 @@ export interface ModelInfo {
   description: string;
   speed: string;
   tier: string;
+}
+
+export interface GitHubRepo {
+  name: string;
+  full_name: string;
+  description: string;
+  url: string;
+  clone_url: string;
+  stars: number;
+  language: string;
+  updated_at: string;
+  is_private: boolean;
+  is_fork: boolean;
+}
+
+export async function listGithubRepos(
+  owner?: string,
+  limit?: number,
+): Promise<GitHubRepo[]> {
+  return invoke("list_github_repos", { owner: owner ?? null, limit: limit ?? null });
+}
+
+export async function searchGithubRepos(
+  query: string,
+  limit?: number,
+): Promise<GitHubRepo[]> {
+  return invoke("search_github_repos", { query, limit: limit ?? null });
 }
 
 export async function cloneRepo(
@@ -316,6 +351,8 @@ export interface McpServerConfig {
   enabled: boolean;
   scope: string;
   source_file: string;
+  type: string; // "stdio" or "http"
+  url: string | null;
 }
 
 export interface McpServerEntry {
@@ -342,10 +379,87 @@ export async function removeMcpServer(configPath: string, serverName: string): P
 }
 
 export async function addMcpServer(
-  configPath: string, name: string, command: string,
+  configPath: string, name: string, command: string | null,
   args: string[], env: Record<string, string>,
+  url?: string | null, serverType?: string | null,
+  headers?: Record<string, string> | null,
 ): Promise<void> {
-  return invoke("add_mcp_server", { configPath, name, command, args, env });
+  return invoke("add_mcp_server", {
+    configPath, name, command, args, env,
+    url: url ?? null, serverType: serverType ?? null,
+    headers: headers ?? null,
+  });
+}
+
+// === File Tree Commands ===
+
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  children?: FileEntry[];
+  is_gitignored: boolean;
+}
+
+export async function listDirectory(path: string, maxDepth?: number): Promise<FileEntry[]> {
+  return invoke("list_directory", { path, maxDepth: maxDepth ?? null });
+}
+
+// === Git Setup Wizard Commands ===
+
+export interface GitSetupStatus {
+  git_installed: boolean;
+  git_user_name: string | null;
+  git_user_email: string | null;
+  gh_installed: boolean;
+  gh_authenticated: boolean;
+  gh_username: string | null;
+  ssh_key_exists: boolean;
+}
+
+export async function checkGitSetup(): Promise<GitSetupStatus> {
+  return invoke("check_git_setup");
+}
+
+export async function setGitConfig(name: string, email: string): Promise<void> {
+  return invoke("set_git_config", { name, email });
+}
+
+export async function runGhAuthLogin(): Promise<string> {
+  return invoke("run_gh_auth_login");
+}
+
+export async function getGhInstallInstructions(): Promise<string> {
+  return invoke("get_gh_install_instructions");
+}
+
+// === Code Viewer Commands ===
+
+export async function readFileContents(filePath: string): Promise<string> {
+  return invoke("read_file_contents", { filePath });
+}
+
+// === Repo Quick Status ===
+
+export interface RepoQuickStatus {
+  is_git: boolean;
+  has_remote: boolean;
+  branch: string | null;
+}
+
+export async function checkRepoStatus(path: string): Promise<RepoQuickStatus> {
+  return invoke("check_repo_status", { path });
+}
+
+// === GitHub Identity ===
+
+export interface GitHubIdentity {
+  username: string;
+  orgs: string[];
+}
+
+export async function getGithubIdentity(): Promise<GitHubIdentity> {
+  return invoke("get_github_identity");
 }
 
 // Event listeners

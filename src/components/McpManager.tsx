@@ -24,6 +24,99 @@ const MCP_PRESETS: McpPreset[] = [
   { name: "sequential-thinking", command: "npx", args: ["-y", "@modelcontextprotocol/server-sequential-thinking"], description: "Step-by-step reasoning" },
 ];
 
+interface ParsedServer {
+  name: string;
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url?: string | null;
+  serverType?: string | null;
+  headers?: Record<string, string> | null;
+}
+
+function parseMcpJson(raw: string): { servers: ParsedServer[]; error: string | null } {
+  const trimmed = raw.trim();
+  if (!trimmed) return { servers: [], error: null };
+
+  // Try to fix Format C: "server-name": { ... } by wrapping in braces
+  let jsonStr = trimmed;
+  if (/^"[^"]+"\s*:/.test(trimmed) && !trimmed.startsWith("{")) {
+    jsonStr = `{${trimmed}}`;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    return { servers: [], error: "Invalid JSON. Paste a valid MCP server configuration." };
+  }
+
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { servers: [], error: "Expected a JSON object." };
+  }
+
+  const obj = parsed as Record<string, unknown>;
+
+  // Format A: { "mcpServers": { "name": { command, args, env } } }
+  if ("mcpServers" in obj && typeof obj.mcpServers === "object" && obj.mcpServers !== null) {
+    const serversObj = obj.mcpServers as Record<string, unknown>;
+    return extractServers(serversObj);
+  }
+
+  // Format B: { "command": "...", "args": [...], "env": {...} } or { "url": "...", "type": "http" }
+  if (("command" in obj && typeof obj.command === "string") || ("url" in obj && typeof obj.url === "string")) {
+    const srv = extractSingleServer("server", obj);
+    if (srv) return { servers: [srv], error: null };
+    return { servers: [], error: "Invalid server config: needs 'command' or 'url' field." };
+  }
+
+  // Format C (after wrapping) or multiple servers: { "name": { command, args, env }, ... }
+  return extractServers(obj);
+}
+
+function extractServers(obj: Record<string, unknown>): { servers: ParsedServer[]; error: string | null } {
+  const servers: ParsedServer[] = [];
+  for (const [name, val] of Object.entries(obj)) {
+    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+      const srv = extractSingleServer(name, val as Record<string, unknown>);
+      if (srv) servers.push(srv);
+    }
+  }
+  if (servers.length === 0) {
+    return { servers: [], error: "No valid MCP server entries found. Each entry needs a 'command' or 'url' field." };
+  }
+  return { servers, error: null };
+}
+
+function extractSingleServer(name: string, obj: Record<string, unknown>): ParsedServer | null {
+  const hasCommand = typeof obj.command === "string";
+  const hasUrl = typeof obj.url === "string";
+  // Must have either command (stdio) or url (http)
+  if (!hasCommand && !hasUrl) return null;
+  const args: string[] = Array.isArray(obj.args) ? obj.args.filter((a): a is string => typeof a === "string") : [];
+  const env: Record<string, string> = {};
+  if (typeof obj.env === "object" && obj.env !== null && !Array.isArray(obj.env)) {
+    for (const [k, v] of Object.entries(obj.env as Record<string, unknown>)) {
+      if (typeof v === "string") env[k] = v;
+    }
+  }
+  const headers: Record<string, string> = {};
+  if (typeof obj.headers === "object" && obj.headers !== null && !Array.isArray(obj.headers)) {
+    for (const [k, v] of Object.entries(obj.headers as Record<string, unknown>)) {
+      if (typeof v === "string") headers[k] = v;
+    }
+  }
+  return {
+    name,
+    command: hasCommand ? (obj.command as string) : null,
+    args,
+    env,
+    url: hasUrl ? (obj.url as string) : null,
+    serverType: typeof obj.type === "string" ? obj.type : null,
+    headers: Object.keys(headers).length > 0 ? headers : null,
+  };
+}
+
 export const McpManager = memo(function McpManager() {
   const { mcpManagerOpen, setMcpManagerOpen, mcpManagerDir } = useAppStore();
   const [servers, setServers] = useState<McpServerConfig[]>([]);
@@ -31,6 +124,10 @@ export const McpManager = memo(function McpManager() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addTab, setAddTab] = useState<"paste" | "manual">("paste");
+  const [pasteJson, setPasteJson] = useState("");
+  const [parsedServers, setParsedServers] = useState<ParsedServer[]>([]);
+  const [parseError, setParseError] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newCommand, setNewCommand] = useState("");
   const [newArgs, setNewArgs] = useState("");
@@ -96,6 +193,39 @@ export const McpManager = memo(function McpManager() {
       await refresh();
     } catch (e) { setError(String(e)); }
   }, [newName, newCommand, newArgs, newScope, dir, refresh]);
+
+  const handlePasteChange = useCallback((value: string) => {
+    setPasteJson(value);
+    if (!value.trim()) {
+      setParsedServers([]);
+      setParseError(null);
+      return;
+    }
+    const { servers, error } = parseMcpJson(value);
+    setParsedServers(servers);
+    setParseError(error);
+  }, []);
+
+  const handleAddParsed = useCallback(async (scope: "global" | "project") => {
+    if (parsedServers.length === 0) return;
+    let homePath = "~";
+    try { homePath = await getHomeDir(); } catch {}
+    const configPath = scope === "project" && dir
+      ? `${dir}/.claude/mcp.json`
+      : `${homePath}/.claude/mcp.json`;
+    try {
+      for (const srv of parsedServers) {
+        await addMcpServer(configPath, srv.name, srv.command, srv.args, srv.env, srv.url, srv.serverType, srv.headers);
+      }
+      const names = parsedServers.map((s) => s.name).join(", ");
+      flash(`Added ${names} (${scope})`);
+      setPasteJson("");
+      setParsedServers([]);
+      setParseError(null);
+      setAdding(false);
+      await refresh();
+    } catch (e) { setError(String(e)); }
+  }, [parsedServers, dir, refresh]);
 
   if (!mcpManagerOpen) return null;
 
@@ -166,38 +296,116 @@ export const McpManager = memo(function McpManager() {
         {error && <div style={{ padding: "6px 16px", background: "#ff3d0022", color: "#ff3d00", fontSize: "10px" }}>{error}</div>}
         {success && <div style={{ padding: "6px 16px", background: "#00c85322", color: "#00c853", fontSize: "10px" }}>{success}</div>}
 
-        {/* Add form */}
+        {/* Add form - tabbed: Paste JSON / Manual */}
         {adding && (
-          <div style={{ padding: "10px 16px", borderBottom: "1px solid #2a2a2a", display: "flex", flexDirection: "column", gap: "6px" }}>
-            <div style={{ display: "flex", gap: "4px" }}>
-              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Server name"
-                style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
-                onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-              />
-              <select value={newScope} onChange={(e) => setNewScope(e.target.value as "global" | "project")}
-                style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "4px 8px" }}>
-                <option value="global">Global</option>
-                {dir && <option value="project">Project</option>}
-              </select>
+          <div style={{ borderBottom: "1px solid #2a2a2a" }}>
+            {/* Tab switcher */}
+            <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a" }}>
+              <button onClick={() => setAddTab("paste")} style={{
+                flex: 1, padding: "6px", background: addTab === "paste" ? "#1e1e1e" : "transparent",
+                border: "none", borderBottom: addTab === "paste" ? "2px solid #d500f9" : "2px solid transparent",
+                color: addTab === "paste" ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                cursor: "pointer", letterSpacing: "0.5px", fontWeight: "bold",
+              }}>PASTE FROM DOCS</button>
+              <button onClick={() => setAddTab("manual")} style={{
+                flex: 1, padding: "6px", background: addTab === "manual" ? "#1e1e1e" : "transparent",
+                border: "none", borderBottom: addTab === "manual" ? "2px solid #d500f9" : "2px solid transparent",
+                color: addTab === "manual" ? "#d500f9" : "#555555", fontSize: "10px", fontFamily: "'SF Mono', monospace",
+                cursor: "pointer", letterSpacing: "0.5px", fontWeight: "bold",
+              }}>MANUAL</button>
             </div>
-            <input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Command (e.g. npx, uvx, docker)"
-              style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
-              onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
-              onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-            />
-            <input value={newArgs} onChange={(e) => setNewArgs(e.target.value)} placeholder="Arguments (space-separated)"
-              style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
-              onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
-              onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-              onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
-            />
-            <button onClick={handleAdd} disabled={!newName.trim() || !newCommand.trim()} style={{
-              background: newName.trim() && newCommand.trim() ? "#d500f9" : "#2a2a2a", border: "none",
-              color: newName.trim() && newCommand.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
-              fontFamily: "'SF Mono', monospace", cursor: newName.trim() && newCommand.trim() ? "pointer" : "default",
-              padding: "6px 12px", fontWeight: "bold", alignSelf: "flex-end",
-            }}>ADD SERVER</button>
+
+            {addTab === "paste" ? (
+              <div style={{ padding: "10px 16px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                <textarea
+                  value={pasteJson}
+                  onChange={(e) => handlePasteChange(e.target.value)}
+                  placeholder="Paste MCP server configuration JSON here..."
+                  spellCheck={false}
+                  style={{
+                    background: "#0a0a0a",
+                    border: `1px solid ${parseError ? "#ff3d00" : parsedServers.length > 0 ? "#00c853" : "#2a2a2a"}`,
+                    color: "#e0e0e0",
+                    fontSize: "11px",
+                    fontFamily: "'SF Mono', 'Menlo', monospace",
+                    padding: "8px",
+                    outline: "none",
+                    resize: "vertical",
+                    minHeight: "80px",
+                    maxHeight: "160px",
+                  }}
+                />
+                {parseError && (
+                  <div style={{ color: "#ff3d00", fontSize: "10px" }}>{parseError}</div>
+                )}
+                {parsedServers.length > 0 && (
+                  <div style={{
+                    background: "#1a1a1a", border: "1px solid #00c853", padding: "8px",
+                    display: "flex", flexDirection: "column", gap: "4px",
+                  }}>
+                    <div style={{ color: "#00c853", fontSize: "10px", fontWeight: "bold", letterSpacing: "0.5px" }}>
+                      FOUND {parsedServers.length} SERVER{parsedServers.length > 1 ? "S" : ""}
+                    </div>
+                    {parsedServers.map((srv) => (
+                      <div key={srv.name} style={{ color: "#e0e0e0", fontSize: "10px" }}>
+                        <span style={{ color: "#d500f9", fontWeight: "bold" }}>{srv.name}</span>
+                        <span style={{ color: "#555555" }}> — </span>
+                        <span style={{ color: "#888888" }}>{srv.url ? `HTTP: ${srv.url}` : `${srv.command} ${srv.args.join(" ")}`}</span>
+                        {Object.keys(srv.env).length > 0 && (
+                          <span style={{ color: "#ffab00", marginLeft: "6px", fontSize: "9px" }}>
+                            [{Object.keys(srv.env).length} env var{Object.keys(srv.env).length > 1 ? "s" : ""}]
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", gap: "4px", marginTop: "4px" }}>
+                      <button onClick={() => handleAddParsed("global")} style={{
+                        background: "#d500f9", border: "none", color: "#0a0a0a", fontSize: "10px",
+                        fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "6px 12px", fontWeight: "bold",
+                      }}>ADD TO GLOBAL</button>
+                      {dir && (
+                        <button onClick={() => handleAddParsed("project")} style={{
+                          background: "#1e1e1e", border: "1px solid #d500f9", color: "#d500f9", fontSize: "10px",
+                          fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "6px 12px", fontWeight: "bold",
+                        }}>ADD TO PROJECT</button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ padding: "10px 16px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="Server name"
+                    style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                    onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
+                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                  />
+                  <select value={newScope} onChange={(e) => setNewScope(e.target.value as "global" | "project")}
+                    style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "4px 8px" }}>
+                    <option value="global">Global</option>
+                    {dir && <option value="project">Project</option>}
+                  </select>
+                </div>
+                <input value={newCommand} onChange={(e) => setNewCommand(e.target.value)} placeholder="Command (e.g. npx, uvx, docker)"
+                  style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                />
+                <input value={newArgs} onChange={(e) => setNewArgs(e.target.value)} placeholder="Arguments (space-separated)"
+                  style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'SF Mono', monospace", padding: "6px 8px", outline: "none" }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "#d500f9")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+                />
+                <button onClick={handleAdd} disabled={!newName.trim() || !newCommand.trim()} style={{
+                  background: newName.trim() && newCommand.trim() ? "#d500f9" : "#2a2a2a", border: "none",
+                  color: newName.trim() && newCommand.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
+                  fontFamily: "'SF Mono', monospace", cursor: newName.trim() && newCommand.trim() ? "pointer" : "default",
+                  padding: "6px 12px", fontWeight: "bold", alignSelf: "flex-end",
+                }}>ADD SERVER</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -295,9 +503,14 @@ export const McpManager = memo(function McpManager() {
                       border: `1px solid ${srv.scope === "global" ? "#4a9eff66" : "#00c85366"}`,
                       color: srv.scope === "global" ? "#4a9eff" : "#00c853",
                     }}>{srv.scope.toUpperCase()}</span>
+                    <span style={{
+                      fontSize: "8px", fontWeight: "bold", letterSpacing: "0.5px", padding: "1px 4px",
+                      border: `1px solid ${srv.type === "http" ? "#ffab0066" : "#88888866"}`,
+                      color: srv.type === "http" ? "#ffab00" : "#888888",
+                    }}>{srv.type === "http" ? "HTTP" : "STDIO"}</span>
                   </div>
                   <div style={{ color: "#555555", fontSize: "10px", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {srv.command} {srv.args.join(" ")}
+                    {srv.type === "http" ? (srv.url ?? "http") : `${srv.command} ${srv.args.join(" ")}`}
                   </div>
                 </div>
 
