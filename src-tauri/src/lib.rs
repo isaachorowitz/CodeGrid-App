@@ -9,7 +9,7 @@ use commands::AppState;
 use db::Database;
 use pty_manager::PtyManager;
 use std::sync::Arc;
-use tauri::{Manager, RunEvent};
+use tauri::{Manager, RunEvent, WindowEvent};
 use tokio::sync::Mutex as TokioMutex;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -108,15 +108,36 @@ pub fn run() {
             commands::quick_publish,
             commands::quick_save,
         ])
+        // Hide window on close (red X) instead of quitting so PTY sessions
+        // stay alive. Cmd+Q / File→Quit still exits normally.
+        // On macOS, clicking the dock icon fires RunEvent::Reopen to show it again.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
         .build(tauri::generate_context!())
         .expect("error while building CodeGrid");
 
     app.run(|app_handle, event| {
-        if let RunEvent::Exit = event {
-            eprintln!("[CodeGrid] App exiting, cleaning up PTY sessions");
-            if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
-                state.pty_manager.kill_all();
+        match event {
+            RunEvent::Exit => {
+                eprintln!("[CodeGrid] App exiting, cleaning up PTY sessions");
+                if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
+                    state.pty_manager.kill_all();
+                }
             }
+            // macOS: dock icon clicked while app is running → show window
+            RunEvent::Reopen { has_visible_windows, .. } => {
+                if !has_visible_windows {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+            _ => {}
         }
     });
 }

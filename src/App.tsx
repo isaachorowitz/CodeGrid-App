@@ -249,11 +249,12 @@ export default function App() {
         isShell: boolean; resume: boolean;
       };
       try {
-        // Capture the dead session's name before removing it
+        // Capture the dead session's name and layout position before removing it
         const deadSession = useSessionStore.getState().sessions.find((s) => s.id === detail.sessionId);
         const savedName = deadSession?.manualName ?? deadSession?.name ?? undefined;
+        const oldLayout = useLayoutStore.getState().layouts.find((l) => l.i === detail.sessionId);
 
-        // Remove dead session (layout stays — new session will reuse layout slot)
+        // Remove dead session
         try { await killSession(detail.sessionId); } catch { /* already dead */ }
         removeSession(detail.sessionId);
         removePaneLayout(detail.sessionId);
@@ -264,7 +265,15 @@ export default function App() {
           : await createSession(detail.workingDir, detail.workspaceId, false, detail.resume);
 
         addSession(session);
-        addPaneLayout(session.id);
+        // Restore exact layout position instead of computing a new slot
+        if (oldLayout) {
+          useLayoutStore.getState().setLayouts([
+            ...useLayoutStore.getState().layouts,
+            { ...oldLayout, i: session.id },
+          ]);
+        } else {
+          addPaneLayout(session.id);
+        }
         setFocusedSession(session.id);
 
         // Restore the custom name if it had one
@@ -323,7 +332,9 @@ export default function App() {
   const panelWidth = (sidebarOpen && activePanel) ? (PANEL_WIDTHS[activePanel] ?? 220) : 0;
   // Activity bar (40px) is always present; panel width is added when open
   const sidebarTotalWidth = ACTIVITY_BAR_WIDTH + panelWidth + (panelWidth > 0 ? 1 : 0); // +1 for border
-  const gridWidth = dimensions.width - sidebarTotalWidth;
+  // dimensions are measured from containerRef which is the flex-1 div AFTER the sidebar,
+  // so dimensions.width is already the grid area — do not subtract sidebarTotalWidth again.
+  const gridWidth = dimensions.width;
   const gridHeight = dimensions.height - 58;
 
   return (

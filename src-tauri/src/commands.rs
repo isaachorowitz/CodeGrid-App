@@ -674,8 +674,11 @@ pub async fn clone_repo(
         "repo": &repo_name,
     }));
 
+    let env = shell_env();
     let output = std::process::Command::new("git")
         .args(["clone", &url, &clone_path])
+        .envs(&env)
+        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .map_err(|e| format!("Failed to run git clone: {e}"))?;
 
@@ -1238,8 +1241,47 @@ fn shell_env() -> std::collections::HashMap<String, String> {
             }
         }
 
+        // On macOS, SSH_AUTH_SOCK is managed by launchd and may not appear in
+        // the login shell env. Try launchctl to find it so SSH-based git remotes work.
+        #[cfg(target_os = "macos")]
+        if env.get("SSH_AUTH_SOCK").map(|v| v.is_empty()).unwrap_or(true) {
+            if let Ok(out) = std::process::Command::new("launchctl")
+                .args(["getenv", "SSH_AUTH_SOCK"])
+                .output()
+            {
+                let sock = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !sock.is_empty() {
+                    env.insert("SSH_AUTH_SOCK".into(), sock);
+                }
+            }
+        }
+
         env
     }).clone()
+}
+
+/// Map raw git stderr to a user-friendly message (mirrors VS Code's GitErrorCodes pattern).
+fn classify_git_error(msg: &str) -> String {
+    let m = msg.to_lowercase();
+    if m.contains("authentication failed") || m.contains("invalid username or password") || m.contains("could not read username") {
+        format!("Authentication failed. Make sure you're logged in to GitHub (run `gh auth login` in a terminal).\n\nDetails: {msg}")
+    } else if m.contains("permission denied (publickey)") || m.contains("public key") {
+        format!("SSH key not found or not authorized. Add your key with `ssh-add ~/.ssh/id_ed25519` in a terminal.\n\nDetails: {msg}")
+    } else if m.contains("no upstream branch") || m.contains("has no upstream") {
+        "No upstream branch set. The first push will set it automatically — try pushing again.".to_string()
+    } else if m.contains("rejected") && m.contains("non-fast-forward") {
+        "Push rejected: remote has changes you don't have locally. Pull first, then push.".to_string()
+    } else if m.contains("rejected") {
+        format!("Push rejected by remote.\n\nDetails: {msg}")
+    } else if m.contains("repository not found") || m.contains("does not exist") {
+        "Repository not found. Check that the remote URL is correct and you have access.".to_string()
+    } else if m.contains("connection") || m.contains("unable to connect") || m.contains("could not resolve host") {
+        "Network error: could not reach GitHub. Check your internet connection.".to_string()
+    } else if m.contains("conflict") {
+        "Merge conflict. Resolve conflicts in the files and commit.".to_string()
+    } else {
+        msg.to_string()
+    }
 }
 
 fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
@@ -1374,8 +1416,8 @@ pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String,
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
 
     if !output.status.success() {
-        let msg = if stderr.is_empty() { stdout } else { stderr };
-        return Err(msg);
+        let raw = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err(classify_git_error(raw));
     }
 
     // git push writes all its output (progress, remote info) to stderr.
@@ -1393,7 +1435,7 @@ pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String,
 #[tauri::command]
 pub async fn git_pull(working_dir: String) -> Result<String, String> {
     let dir = validate_dir(&working_dir)?;
-    run_git(&dir, &["pull"])
+    run_git(&dir, &["pull"]).map_err(|e| classify_git_error(&e))
 }
 
 #[tauri::command]
@@ -1716,7 +1758,9 @@ pub async fn quick_publish(dir: String) -> Result<QuickPublishResult, String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(format!("Push failed: {}", if stderr.is_empty() { "unknown error".to_string() } else { stderr }));
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let raw = if stderr.is_empty() { &stdout } else { &stderr };
+        return Err(classify_git_error(raw));
     }
 
     Ok(QuickPublishResult {
@@ -2341,11 +2385,13 @@ pub struct GitSetupStatus {
 
 #[tauri::command]
 pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
+    let env = shell_env();
     let git_installed = which::which("git").is_ok();
 
-    let git_user_name = if git_installed {
-        std::process::Command::new("git")
-            .args(["config", "--global", "user.name"])
+    let run_cmd = |prog: &str, args: &[&str]| -> Option<String> {
+        std::process::Command::new(prog)
+            .args(args)
+            .envs(&env)
             .output()
             .ok()
             .and_then(|o| {
@@ -2356,23 +2402,16 @@ pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
                     None
                 }
             })
+    };
+
+    let git_user_name = if git_installed {
+        run_cmd("git", &["config", "--global", "user.name"])
     } else {
         None
     };
 
     let git_user_email = if git_installed {
-        std::process::Command::new("git")
-            .args(["config", "--global", "user.email"])
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    if s.is_empty() { None } else { Some(s) }
-                } else {
-                    None
-                }
-            })
+        run_cmd("git", &["config", "--global", "user.email"])
     } else {
         None
     };
@@ -2383,6 +2422,7 @@ pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
     let gh_authenticated = if let Some(ref gh) = gh_path {
         std::process::Command::new(gh)
             .args(["auth", "status"])
+            .envs(&env)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -2392,18 +2432,7 @@ pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
 
     let gh_username = if let Some(ref gh) = gh_path {
         if gh_authenticated {
-            std::process::Command::new(gh)
-                .args(["api", "user", "--jq", ".login"])
-                .output()
-                .ok()
-                .and_then(|o| {
-                    if o.status.success() {
-                        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                        if s.is_empty() { None } else { Some(s) }
-                    } else {
-                        None
-                    }
-                })
+            run_cmd(gh, &["api", "user", "--jq", ".login"])
         } else {
             None
         }
@@ -2435,20 +2464,19 @@ pub async fn set_git_config(name: String, email: String) -> Result<(), String> {
         return Err("Invalid email: contains prohibited characters".to_string());
     }
 
-    let git_path = which::which("git")
-        .map(|p| p.to_string_lossy().to_string())
-        .map_err(|_| "git not found".to_string())?;
-
-    let output = std::process::Command::new(&git_path)
+    let env = shell_env();
+    let output = std::process::Command::new("git")
         .args(["config", "--global", "user.name", &name])
+        .envs(&env)
         .output()
         .map_err(|e| format!("Failed to set git user.name: {e}"))?;
     if !output.status.success() {
         return Err(format!("Failed to set git user.name: {}", String::from_utf8_lossy(&output.stderr)));
     }
 
-    let output = std::process::Command::new(&git_path)
+    let output = std::process::Command::new("git")
         .args(["config", "--global", "user.email", &email])
+        .envs(&env)
         .output()
         .map_err(|e| format!("Failed to set git user.email: {e}"))?;
     if !output.status.success() {
@@ -2461,17 +2489,33 @@ pub async fn set_git_config(name: String, email: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn run_gh_auth_login() -> Result<String, String> {
     let gh_path = resolve_gh_path()?;
+    let env = shell_env();
 
+    // `gh auth login --web` opens the system browser and completes OAuth without
+    // needing a TTY. Pipe stdin from /dev/null so gh doesn't try to prompt.
+    // Use shell_env() so gh can find the browser and write its config files.
     let output = std::process::Command::new(&gh_path)
         .args(["auth", "login", "--web", "-p", "https"])
+        .envs(&env)
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .stdin(std::process::Stdio::null())
         .output()
         .map_err(|e| format!("Failed to run gh auth login: {e}"))?;
 
     if output.status.success() {
         Ok("Authentication successful".to_string())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        Err(format!("gh auth requires interactive login. Run 'gh auth login' in a terminal session. {stderr}"))
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        // If gh can't open browser (CI/headless), tell user to run manually
+        if stderr.contains("open") || stderr.contains("browser") || stdout.contains("open") {
+            Err(format!(
+                "Could not open browser automatically. Run this in a terminal:\n  {} auth login\n\nThen restart the app.",
+                gh_path
+            ))
+        } else {
+            Err(format!("GitHub auth failed: {}", if stderr.is_empty() { stdout } else { stderr }))
+        }
     }
 }
 

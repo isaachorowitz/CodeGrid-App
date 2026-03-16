@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from "react";
+import { memo, useCallback, useState, useRef, useEffect } from "react";
 import { TerminalView } from "./Terminal";
 import { StatusBar } from "./StatusBar";
 import { useSessionStore } from "../stores/sessionStore";
@@ -16,10 +16,13 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const setFocusedSession = useSessionStore((s) => s.setFocusedSession);
+  const setSessionManualName = useSessionStore((s) => s.setSessionManualName);
   const toggleMaximize = useLayoutStore((s) => s.toggleMaximize);
   const minimizePane = useLayoutStore((s) => s.minimizePane);
+  const maximizedPane = useLayoutStore((s) => s.maximizedPane);
   const vibeMode = useWorkspaceStore((s) => s.vibeMode);
   const isFocused = focusedSessionId === session.id;
+  const isMaximized = maximizedPane === session.id;
 
   // Display name: manual name > activity name > fallback
   const rawName = session.manualName
@@ -52,6 +55,47 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
   const handleDoubleClick = useCallback(() => {
     toggleMaximize(session.id);
   }, [session.id, toggleMaximize]);
+
+  // Right-click context menu
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const ctxMenuRef = useRef<HTMLDivElement>(null);
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
+  // Close context menu on outside click or Escape
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent) { if (e.key === "Escape") setCtxMenu(null); return; }
+      if (ctxMenuRef.current && !ctxMenuRef.current.contains(e.target as Node)) setCtxMenu(null);
+    };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", close); };
+  }, [ctxMenu]);
+
+  const startRename = useCallback(() => {
+    setCtxMenu(null);
+    setRenameValue(displayName);
+    setRenaming(true);
+    setTimeout(() => renameInputRef.current?.select(), 20);
+  }, [displayName]);
+
+  const commitRename = useCallback(() => {
+    const trimmed = renameValue.trim();
+    if (trimmed) {
+      setSessionManualName(session.id, trimmed);
+      import("../lib/ipc").then(({ renameSession }) => renameSession(session.id, trimmed).catch(() => {}));
+    }
+    setRenaming(false);
+  }, [renameValue, session.id, setSessionManualName]);
 
   const [restarting, setRestarting] = useState(false);
 
@@ -109,6 +153,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
       <div
         className="drag-handle"
         onDoubleClick={handleDoubleClick}
+        onContextMenu={handleContextMenu}
         style={{
           height: "24px",
           display: "flex",
@@ -141,9 +186,28 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
               flexShrink: 0,
             }}
           />
-          <span style={{ color: "#888888" }}>
-            {displayName}
-          </span>
+          {renaming ? (
+            <input
+              ref={renameInputRef}
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onBlur={commitRename}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitRename();
+                if (e.key === "Escape") setRenaming(false);
+                e.stopPropagation();
+              }}
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: "#2a2a2a", border: "1px solid #ff8c00", color: "#e0e0e0",
+                fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                padding: "1px 4px", outline: "none", width: "120px",
+              }}
+              autoFocus
+            />
+          ) : (
+            <span style={{ color: "#888888" }}>{displayName}</span>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
           {/* Minimize button */}
@@ -178,6 +242,47 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
         </div>
       </div>
 
+      {/* Right-click context menu */}
+      {ctxMenu && (
+        <div
+          ref={ctxMenuRef}
+          style={{
+            position: "fixed",
+            top: ctxMenu.y,
+            left: ctxMenu.x,
+            background: "#1a1a1a",
+            border: "1px solid #333333",
+            zIndex: 9999,
+            minWidth: "160px",
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            fontSize: "11px",
+            boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+          }}
+        >
+          {[
+            { label: "Rename", action: () => startRename() },
+            { label: isMaximized ? "Restore size" : "Maximize", action: () => { setCtxMenu(null); toggleMaximize(session.id); } },
+            { label: "Minimize", action: () => { setCtxMenu(null); minimizePane(session.id); } },
+            null, // divider
+            { label: "Close", action: () => { setCtxMenu(null); onClose(session.id); }, danger: true },
+          ].map((item, i) =>
+            item === null ? (
+              <div key={i} style={{ height: "1px", background: "#2a2a2a", margin: "2px 0" }} />
+            ) : (
+              <div
+                key={item.label}
+                onClick={item.action}
+                style={{ padding: "7px 14px", cursor: "pointer", color: item.danger ? "#ff3d00" : "#cccccc" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "#2a2a2a")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                {item.label}
+              </div>
+            )
+          )}
+        </div>
+      )}
+
       {/* Terminal */}
       <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
         <TerminalView sessionId={session.id} />
@@ -192,6 +297,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
               background: "rgba(10, 10, 10, 0.92)",
               gap: "12px",
               fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+              zIndex: 10,
             }}
           >
             <div style={{ color: "#555555", fontSize: "11px", letterSpacing: "1px" }}>
