@@ -18,7 +18,11 @@ export function useTerminal(
 ) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  // Use refs for callbacks to avoid recreating terminal on callback changes
+  const onDataRef = useRef(options.onData);
+  const onResizeRef = useRef(options.onResize);
+  onDataRef.current = options.onData;
+  onResizeRef.current = options.onResize;
 
   const write = useCallback((data: Uint8Array | string) => {
     terminalRef.current?.write(data);
@@ -30,13 +34,13 @@ export function useTerminal(
         fitAddonRef.current.fit();
         const term = terminalRef.current;
         if (term) {
-          options.onResize(term.cols, term.rows);
+          onResizeRef.current(term.cols, term.rows);
         }
       } catch {
         // Ignore fit errors during transitions
       }
     }
-  }, [containerRef, options.onResize]);
+  }, [containerRef]);
 
   const focus = useCallback(() => {
     terminalRef.current?.focus();
@@ -78,23 +82,27 @@ export function useTerminal(
       });
       terminal.loadAddon(webglAddon);
     } catch {
-      console.warn("WebGL renderer not available, using canvas");
+      // WebGL not available, canvas fallback is fine
     }
 
     // Fit to container
-    setTimeout(() => {
-      fitAddon.fit();
-      options.onResize(terminal.cols, terminal.rows);
-    }, 0);
+    requestAnimationFrame(() => {
+      try {
+        fitAddon.fit();
+        onResizeRef.current(terminal.cols, terminal.rows);
+      } catch {
+        // Ignore
+      }
+    });
 
-    // Handle data input
-    terminal.onData(options.onData);
+    // Handle data input — use ref to avoid stale closure
+    const dataDisposable = terminal.onData((data) => onDataRef.current(data));
 
     // Handle resize
     const observer = new ResizeObserver(() => {
       try {
         fitAddon.fit();
-        options.onResize(terminal.cols, terminal.rows);
+        onResizeRef.current(terminal.cols, terminal.rows);
       } catch {
         // Ignore
       }
@@ -103,14 +111,13 @@ export function useTerminal(
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
-    resizeObserverRef.current = observer;
 
     return () => {
+      dataDisposable.dispose();
       observer.disconnect();
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
-      resizeObserverRef.current = null;
     };
   }, [containerRef]);
 

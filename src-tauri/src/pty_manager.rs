@@ -14,6 +14,14 @@ pub struct PtyManager {
     instances: Arc<Mutex<HashMap<String, PtyInstance>>>,
 }
 
+fn lock_instances(
+    instances: &Mutex<HashMap<String, PtyInstance>>,
+) -> Result<std::sync::MutexGuard<'_, HashMap<String, PtyInstance>>, String> {
+    instances
+        .lock()
+        .map_err(|_| "Internal error: PTY manager lock poisoned".to_string())
+}
+
 impl PtyManager {
     pub fn new() -> Self {
         Self {
@@ -64,6 +72,9 @@ impl PtyManager {
             if let Ok(user) = std::env::var("USER") {
                 cmd.env("USER", &user);
             }
+            if let Ok(lang) = std::env::var("LANG") {
+                cmd.env("LANG", &lang);
+            }
         }
 
         let child = pair
@@ -85,7 +96,7 @@ impl PtyManager {
 
         let sid = session_id.to_string();
         std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
@@ -95,7 +106,10 @@ impl PtyManager {
                         }
                     }
                     Err(e) => {
-                        log::error!("PTY read error for session {}: {}", sid, e);
+                        // EIO is expected when PTY child exits
+                        if e.kind() != std::io::ErrorKind::Other {
+                            eprintln!("PTY read error for session {}: {}", sid, e);
+                        }
                         break;
                     }
                 }
@@ -108,16 +122,14 @@ impl PtyManager {
             child,
         };
 
-        self.instances
-            .lock()
-            .unwrap()
+        lock_instances(&self.instances)?
             .insert(session_id.to_string(), instance);
 
         Ok(rx)
     }
 
     pub fn write_to_pty(&self, session_id: &str, data: &[u8]) -> Result<(), String> {
-        let mut instances = self.instances.lock().unwrap();
+        let mut instances = lock_instances(&self.instances)?;
         if let Some(instance) = instances.get_mut(session_id) {
             instance
                 .writer
@@ -134,7 +146,7 @@ impl PtyManager {
     }
 
     pub fn resize_pty(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), String> {
-        let instances = self.instances.lock().unwrap();
+        let instances = lock_instances(&self.instances)?;
         if let Some(instance) = instances.get(session_id) {
             instance
                 .master
@@ -152,9 +164,11 @@ impl PtyManager {
     }
 
     pub fn kill_session(&self, session_id: &str) -> Result<(), String> {
-        let mut instances = self.instances.lock().unwrap();
+        let mut instances = lock_instances(&self.instances)?;
         if let Some(mut instance) = instances.remove(session_id) {
             let _ = instance.child.kill();
+            // Wait for child to avoid zombie processes
+            let _ = instance.child.wait();
             Ok(())
         } else {
             Err(format!("Session {} not found", session_id))
@@ -162,7 +176,9 @@ impl PtyManager {
     }
 
     pub fn is_alive(&self, session_id: &str) -> bool {
-        let mut instances = self.instances.lock().unwrap();
+        let Ok(mut instances) = lock_instances(&self.instances) else {
+            return false;
+        };
         if let Some(instance) = instances.get_mut(session_id) {
             match instance.child.try_wait() {
                 Ok(Some(_)) => false,
@@ -175,6 +191,6 @@ impl PtyManager {
     }
 
     pub fn session_count(&self) -> usize {
-        self.instances.lock().unwrap().len()
+        lock_instances(&self.instances).map(|i| i.len()).unwrap_or(0)
     }
 }

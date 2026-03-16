@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
@@ -36,6 +36,7 @@ export const Sidebar = memo(function Sidebar({
   const sessions = useSessionStore((s) => s.sessions);
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen } = useAppStore();
+  const [hoveredSession, setHoveredSession] = useState<string | null>(null);
 
   if (!sidebarOpen) return null;
 
@@ -106,9 +107,11 @@ export const Sidebar = memo(function Sidebar({
                 borderLeft: session.id === focusedSessionId ? "2px solid #ff8c00" : "2px solid transparent",
               }}
               onMouseEnter={(e) => {
+                setHoveredSession(session.id);
                 if (session.id !== focusedSessionId) e.currentTarget.style.background = "#1a1a1a";
               }}
               onMouseLeave={(e) => {
+                setHoveredSession(null);
                 if (session.id !== focusedSessionId) e.currentTarget.style.background = "transparent";
               }}
             >
@@ -164,20 +167,14 @@ export const Sidebar = memo(function Sidebar({
                   e.stopPropagation();
                   onCloseSession(session.id);
                 }}
+                aria-label={`Close session ${session.pane_number}`}
                 style={{
                   background: "none", border: "none", color: "#555555", cursor: "pointer",
                   fontSize: "10px", padding: "0 2px", fontFamily: "'SF Mono', monospace",
-                  visibility: "hidden",
+                  visibility: hoveredSession === session.id ? "visible" : "hidden",
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.color = "#ff3d00")}
                 onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
-                ref={(el) => {
-                  const parent = el?.parentElement;
-                  if (parent) {
-                    parent.onmouseenter = () => { if (el) el.style.visibility = "visible"; };
-                    parent.onmouseleave = () => { if (el) el.style.visibility = "hidden"; };
-                  }
-                }}
               >
                 x
               </button>

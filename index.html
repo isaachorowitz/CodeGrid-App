@@ -2,8 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="color-scheme" content="dark" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <title>GridCode</title>
+    <style>
+      /* Prevent overscroll bounce on macOS */
+      html, body { overflow: hidden; overscroll-behavior: none; }
+      /* Prevent text selection on UI chrome */
+      body { -webkit-user-select: none; user-select: none; }
+      /* Allow selection inside terminals */
+      .terminal-container { -webkit-user-select: text; user-select: text; }
+    </style>
   </head>
   <body>
     <div id="root"></div>

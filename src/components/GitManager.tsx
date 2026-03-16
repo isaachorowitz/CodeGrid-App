@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useEffect } from "react";
+import { memo, useState, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../stores/appStore";
 import {
   gitStatus, gitPush, gitPull, gitCommit, gitStageFile, gitUnstageFile,
@@ -28,6 +28,12 @@ export const GitManager = memo(function GitManager() {
   const [success, setSuccess] = useState<string | null>(null);
 
   const dir = gitManagerDir ?? "";
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup flash timer on unmount
+  useEffect(() => {
+    return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!dir) return;
@@ -58,7 +64,11 @@ export const GitManager = memo(function GitManager() {
     }
   }, [gitManagerOpen, dir, tab]);
 
-  const flash = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(null), 2000); };
+  const flash = (msg: string) => {
+    setSuccess(msg);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setSuccess(null), 2000);
+  };
 
   const handlePush = useCallback(async () => {
     setLoading("push");
@@ -101,9 +111,18 @@ export const GitManager = memo(function GitManager() {
     try { await gitUnstageFile(dir, path); await refresh(); } catch (e) { setError(String(e)); }
   }, [dir, refresh]);
 
+  const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null);
+
   const handleDiscard = useCallback(async (path: string) => {
+    if (confirmDiscard !== path) {
+      setConfirmDiscard(path);
+      // Auto-clear confirm state after 3 seconds
+      setTimeout(() => setConfirmDiscard(null), 3000);
+      return;
+    }
+    setConfirmDiscard(null);
     try { await gitDiscardFile(dir, path); await refresh(); } catch (e) { setError(String(e)); }
-  }, [dir, refresh]);
+  }, [dir, refresh, confirmDiscard]);
 
   const handleNewBranch = useCallback(async () => {
     if (!newBranch.trim()) return;
@@ -137,6 +156,9 @@ export const GitManager = memo(function GitManager() {
       <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)" }} />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Git Manager"
         style={{
           position: "relative", width: "600px", maxHeight: "600px", background: "#141414",
           border: "1px solid #ff8c00", fontFamily: "'SF Mono', 'Menlo', monospace", zIndex: 1,
@@ -164,13 +186,13 @@ export const GitManager = memo(function GitManager() {
           </div>
           <div style={{ display: "flex", gap: "4px", alignItems: "center" }}>
             {/* Push / Pull buttons */}
-            <button onClick={handlePull} disabled={loading === "pull"} style={{
+            <button onClick={handlePull} disabled={loading === "pull"} aria-label="Pull from remote" style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "pull" ? "#ffab00" : "#4a9eff",
               fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
             }}>
               {loading === "pull" ? "PULLING..." : "PULL"}
             </button>
-            <button onClick={handlePush} disabled={loading === "push"} style={{
+            <button onClick={handlePush} disabled={loading === "push"} aria-label="Push to remote" style={{
               background: "#1e1e1e", border: "1px solid #2a2a2a", color: loading === "push" ? "#ffab00" : "#00c853",
               fontSize: "10px", fontFamily: "'SF Mono', monospace", cursor: "pointer", padding: "4px 10px", fontWeight: "bold",
             }}>
@@ -250,7 +272,7 @@ export const GitManager = memo(function GitManager() {
                   <div style={{ padding: "6px 16px", fontSize: "9px", color: "#ffab00", letterSpacing: "1px", fontWeight: "bold" }}>MODIFIED ({status.unstaged.length})</div>
                   {status.unstaged.map((f) => (
                     <FileRow key={`u-${f.path}`} path={f.path} status={f.status} onAction={() => handleStage(f.path)} actionLabel="STAGE"
-                      actionColor="#00c853" secondAction={() => handleDiscard(f.path)} secondLabel="DISCARD" />
+                      actionColor="#00c853" secondAction={() => handleDiscard(f.path)} secondLabel={confirmDiscard === f.path ? "CONFIRM?" : "DISCARD"} />
                   ))}
                 </div>
               )}

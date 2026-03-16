@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {
@@ -36,7 +36,18 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "frameworks": [],
+      "exceptionDomain": "",
+      "signingIdentity": null,
+      "entitlements": null
+    },
+    "category": "DeveloperTool",
+    "shortDescription": "Bloomberg Terminal for Claude Code — multi-session AI terminal multiplexer",
+    "longDescription": "GridCode is a desktop terminal multiplexer that lets you run multiple Claude Code sessions in a free-form 2D grid layout. Features include workspace management, broadcast mode, git manager, MCP server management, and a Bloomberg-inspired dark theme.",
+    "copyright": "Copyright © 2026 GridCode"
   },
   "plugins": {
     "shell": {

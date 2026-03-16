@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, useEffect } from "react";
+import { memo, useState, useCallback, useEffect, useRef } from "react";
 import { useAppStore } from "../stores/appStore";
 import {
   listMcps, addMcpServer, removeMcpServer, toggleMcpServer,
@@ -18,6 +18,11 @@ export const McpManager = memo(function McpManager() {
   const [newScope, setNewScope] = useState<"global" | "project">("global");
 
   const dir = mcpManagerDir ?? undefined;
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => { if (flashTimerRef.current) clearTimeout(flashTimerRef.current); };
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -33,7 +38,11 @@ export const McpManager = memo(function McpManager() {
     if (mcpManagerOpen) refresh();
   }, [mcpManagerOpen, refresh]);
 
-  const flash = (msg: string) => { setSuccess(msg); setTimeout(() => setSuccess(null), 2000); };
+  const flash = (msg: string) => {
+    setSuccess(msg);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setSuccess(null), 2000);
+  };
 
   const handleToggle = useCallback(async (srv: McpServerConfig) => {
     try {
@@ -83,6 +92,9 @@ export const McpManager = memo(function McpManager() {
       <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)" }} />
       <div
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="MCP Server Manager"
         style={{
           position: "relative", width: "620px", maxHeight: "600px", background: "#141414",
           border: "1px solid #d500f9", fontFamily: "'SF Mono', 'Menlo', monospace", zIndex: 1,
@@ -195,7 +207,8 @@ export const McpManager = memo(function McpManager() {
                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
                 {/* Toggle */}
-                <button onClick={() => handleToggle(srv)} style={{
+                <button onClick={() => handleToggle(srv)} role="switch" aria-checked={srv.enabled}
+                  aria-label={`Toggle ${srv.name}`} style={{
                   width: "28px", height: "14px", borderRadius: "7px", border: "none", cursor: "pointer",
                   background: srv.enabled ? "#d500f9" : "#2a2a2a", position: "relative", flexShrink: 0,
                 }}>

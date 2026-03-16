@@ -10,33 +10,37 @@ interface TerminalProps {
 
 export const TerminalView = memo(function TerminalView({ sessionId }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const lastOutputTime = useRef<number>(Date.now());
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const updateSession = useSessionStore((s) => s.updateSession);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
 
+  // Use refs to avoid stale closures in callbacks that reference each other
+  const ptyControlsRef = useRef<{ write: (data: string) => void; resize: (cols: number, rows: number) => void }>({
+    write: () => {},
+    resize: () => {},
+  });
+
   const handleResize = useCallback(
     (cols: number, rows: number) => {
-      ptyControls.resize(cols, rows);
+      ptyControlsRef.current.resize(cols, rows);
     },
-    [sessionId],
+    [],
   );
 
   const handleData = useCallback(
     (data: string) => {
       if (broadcastMode) {
-        // When broadcasting, the App component handles routing
         window.dispatchEvent(
           new CustomEvent("gridcode:broadcast-input", { detail: { data } }),
         );
       } else {
-        ptyControls.write(data);
+        ptyControlsRef.current.write(data);
       }
     },
-    [sessionId, broadcastMode],
+    [broadcastMode],
   );
 
-  const { write, fit, focus, terminal } = useTerminal(containerRef, {
+  const { write, fit, focus } = useTerminal(containerRef, {
     onData: handleData,
     onResize: handleResize,
   });
@@ -44,7 +48,6 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   const handleOutput = useCallback(
     (data: Uint8Array) => {
       write(data);
-      lastOutputTime.current = Date.now();
       updateSession(sessionId, { status: "running" });
 
       // Reset idle timer
@@ -69,6 +72,16 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     onEnded: handleEnded,
   });
 
+  // Keep ref in sync
+  ptyControlsRef.current = ptyControls;
+
+  // Clean up idle timer on unmount
+  useEffect(() => {
+    return () => {
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+    };
+  }, []);
+
   // Listen for focus events
   useEffect(() => {
     const handler = (e: Event) => {
@@ -81,17 +94,17 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     return () => window.removeEventListener("gridcode:focus-terminal", handler);
   }, [sessionId, focus]);
 
-  // Listen for broadcast input
+  // Listen for broadcast write — use ref to avoid stale closure
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      ptyControls.write(detail.data);
+      ptyControlsRef.current.write(detail.data);
     };
     window.addEventListener("gridcode:broadcast-write", handler);
     return () => window.removeEventListener("gridcode:broadcast-write", handler);
-  }, [ptyControls.write]);
+  }, []);
 
-  // Fit on container visibility change
+  // Fit on mount
   useEffect(() => {
     const timer = setTimeout(fit, 100);
     return () => clearTimeout(timer);

@@ -10,6 +10,12 @@ pub struct Database {
 }
 
 impl Database {
+    fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>, String> {
+        self.conn
+            .lock()
+            .map_err(|_| "Database lock poisoned".to_string())
+    }
+
     pub fn new() -> Result<Self, String> {
         let db_path = Self::db_path();
         if let Some(parent) = db_path.parent() {
@@ -34,7 +40,7 @@ impl Database {
     }
 
     fn init_tables(&self) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS workspaces (
@@ -69,7 +75,7 @@ impl Database {
 
     // Workspace operations
     pub fn save_workspace(&self, workspace: &Workspace) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT OR REPLACE INTO workspaces (id, name, layout_json, created_at, is_active) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![workspace.id, workspace.name, workspace.layout_json, workspace.created_at, workspace.is_active as i32],
@@ -79,7 +85,7 @@ impl Database {
     }
 
     pub fn load_workspaces(&self) -> Result<Vec<Workspace>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn
             .prepare("SELECT id, name, layout_json, created_at, is_active FROM workspaces ORDER BY created_at")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -102,7 +108,7 @@ impl Database {
     }
 
     pub fn delete_workspace(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute("DELETE FROM sessions WHERE workspace_id = ?1", params![id])
             .map_err(|e| format!("Failed to delete sessions: {}", e))?;
         conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])
@@ -111,7 +117,7 @@ impl Database {
     }
 
     pub fn set_active_workspace(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute("UPDATE workspaces SET is_active = 0", [])
             .map_err(|e| format!("Failed to deactivate workspaces: {}", e))?;
         conn.execute(
@@ -124,7 +130,7 @@ impl Database {
 
     // Session operations
     pub fn save_session(&self, session: &Session) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT OR REPLACE INTO sessions (id, workspace_id, working_dir, command, git_branch, created_at, pane_number, worktree_path) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![session.id, session.workspace_id, session.working_dir, session.command, session.git_branch, session.created_at, session.pane_number, session.worktree_path],
@@ -134,7 +140,7 @@ impl Database {
     }
 
     pub fn load_sessions(&self, workspace_id: &str) -> Result<Vec<Session>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         let mut stmt = conn
             .prepare("SELECT id, workspace_id, working_dir, command, git_branch, created_at, pane_number, worktree_path FROM sessions WHERE workspace_id = ?1 ORDER BY pane_number")
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -161,7 +167,7 @@ impl Database {
     }
 
     pub fn delete_session(&self, id: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])
             .map_err(|e| format!("Failed to delete session: {}", e))?;
         Ok(())
@@ -169,7 +175,7 @@ impl Database {
 
     // Settings operations
     pub fn get_setting(&self, key: &str) -> Option<String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn().ok()?;
         conn.query_row(
             "SELECT value FROM settings WHERE key = ?1",
             params![key],
@@ -179,7 +185,7 @@ impl Database {
     }
 
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
             params![key, value],
@@ -189,7 +195,7 @@ impl Database {
     }
 
     pub fn save_layout(&self, workspace_id: &str, layout_json: &str) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn()?;
         conn.execute(
             "UPDATE workspaces SET layout_json = ?1 WHERE id = ?2",
             params![layout_json, workspace_id],

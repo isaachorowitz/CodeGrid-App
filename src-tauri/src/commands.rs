@@ -701,6 +701,28 @@ pub struct GitBranchInfo {
     pub last_commit: String,
 }
 
+fn validate_dir(dir: &str) -> Result<String, String> {
+    let expanded = expand_tilde(dir);
+    let path = std::path::Path::new(&expanded);
+    if !path.is_dir() {
+        return Err(format!("Directory does not exist: {}", expanded));
+    }
+    // Canonicalize to prevent path traversal
+    let canonical = path.canonicalize()
+        .map_err(|e| format!("Invalid path: {}", e))?;
+    canonical.to_str()
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Path contains invalid characters".to_string())
+}
+
+fn validate_file_path(file_path: &str) -> Result<(), String> {
+    // Reject path traversal attempts
+    if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') {
+        return Err("Invalid file path: path traversal not allowed".to_string());
+    }
+    Ok(())
+}
+
 fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
     let output = std::process::Command::new("git")
         .args(args)
@@ -716,7 +738,7 @@ fn run_git(dir: &str, args: &[&str]) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn git_status(working_dir: String) -> Result<GitStatusInfo, String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
 
     let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
 
@@ -773,7 +795,7 @@ pub async fn git_status(working_dir: String) -> Result<GitStatusInfo, String> {
 
 #[tauri::command]
 pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String, String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
     if set_upstream {
         let branch = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"])?;
         run_git(&dir, &["push", "-u", "origin", &branch])
@@ -784,13 +806,13 @@ pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String,
 
 #[tauri::command]
 pub async fn git_pull(working_dir: String) -> Result<String, String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
     run_git(&dir, &["pull"])
 }
 
 #[tauri::command]
 pub async fn git_commit(working_dir: String, message: String, stage_all: bool) -> Result<String, String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
     if stage_all {
         run_git(&dir, &["add", "-A"])?;
     }
@@ -799,21 +821,27 @@ pub async fn git_commit(working_dir: String, message: String, stage_all: bool) -
 
 #[tauri::command]
 pub async fn git_stage_file(working_dir: String, file_path: String) -> Result<(), String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
+    validate_file_path(&file_path)?;
     run_git(&dir, &["add", &file_path])?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn git_unstage_file(working_dir: String, file_path: String) -> Result<(), String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
+    validate_file_path(&file_path)?;
     run_git(&dir, &["reset", "HEAD", &file_path])?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn git_create_branch(working_dir: String, branch_name: String, checkout: bool) -> Result<(), String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
+    // Validate branch name - reject shell metacharacters
+    if branch_name.contains(|c: char| " \t\n\r$`|;&<>(){}".contains(c)) {
+        return Err("Invalid branch name: contains special characters".to_string());
+    }
     if checkout {
         run_git(&dir, &["checkout", "-b", &branch_name])?;
     } else {
@@ -824,14 +852,14 @@ pub async fn git_create_branch(working_dir: String, branch_name: String, checkou
 
 #[tauri::command]
 pub async fn git_switch_branch(working_dir: String, branch_name: String) -> Result<(), String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
     run_git(&dir, &["checkout", &branch_name])?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn git_list_branches(working_dir: String) -> Result<Vec<GitBranchInfo>, String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
 
     let current = run_git(&dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
 
@@ -872,7 +900,7 @@ pub async fn git_list_branches(working_dir: String) -> Result<Vec<GitBranchInfo>
 
 #[tauri::command]
 pub async fn git_log(working_dir: String, count: u32) -> Result<Vec<GitLogEntry>, String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
     let n = format!("-{}", count.min(50));
     let out = run_git(&dir, &["log", &n, "--format=%H\t%h\t%s\t%an\t%cr"])?;
 
@@ -894,7 +922,8 @@ pub async fn git_log(working_dir: String, count: u32) -> Result<Vec<GitLogEntry>
 
 #[tauri::command]
 pub async fn git_discard_file(working_dir: String, file_path: String) -> Result<(), String> {
-    let dir = expand_tilde(&working_dir);
+    let dir = validate_dir(&working_dir)?;
+    validate_file_path(&file_path)?;
     run_git(&dir, &["checkout", "--", &file_path])?;
     Ok(())
 }
