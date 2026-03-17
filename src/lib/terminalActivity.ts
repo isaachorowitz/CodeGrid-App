@@ -96,3 +96,29 @@ export function detectActivity(text: string): string | null {
 
   return null;
 }
+
+/**
+ * Detect if terminal output indicates explicit user attention is required.
+ * Returns a concise reason string if detected, otherwise null.
+ */
+export function detectAttentionNeeded(text: string): string | null {
+  const tail = text.length > 800 ? text.slice(-800) : text;
+
+  if (/\b(?:waiting for|awaiting)\s+(?:your|user)\s+(?:input|approval|response)\b/i.test(tail)) {
+    return "Waiting for your input";
+  }
+  if (/\b(?:approve|approval|permission)\b.*\b(?:required|needed|request|requested)?\b/i.test(tail)) {
+    return "Approval requested";
+  }
+  if (/\b(?:yes\/no|y\/n|y\/N)\b/i.test(tail)) {
+    return "Confirmation required";
+  }
+  if (/\bpress\s+(?:enter|return)\s+to\s+continue\b/i.test(tail)) {
+    return "Press Enter to continue";
+  }
+  if (/\b(?:proceed|continue|apply|run)\b.{0,40}\?\s*$/im.test(tail)) {
+    return "Action confirmation needed";
+  }
+
+  return null;
+}

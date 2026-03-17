@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { writeToPty, resizePty, connectPty, onPtyOutput, onSessionEnded } from "../lib/ipc";
 import type { PtyOutput } from "../lib/ipc";
+import { useToastStore } from "../stores/toastStore";
 
 interface UsePtyOptions {
   sessionId: string;
@@ -12,6 +13,7 @@ interface UsePtyOptions {
 const textEncoder = new TextEncoder();
 
 export function usePty(options: UsePtyOptions) {
+  const addToast = useToastStore((s) => s.addToast);
   const { sessionId, onOutput, onEnded } = options;
   const unlistenOutputRef = useRef<(() => void) | null>(null);
   const unlistenEndedRef = useRef<(() => void) | null>(null);
@@ -49,6 +51,7 @@ export function usePty(options: UsePtyOptions) {
         // Signal the backend that listeners are ready so it can flush buffered output
         connectPty(sessionId).catch((err) => {
           console.error(`[usePty] connectPty failed for ${sessionId}:`, err);
+          addToast(`Terminal ${sessionId.slice(0, 6)} could not attach listeners`, "warning", 5000);
         });
       } else {
         // Component unmounted during async setup -- clean up immediately
@@ -66,7 +69,7 @@ export function usePty(options: UsePtyOptions) {
       unlistenEndedRef.current?.();
       unlistenEndedRef.current = null;
     };
-  }, [sessionId]);
+  }, [sessionId, addToast]);
 
   const write = useCallback(
     (data: string) => {

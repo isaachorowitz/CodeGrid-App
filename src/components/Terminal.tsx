@@ -2,8 +2,9 @@ import { useRef, useEffect, useCallback, memo } from "react";
 import { useTerminal } from "../hooks/useTerminal";
 import { usePty } from "../hooks/usePty";
 import { useSessionStore } from "../stores/sessionStore";
+import { useToastStore } from "../stores/toastStore";
 import { updateSessionStatus } from "../lib/ipc";
-import { detectActivity } from "../lib/terminalActivity";
+import { detectActivity, detectAttentionNeeded } from "../lib/terminalActivity";
 
 // NOTE: Do NOT share a single TextDecoder across components when using
 // { stream: true } -- streaming mode keeps internal state for incomplete
@@ -19,12 +20,15 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingOutputRef = useRef("");
+  const lastAttentionRef = useRef<{ reason: string; at: number } | null>(null);
+  const statusToastSentRef = useRef<{ idle: boolean; dead: boolean }>({ idle: false, dead: false });
   // Each terminal needs its own TextDecoder because { stream: true } maintains
   // internal state for incomplete multi-byte UTF-8 sequences.
   const textDecoderRef = useRef(new TextDecoder());
   const updateSession = useSessionStore((s) => s.updateSession);
   const setSessionActivityName = useSessionStore((s) => s.setSessionActivityName);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
+  const addToast = useToastStore((s) => s.addToast);
 
   // Use refs to avoid stale closures in callbacks that reference each other
   const ptyControlsRef = useRef<{ write: (data: string) => void; resize: (cols: number, rows: number) => void }>({
@@ -81,21 +85,47 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
         pendingOutputRef.current = "";
       }, 300);
 
+      // Surface immediate "needs attention" prompts across terminals.
+      const attention = detectAttentionNeeded(pendingOutputRef.current);
+      if (attention) {
+        const now = Date.now();
+        const last = lastAttentionRef.current;
+        const isDuplicate = !!last && last.reason === attention && now - last.at < 15000;
+        if (!isDuplicate) {
+          lastAttentionRef.current = { reason: attention, at: now };
+          window.dispatchEvent(
+            new CustomEvent("codegrid:session-attention", {
+              detail: { sessionId, reason: attention },
+            }),
+          );
+        }
+      }
+
       // Reset idle timer
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
       statusTimerRef.current = setTimeout(() => {
         updateSession(sessionId, { status: "idle" });
-        updateSessionStatus(sessionId, "idle").catch(() => {});
+        updateSessionStatus(sessionId, "idle").catch((err) => {
+          if (!statusToastSentRef.current.idle) {
+            statusToastSentRef.current.idle = true;
+            addToast(`Could not sync idle status for terminal ${sessionId.slice(0, 6)}: ${err}`, "warning", 5000);
+          }
+        });
       }, 10000);
     },
-    [sessionId, write, updateSession, setSessionActivityName],
+    [sessionId, write, updateSession, setSessionActivityName, addToast],
   );
 
   const handleEnded = useCallback(() => {
     updateSession(sessionId, { status: "dead" });
-    updateSessionStatus(sessionId, "dead").catch(() => {});
+    updateSessionStatus(sessionId, "dead").catch((err) => {
+      if (!statusToastSentRef.current.dead) {
+        statusToastSentRef.current.dead = true;
+        addToast(`Could not sync ended status for terminal ${sessionId.slice(0, 6)}: ${err}`, "warning", 5000);
+      }
+    });
     write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n");
-  }, [sessionId, write, updateSession]);
+  }, [sessionId, write, updateSession, addToast]);
 
   const ptyControls = usePty({
     sessionId,

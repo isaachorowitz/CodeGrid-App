@@ -60,6 +60,7 @@ export default function App() {
   } = useWorkspaceStore();
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
+  const attentionCooldownRef = useRef<Record<string, number>>({});
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
@@ -179,6 +180,29 @@ export default function App() {
     window.addEventListener("codegrid:broadcast-input", handler);
     return () => window.removeEventListener("codegrid:broadcast-input", handler);
   }, [sessions]);
+
+  // Cross-terminal attention toasts (approval/input requests).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId?: string; reason?: string }>).detail;
+      if (!detail?.sessionId || !detail.reason) return;
+
+      const now = Date.now();
+      const last = attentionCooldownRef.current[detail.sessionId] ?? 0;
+      if (now - last < 12000) return;
+      attentionCooldownRef.current[detail.sessionId] = now;
+
+      const all = useSessionStore.getState().sessions;
+      const target = all.find((s) => s.id === detail.sessionId);
+      const label = target
+        ? `[${target.pane_number}] ${target.manualName ?? target.activityName ?? target.working_dir.split("/").pop() ?? "Terminal"}`
+        : detail.sessionId.slice(0, 6);
+      addToast(`${label} needs attention: ${detail.reason}`, "warning", 7000);
+    };
+
+    window.addEventListener("codegrid:session-attention", handler);
+    return () => window.removeEventListener("codegrid:session-attention", handler);
+  }, [addToast]);
 
   // New workspace events
   useEffect(() => {
