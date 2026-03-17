@@ -24,7 +24,7 @@ const STATUS_ICON: Record<string, { label: string; color: string; tooltip: strin
   conflict: { label: "!", color: "#ff3d00", tooltip: "Conflict" },
 };
 
-const MONO_FONT = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
+const MONO_FONT = "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace";
 
 export const GitManager = memo(function GitManager() {
   const { gitManagerOpen, setGitManagerOpen, gitManagerDir } = useAppStore();

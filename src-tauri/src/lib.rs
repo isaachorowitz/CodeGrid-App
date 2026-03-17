@@ -94,13 +94,19 @@ pub fn run() {
             commands::search_github_repos,
             // File tree
             commands::list_directory,
+            commands::create_folder,
             // Git setup wizard
             commands::check_git_setup,
             commands::set_git_config,
             commands::run_gh_auth_login,
             commands::get_gh_install_instructions,
+            commands::run_gh_setup_git,
+            commands::start_github_device_flow,
+            commands::poll_github_token,
+            commands::save_github_token,
             // Code viewer
             commands::read_file_contents,
+            commands::write_file_contents,
             // Repo quick status
             commands::check_repo_status,
             commands::get_github_identity,

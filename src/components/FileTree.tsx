@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { listDirectory, type FileEntry } from "../lib/ipc";
+import { createFolder, listDirectory, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 
 // File extension to color mapping for visual hints
@@ -145,9 +145,7 @@ const FileTreeNode = memo(function FileTreeNode({
             : hovered
               ? "#1a1a1a"
               : "transparent",
-          borderLeft: isSelected
-            ? "2px solid #ff8c00"
-            : "2px solid transparent",
+          boxShadow: isSelected ? "inset 2px 0 0 #ff8c00" : "none",
           minHeight: "20px",
           userSelect: "none",
         }}
@@ -174,7 +172,7 @@ const FileTreeNode = memo(function FileTreeNode({
         <span
           style={{
             color: entry.is_dir ? "#e0e0e0" : getFileColor(entry.name),
-            fontSize: "11px",
+            fontSize: "12px",
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
@@ -250,6 +248,9 @@ export const FileTree = memo(function FileTree({
   const [filter, setFilter] = useState("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [showPath, setShowPath] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const showPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -300,6 +301,21 @@ export const FileTree = memo(function FileTree({
   const handleRefresh = useCallback(() => {
     loadTree();
   }, [loadTree]);
+
+  const handleCreateFolder = useCallback(async () => {
+    if (!rootPath || !newFolderName.trim() || creatingFolder) return;
+    setCreatingFolder(true);
+    setFolderError(null);
+    try {
+      await createFolder(rootPath, newFolderName.trim());
+      setNewFolderName("");
+      await loadTree();
+    } catch (e) {
+      setFolderError(String(e));
+    } finally {
+      setCreatingFolder(false);
+    }
+  }, [rootPath, newFolderName, creatingFolder, loadTree]);
 
   if (loading && entries.length === 0) {
     return (
@@ -352,7 +368,7 @@ export const FileTree = memo(function FileTree({
             background: "#0a0a0a",
             border: "1px solid #2a2a2a",
             color: "#e0e0e0",
-            fontSize: "10px",
+            fontSize: "11px",
             fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
             padding: "3px 6px",
             outline: "none",
@@ -371,7 +387,7 @@ export const FileTree = memo(function FileTree({
             background: "none",
             border: "1px solid #2a2a2a",
             color: "#555555",
-            fontSize: "10px",
+            fontSize: "11px",
             fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
             cursor: "pointer",
             padding: "2px 5px",
@@ -389,6 +405,55 @@ export const FileTree = memo(function FileTree({
           {"\u21BB"}
         </button>
       </div>
+      <div style={{ padding: "0 8px 4px 8px", display: "flex", gap: "4px", alignItems: "center" }}>
+        <input
+          type="text"
+          placeholder="New folder name..."
+          value={newFolderName}
+          onChange={(e) => setNewFolderName(e.target.value)}
+          style={{
+            flex: 1,
+            background: "#0a0a0a",
+            border: "1px solid #2a2a2a",
+            color: "#e0e0e0",
+            fontSize: "11px",
+            fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+            padding: "3px 6px",
+            outline: "none",
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = "#4a9eff";
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = "#2a2a2a";
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") handleCreateFolder();
+          }}
+        />
+        <button
+          onClick={handleCreateFolder}
+          disabled={!newFolderName.trim() || creatingFolder}
+          title="Create folder"
+          style={{
+            background: newFolderName.trim() && !creatingFolder ? "#1e1e1e" : "#111111",
+            border: "1px solid #2a2a2a",
+            color: newFolderName.trim() && !creatingFolder ? "#4a9eff" : "#444444",
+            fontSize: "11px",
+            fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+            cursor: newFolderName.trim() && !creatingFolder ? "pointer" : "default",
+            padding: "2px 6px",
+            lineHeight: 1,
+          }}
+        >
+          {creatingFolder ? "..." : "+DIR"}
+        </button>
+      </div>
+      {folderError && (
+        <div style={{ padding: "0 8px 4px 8px", color: "#ff3d00", fontSize: "9px" }}>
+          {folderError}
+        </div>
+      )}
 
       {/* Tree entries */}
       <div style={{ overflow: "auto", flex: 1 }}>
@@ -429,7 +494,7 @@ export const FileTree = memo(function FileTree({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            direction: "rtl",
+            direction: "ltr",
             textAlign: "left",
           }}
           title={selectedPath}

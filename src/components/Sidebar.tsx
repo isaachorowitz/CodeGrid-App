@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useCallback, useMemo } from "react";
+import { memo, useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useWorkspaceStore, type ActivityPanel } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
@@ -6,7 +6,8 @@ import { useToastStore } from "../stores/toastStore";
 import {
   gitStatus, gitPush, gitPull, gitStageFile, gitUnstageFile, gitCommit,
   gitDiffStat, quickPublish, quickSave,
-  type GitStatusInfo,
+  gitListBranches, gitLog, gitCreateBranch, gitSwitchBranch, gitShowCommit,
+  type GitStatusInfo, type GitBranchInfo, type GitLogEntry,
 } from "../lib/ipc";
 import { FileTree } from "./FileTree";
 import { vibeLabel, vibeDescription } from "../lib/vibeMode";
@@ -46,7 +47,7 @@ const ActivityBar = memo(function ActivityBar({
         alignItems: "center",
         paddingTop: "4px",
         flexShrink: 0,
-        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+        fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       }}
     >
       {ACTIVITY_ITEMS.map((item) => {
@@ -146,7 +147,7 @@ const GitPanel = memo(function GitPanel({
   activeSessions: { working_dir: string }[];
   onRefreshGit: () => void;
 }) {
-  const { setGitManagerOpen, setGitSetupWizardOpen } = useAppStore();
+  const { setGitSetupWizardOpen, setCodeViewerOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
   const vibeMode = useWorkspaceStore((s) => s.vibeMode);
   const [pushLoading, setPushLoading] = useState(false);
@@ -156,8 +157,75 @@ const GitPanel = memo(function GitPanel({
   const [aiGenerating, setAiGenerating] = useState(false);
   const [publishLoading, setPublishLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [branches, setBranches] = useState<GitBranchInfo[]>([]);
+  const [logEntries, setLogEntries] = useState<GitLogEntry[]>([]);
+  const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
+  const [branchSearch, setBranchSearch] = useState("");
+  const [newBranchName, setNewBranchName] = useState("");
+  const [branchSwitching, setBranchSwitching] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
+  const [selectedCommitDetail, setSelectedCommitDetail] = useState<string | null>(null);
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
 
   const dir = activeWorkspace?.repo_path ?? activeSessions[0]?.working_dir ?? null;
+
+  const resolvePath = useCallback((relativePath: string) => {
+    if (!dir) return relativePath;
+    return relativePath.startsWith("/") ? relativePath : `${dir.replace(/\/$/, "")}/${relativePath}`;
+  }, [dir]);
+
+  const openDiffReview = useCallback((relativePath: string) => {
+    if (!dir) return;
+    setCodeViewerOpen(true, resolvePath(relativePath), { diffMode: true, workingDir: dir });
+  }, [dir, resolvePath, setCodeViewerOpen]);
+
+  const refreshBranchesAndLog = useCallback(async () => {
+    if (!dir) return;
+    gitListBranches(dir).then(setBranches).catch(() => {});
+    gitLog(dir, 20).then(setLogEntries).catch(() => {});
+  }, [dir]);
+
+  useEffect(() => { refreshBranchesAndLog(); }, [refreshBranchesAndLog]);
+
+  // Close branch dropdown on outside click
+  useEffect(() => {
+    if (!branchDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (branchDropdownRef.current && !branchDropdownRef.current.contains(e.target as Node)) {
+        setBranchDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [branchDropdownOpen]);
+
+  const handleSwitchBranch = useCallback(async (name: string) => {
+    if (!dir) return;
+    setBranchSwitching(true);
+    setBranchDropdownOpen(false);
+    try {
+      await gitSwitchBranch(dir, name.replace(/^origin\//, ""));
+      addToast(`Switched to ${name}`, "success", 3000);
+      onRefreshGit();
+      refreshBranchesAndLog();
+    } catch (e) { addToast(`Switch failed: ${e}`, "error", 5000); }
+    setBranchSwitching(false);
+  }, [dir, addToast, onRefreshGit, refreshBranchesAndLog]);
+
+  const handleCreateBranch = useCallback(async () => {
+    if (!dir || !newBranchName.trim()) return;
+    setBranchSwitching(true);
+    try {
+      await gitCreateBranch(dir, newBranchName.trim(), true);
+      addToast(`Created & switched to ${newBranchName.trim()}`, "success", 3000);
+      setNewBranchName("");
+      setBranchDropdownOpen(false);
+      onRefreshGit();
+      refreshBranchesAndLog();
+    } catch (e) { addToast(`Create branch failed: ${e}`, "error", 5000); }
+    setBranchSwitching(false);
+  }, [dir, newBranchName, addToast, onRefreshGit, refreshBranchesAndLog]);
 
   const handleQuickPush = useCallback(async () => {
     if (!dir || pushLoading) return;
@@ -175,12 +243,22 @@ const GitPanel = memo(function GitPanel({
         : `Pushed to origin/${branch}`;
       addToast(result || detail, "success", 4000);
       onRefreshGit();
+      refreshBranchesAndLog();
     } catch (e) {
-      addToast(`Push failed: ${String(e).replace(/^Error:\s*/, "")}`, "error", 6000);
+      const msg = String(e).replace(/^Error:\s*/, "");
+      const needsPull = /rejected|fetch first|cannot fast-forward|non-fast-forward/i.test(msg);
+      if (needsPull) {
+        addToast(
+          "Push rejected — remote has changes you don't have locally. Pull first, then push.",
+          "warning", 10000
+        );
+      } else {
+        addToast(`Push failed: ${msg}`, "error", 6000);
+      }
     } finally {
       setPushLoading(false);
     }
-  }, [dir, workspaceGitStatus, addToast, pushLoading, onRefreshGit]);
+  }, [dir, workspaceGitStatus, addToast, pushLoading, onRefreshGit, refreshBranchesAndLog]);
 
   const handleQuickPull = useCallback(async () => {
     if (!dir || pullLoading) return;
@@ -280,8 +358,15 @@ const GitPanel = memo(function GitPanel({
         );
       }
       onRefreshGit();
+      refreshBranchesAndLog();
     } catch (e) {
-      addToast(`${vibeMode ? "Publish" : "Commit & push"} failed: ${String(e).replace(/^Error:\s*/, "")}`, "error", 6000);
+      const msg = String(e).replace(/^Error:\s*/, "");
+      const needsPull = /rejected|fetch first|cannot fast-forward|non-fast-forward/i.test(msg);
+      if (needsPull) {
+        addToast("Push rejected — remote has changes you don't have locally. Pull first, then push.", "warning", 10000);
+      } else {
+        addToast(`${vibeMode ? "Publish" : "Commit & push"} failed: ${msg}`, "error", 6000);
+      }
     } finally {
       setPublishLoading(false);
     }
@@ -448,40 +533,136 @@ const GitPanel = memo(function GitPanel({
             }
           </button>
         )}
+        {totalChanges > 0 && (
+          <button
+            onClick={() => {
+              const first = workspaceGitStatus.staged[0]?.path
+                ?? workspaceGitStatus.unstaged[0]?.path
+                ?? workspaceGitStatus.untracked[0];
+              if (first) openDiffReview(first);
+            }}
+            style={{
+              width: "100%",
+              padding: "5px 12px",
+              background: "transparent",
+              border: "1px solid #4a9eff66",
+              color: "#4a9eff",
+              fontSize: "9px",
+              fontWeight: "bold",
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+              cursor: "pointer",
+              letterSpacing: "0.5px",
+            }}
+          >
+            REVIEW CHANGES
+          </button>
+        )}
       </div>
 
-      {/* Branch + remote header */}
-      <div style={{
-        padding: "8px 12px",
-        borderBottom: "1px solid #2a2a2a",
-        display: "flex",
-        flexDirection: "column",
-        gap: "4px",
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          <span style={{ color: "#d500f9", fontSize: "11px", fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {workspaceGitStatus.branch}
+      {/* Branch switcher */}
+      <div ref={branchDropdownRef} style={{ borderBottom: "1px solid #2a2a2a", position: "relative" }}>
+        <button
+          onClick={() => { setBranchDropdownOpen((o) => !o); setBranchSearch(""); }}
+          style={{
+            width: "100%", padding: "7px 12px", background: "transparent", border: "none",
+            display: "flex", alignItems: "center", gap: "6px", cursor: branchSwitching ? "default" : "pointer",
+            borderBottom: branchDropdownOpen ? "1px solid #ff8c0066" : "none",
+          }}
+        >
+          <span style={{ color: "#d500f9", fontSize: "11px", fontWeight: "bold", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "left" }}>
+            {branchSwitching ? "switching..." : (workspaceGitStatus.branch ?? "...")}
           </span>
           {workspaceGitStatus.ahead > 0 && <span style={{ color: "#00c853", fontSize: "9px" }}>+{workspaceGitStatus.ahead}</span>}
           {workspaceGitStatus.behind > 0 && <span style={{ color: "#ff3d00", fontSize: "9px" }}>-{workspaceGitStatus.behind}</span>}
-        </div>
-        {workspaceGitStatus.has_remote ? (
-          <span title={`Connected to ${workspaceGitStatus.remote_url}`} style={{ fontSize: "9px", fontWeight: "bold", color: "#00c853", letterSpacing: "0.5px" }}>
-            &#x21D4; GITHUB
-          </span>
-        ) : (
-          <span title="Not connected to GitHub." style={{ fontSize: "9px", fontWeight: "bold", color: "#ff8c00", letterSpacing: "0.5px" }}>
-            LOCAL ONLY
-          </span>
+          {workspaceGitStatus.has_remote
+            ? <span title={workspaceGitStatus.remote_url ?? "Connected to remote"} style={{ fontSize: "8px", color: "#00c853", background: "#00c85322", padding: "1px 4px", fontWeight: "bold" }}>● CONNECTED</span>
+            : <span title="No remote configured" style={{ fontSize: "8px", color: "#ff3d00", background: "#ff3d0022", padding: "1px 4px", fontWeight: "bold" }}>● NO REMOTE</span>}
+          <span style={{ fontSize: "8px", color: "#555555" }}>{branchDropdownOpen ? "▲" : "▼"}</span>
+        </button>
+
+        {branchDropdownOpen && (
+          <div style={{
+            position: "absolute", top: "100%", left: 0, right: 0, zIndex: 100,
+            background: "#141414", border: "1px solid #ff8c0066", borderTop: "none",
+            maxHeight: "260px", display: "flex", flexDirection: "column",
+          }}>
+            {/* Search */}
+            <input
+              autoFocus
+              value={branchSearch}
+              onChange={(e) => setBranchSearch(e.target.value)}
+              placeholder="Search or create branch..."
+              style={{
+                background: "#0a0a0a", border: "none", borderBottom: "1px solid #2a2a2a",
+                color: "#e0e0e0", fontSize: "10px",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                padding: "6px 10px", outline: "none", flexShrink: 0,
+              }}
+              onKeyDown={(e) => { if (e.key === "Escape") setBranchDropdownOpen(false); }}
+            />
+            {/* Branch list */}
+            <div style={{ overflow: "auto", flex: 1 }}>
+              {branches
+                .filter((b) => !branchSearch || b.name.toLowerCase().includes(branchSearch.toLowerCase()))
+                .map((b) => (
+                  <div
+                    key={b.name}
+                    onClick={() => !b.is_current && handleSwitchBranch(b.name)}
+                    style={{
+                      padding: "5px 10px", cursor: b.is_current ? "default" : "pointer",
+                      display: "flex", alignItems: "center", gap: "6px",
+                      background: b.is_current ? "#1e1e1e" : "transparent",
+                      borderLeft: b.is_current ? "2px solid #ff8c00" : "2px solid transparent",
+                    }}
+                    onMouseEnter={(e) => { if (!b.is_current) e.currentTarget.style.background = "#1a1a1a"; }}
+                    onMouseLeave={(e) => { if (!b.is_current) e.currentTarget.style.background = b.is_current ? "#1e1e1e" : "transparent"; }}
+                  >
+                    <span style={{ color: b.is_remote ? "#4a9eff" : b.is_current ? "#ff8c00" : "#e0e0e0", fontSize: "10px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {b.name}
+                    </span>
+                    {b.is_current && <span style={{ color: "#00c853", fontSize: "8px" }}>✓</span>}
+                    {b.is_remote && <span style={{ color: "#4a9eff44", fontSize: "8px" }}>remote</span>}
+                  </div>
+                ))
+              }
+              {branches.filter((b) => !branchSearch || b.name.toLowerCase().includes(branchSearch.toLowerCase())).length === 0 && (
+                <div style={{ padding: "5px 10px", color: "#555555", fontSize: "10px" }}>No matches</div>
+              )}
+            </div>
+            {/* Create new branch */}
+            <div style={{ borderTop: "1px solid #2a2a2a", padding: "5px 8px", display: "flex", gap: "4px", flexShrink: 0 }}>
+              <input
+                value={newBranchName}
+                onChange={(e) => setNewBranchName(e.target.value)}
+                placeholder="New branch name..."
+                style={{
+                  flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
+                  fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  padding: "4px 6px", outline: "none",
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
+                onKeyDown={(e) => { if (e.key === "Enter") handleCreateBranch(); }}
+              />
+              <button
+                onClick={handleCreateBranch}
+                disabled={!newBranchName.trim() || branchSwitching}
+                style={{
+                  background: newBranchName.trim() ? "#ff8c00" : "#2a2a2a", border: "none",
+                  color: newBranchName.trim() ? "#0a0a0a" : "#555555", fontSize: "9px",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  cursor: newBranchName.trim() ? "pointer" : "default", padding: "4px 8px", fontWeight: "bold",
+                }}
+              >+ CREATE</button>
+            </div>
+          </div>
         )}
-        {/* Push / Pull / Full Git buttons */}
-        <div style={{ display: "flex", gap: "2px", marginTop: "2px" }}>
+
+        {/* Push / Pull buttons */}
+        <div style={{ display: "flex", gap: "2px", padding: "5px 12px 7px" }}>
           <button
             onClick={() => {
-              if (!workspaceGitStatus.has_remote) {
-                addToast("No remote configured.", "warning", 5000);
-                return;
-              }
+              if (!workspaceGitStatus.has_remote) { addToast("No remote configured.", "warning", 5000); return; }
               handleQuickPull();
             }}
             disabled={pullLoading}
@@ -493,13 +674,10 @@ const GitPanel = memo(function GitPanel({
             }}
             onMouseEnter={(e) => { if (!pullLoading) e.currentTarget.style.borderColor = workspaceGitStatus.has_remote ? "#4a9eff" : "#444444"; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-          >{pullLoading ? "..." : `${vibeLabel("PULL", vibeMode)} \u2193`}</button>
+          >{pullLoading ? "..." : `${vibeLabel("PULL", vibeMode)} ↓`}</button>
           <button
             onClick={() => {
-              if (!workspaceGitStatus.has_remote) {
-                addToast("No remote configured.", "warning", 5000);
-                return;
-              }
+              if (!workspaceGitStatus.has_remote) { addToast("No remote configured.", "warning", 5000); return; }
               handleQuickPush();
             }}
             disabled={pushLoading}
@@ -511,18 +689,7 @@ const GitPanel = memo(function GitPanel({
             }}
             onMouseEnter={(e) => { if (!pushLoading) e.currentTarget.style.borderColor = workspaceGitStatus.has_remote ? "#00c853" : "#444444"; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-          >
-            {pushLoading ? "..." : `${vibeLabel("PUSH", vibeMode)} \u2191${workspaceGitStatus.ahead > 0 ? ` (${workspaceGitStatus.ahead})` : ""}`}
-          </button>
-          <button onClick={() => {
-            setGitManagerOpen(true, dir ?? undefined);
-          }} style={{
-            flex: 1, background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#ff8c00",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", padding: "3px",
-          }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-          >{vibeLabel("FULL GIT", vibeMode)}</button>
+          >{pushLoading ? "..." : `${vibeLabel("PUSH", vibeMode)} ↑${workspaceGitStatus.ahead > 0 ? ` (${workspaceGitStatus.ahead})` : ""}`}</button>
         </div>
       </div>
 
@@ -548,13 +715,13 @@ const GitPanel = memo(function GitPanel({
             return (
               <div
                 key={`staged-${f.path}`}
+                onClick={() => openDiffReview(f.path)}
                 style={{
                   display: "flex", alignItems: "center", gap: "6px",
                   padding: "3px 12px", fontSize: "10px", cursor: "pointer",
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "#1a1a1a"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                onClick={() => setGitManagerOpen(true, dir ?? undefined)}
               >
                 <span style={{
                   color: "#00c853", fontWeight: "bold", fontSize: "9px",
@@ -585,13 +752,13 @@ const GitPanel = memo(function GitPanel({
             return (
               <div
                 key={`unstaged-${f.path}`}
+                onClick={() => openDiffReview(f.path)}
                 style={{
                   display: "flex", alignItems: "center", gap: "6px",
                   padding: "3px 12px", fontSize: "10px", cursor: "pointer",
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "#1a1a1a"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                onClick={() => setGitManagerOpen(true, dir ?? undefined)}
               >
                 <span style={{
                   color: badgeColor, fontWeight: "bold", fontSize: "9px",
@@ -620,13 +787,13 @@ const GitPanel = memo(function GitPanel({
             return (
               <div
                 key={`untracked-${filePath}`}
+                onClick={() => openDiffReview(filePath)}
                 style={{
                   display: "flex", alignItems: "center", gap: "6px",
                   padding: "3px 12px", fontSize: "10px", cursor: "pointer",
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "#1a1a1a"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                onClick={() => setGitManagerOpen(true, dir ?? undefined)}
               >
                 <span style={{
                   color: "#555555", fontWeight: "bold", fontSize: "9px",
@@ -749,6 +916,81 @@ const GitPanel = memo(function GitPanel({
           No changes
         </div>
       )}
+
+      {/* Git History */}
+      <div style={{ borderTop: "1px solid #2a2a2a", flexShrink: 0 }}>
+        <button
+          onClick={() => setHistoryExpanded((e) => !e)}
+          style={{
+            width: "100%", background: "none", border: "none", padding: "6px 12px",
+            display: "flex", alignItems: "center", gap: "6px", cursor: "pointer",
+          }}
+        >
+          <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "10px", letterSpacing: "1px", flex: 1, textAlign: "left" }}>
+            HISTORY
+          </span>
+          {logEntries.length > 0 && (
+            <span style={{ color: "#444444", fontSize: "9px" }}>{logEntries.length}</span>
+          )}
+          <span style={{ color: "#555555", fontSize: "8px" }}>{historyExpanded ? "▲" : "▼"}</span>
+        </button>
+        {historyExpanded && (
+          <div style={{ maxHeight: "200px", overflow: "auto" }}>
+            {logEntries.length === 0 ? (
+              <div style={{ padding: "6px 12px", color: "#444444", fontSize: "10px" }}>No commits yet</div>
+            ) : logEntries.map((entry) => (
+              <div
+                key={entry.hash}
+                onClick={async () => {
+                  if (!dir) return;
+                  if (selectedCommitHash === entry.hash) {
+                    setSelectedCommitHash(null);
+                    setSelectedCommitDetail(null);
+                    return;
+                  }
+                  setSelectedCommitHash(entry.hash);
+                  setSelectedCommitDetail(null);
+                  try {
+                    const detail = await gitShowCommit(dir, entry.hash);
+                    setSelectedCommitDetail(detail);
+                  } catch (e) {
+                    setSelectedCommitDetail(`Error loading commit: ${e}`);
+                  }
+                }}
+                style={{ padding: "4px 12px", display: "flex", flexDirection: "column", gap: "4px", borderBottom: "1px solid #1a1a1a", cursor: "pointer" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#1a1a1a"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
+                  <span style={{ color: "#ff8c00", fontSize: "9px", fontWeight: "bold", flexShrink: 0, fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace" }}>
+                    {entry.short_hash}
+                  </span>
+                  <span style={{ color: "#cccccc", fontSize: "10px", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {entry.message}
+                  </span>
+                  <span style={{ color: "#444444", fontSize: "9px", flexShrink: 0 }}>{entry.date}</span>
+                </div>
+                {selectedCommitHash === entry.hash && (
+                  <pre style={{
+                    margin: 0,
+                    padding: "6px",
+                    background: "#0d0d0d",
+                    border: "1px solid #2a2a2a",
+                    color: "#9a9a9a",
+                    fontSize: "9px",
+                    lineHeight: 1.45,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  }}>
+                    {selectedCommitDetail ?? "Loading commit details..."}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 });
@@ -974,8 +1216,8 @@ export const Sidebar = memo(function Sidebar() {
           borderRight: showPanel ? "1px solid #2a2a2a" : "none",
           display: "flex",
           flexDirection: "column",
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-          fontSize: "11px",
+          fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          fontSize: "12px",
           flexShrink: 0,
         }}
       >

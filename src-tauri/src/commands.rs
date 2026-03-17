@@ -664,9 +664,17 @@ pub async fn clone_repo(
 
     let clone_path = format!("{projects_dir}/{repo_name}");
 
-    // Check if already exists
+    // If destination already exists, only allow it when it's already the same repo.
     if std::path::Path::new(&clone_path).exists() {
-        return Ok(clone_path);
+        let existing_remote = run_git(&clone_path, &["remote", "get-url", "origin"]).unwrap_or_default();
+        if !existing_remote.trim().is_empty()
+            && normalize_git_remote(&existing_remote) == normalize_git_remote(&url)
+        {
+            return Ok(clone_path);
+        }
+        return Err(format!(
+            "Destination already exists at {clone_path}. Remove it or choose a different target directory."
+        ));
     }
 
     let _ = app.emit("clone-progress", serde_json::json!({
@@ -683,8 +691,30 @@ pub async fn clone_repo(
         .map_err(|e| format!("Failed to run git clone: {e}"))?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Clone failed: {stderr}"));
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let raw = if stderr.is_empty() { stdout } else { stderr };
+
+        // If auth failed, try to configure git credentials via gh and retry once.
+        if is_auth_error(&raw) && ensure_git_auth_ready(&env) {
+            let retry = std::process::Command::new("git")
+                .args(["clone", &url, &clone_path])
+                .envs(&env)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| format!("Failed to rerun git clone: {e}"))?;
+            if retry.status.success() {
+                let _ = app.emit("clone-progress", serde_json::json!({
+                    "status": "done",
+                    "repo": &repo_name,
+                    "path": &clone_path,
+                }));
+                return Ok(clone_path);
+            }
+            let retry_err = String::from_utf8_lossy(&retry.stderr).trim().to_string();
+            return Err(format!("Clone failed: {}", classify_git_error(&retry_err)));
+        }
+        return Err(format!("Clone failed: {}", classify_git_error(&raw)));
     }
 
     let _ = app.emit("clone-progress", serde_json::json!({
@@ -1277,10 +1307,78 @@ fn classify_git_error(msg: &str) -> String {
         "Repository not found. Check that the remote URL is correct and you have access.".to_string()
     } else if m.contains("connection") || m.contains("unable to connect") || m.contains("could not resolve host") {
         "Network error: could not reach GitHub. Check your internet connection.".to_string()
+    } else if m.contains("need to specify how to reconcile divergent branches") || m.contains("divergent branches") {
+        "Local and remote have diverged. Pull will merge remote changes into your branch; resolve any conflicts, then push again.".to_string()
+    } else if m.contains("did not match any file(s) known to git") || m.contains("unknown revision or path not in the working tree") {
+        "Branch not found locally or on origin. Fetch first or check the branch name.".to_string()
+    } else if m.contains("would be overwritten by checkout") {
+        "Cannot switch branches: your local changes would be overwritten. Commit, stash, or discard changes first.".to_string()
     } else if m.contains("conflict") {
         "Merge conflict. Resolve conflicts in the files and commit.".to_string()
     } else {
         msg.to_string()
+    }
+}
+
+fn is_auth_error(msg: &str) -> bool {
+    let m = msg.to_lowercase();
+    m.contains("authentication failed")
+        || m.contains("invalid username or password")
+        || m.contains("could not read username")
+        || m.contains("terminal prompts disabled")
+        || m.contains("permission denied")
+        || m.contains("could not authenticate")
+}
+
+fn normalize_git_remote(url: &str) -> String {
+    let mut u = url.trim().trim_end_matches('/').to_string();
+    if let Some(stripped) = u.strip_suffix(".git") {
+        u = stripped.to_string();
+    }
+    u.to_lowercase()
+}
+
+fn ensure_git_auth_ready(env: &std::collections::HashMap<String, String>) -> bool {
+    let gh_path = match resolve_gh_path() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let auth_ok = std::process::Command::new(&gh_path)
+        .args(["auth", "status"])
+        .envs(env)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !auth_ok {
+        return false;
+    }
+
+    std::process::Command::new(&gh_path)
+        .args(["auth", "setup-git"])
+        .envs(env)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod git_auth_helpers_tests {
+    use super::{is_auth_error, normalize_git_remote};
+
+    #[test]
+    fn normalizes_git_remotes_for_comparison() {
+        assert_eq!(
+            normalize_git_remote("https://github.com/Owner/Repo.git"),
+            normalize_git_remote("https://github.com/owner/repo/")
+        );
+    }
+
+    #[test]
+    fn detects_common_auth_failures() {
+        assert!(is_auth_error("fatal: could not read Username for 'https://github.com': terminal prompts disabled"));
+        assert!(is_auth_error("remote: Authentication failed"));
+        assert!(!is_auth_error("Already up to date."));
     }
 }
 
@@ -1417,6 +1515,29 @@ pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String,
 
     if !output.status.success() {
         let raw = if stderr.is_empty() { &stdout } else { &stderr };
+        if is_auth_error(raw) && ensure_git_auth_ready(&env) {
+            let retry = std::process::Command::new("git")
+                .args(&args)
+                .current_dir(&dir)
+                .envs(&env)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| format!("Failed to rerun git push: {e}"))?;
+            let retry_stderr = String::from_utf8_lossy(&retry.stderr).trim().to_string();
+            let retry_stdout = String::from_utf8_lossy(&retry.stdout).trim().to_string();
+            if retry.status.success() {
+                let retry_result = if retry_stdout.is_empty() && !retry_stderr.is_empty() {
+                    retry_stderr
+                } else if !retry_stdout.is_empty() {
+                    retry_stdout
+                } else {
+                    "Push completed".to_string()
+                };
+                return Ok(retry_result);
+            }
+            let retry_raw = if retry_stderr.is_empty() { &retry_stdout } else { &retry_stderr };
+            return Err(classify_git_error(retry_raw));
+        }
         return Err(classify_git_error(raw));
     }
 
@@ -1435,7 +1556,19 @@ pub async fn git_push(working_dir: String, set_upstream: bool) -> Result<String,
 #[tauri::command]
 pub async fn git_pull(working_dir: String) -> Result<String, String> {
     let dir = validate_dir(&working_dir)?;
-    run_git(&dir, &["pull"]).map_err(|e| classify_git_error(&e))
+    let pull_args = ["pull", "--no-rebase"];
+    match run_git(&dir, &pull_args) {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if is_auth_error(&e) {
+                let env = shell_env();
+                if ensure_git_auth_ready(&env) {
+                    return run_git(&dir, &pull_args).map_err(|e2| classify_git_error(&e2));
+                }
+            }
+            Err(classify_git_error(&e))
+        }
+    }
 }
 
 #[tauri::command]
@@ -1760,6 +1893,27 @@ pub async fn quick_publish(dir: String) -> Result<QuickPublishResult, String> {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let raw = if stderr.is_empty() { &stdout } else { &stderr };
+        if is_auth_error(raw) && ensure_git_auth_ready(&env) {
+            let retry = std::process::Command::new("git")
+                .args(&push_args)
+                .current_dir(&dir)
+                .envs(&env)
+                .env("GIT_TERMINAL_PROMPT", "0")
+                .output()
+                .map_err(|e| format!("Failed to rerun push: {e}"))?;
+            if !retry.status.success() {
+                let retry_stderr = String::from_utf8_lossy(&retry.stderr).trim().to_string();
+                let retry_stdout = String::from_utf8_lossy(&retry.stdout).trim().to_string();
+                let retry_raw = if retry_stderr.is_empty() { &retry_stdout } else { &retry_stderr };
+                return Err(classify_git_error(retry_raw));
+            }
+            return Ok(QuickPublishResult {
+                success: true,
+                message: format!("Published! {} file{} saved to GitHub.", total_files, if total_files == 1 { "" } else { "s" }),
+                commit_hash,
+                files_changed: total_files,
+            });
+        }
         return Err(classify_git_error(raw));
     }
 
@@ -1979,6 +2133,33 @@ pub async fn list_directory(path: String, max_depth: Option<u32>) -> Result<Vec<
     let depth_limit = max_depth.unwrap_or(3).min(6); // cap at 6 to prevent huge trees
     let gitignore_patterns = collect_gitignore_patterns(&dir);
     Ok(build_file_tree(&dir, 0, depth_limit, &gitignore_patterns))
+}
+
+#[tauri::command]
+pub async fn create_folder(parent_path: String, folder_name: String) -> Result<String, String> {
+    let parent = validate_dir(&parent_path)?;
+    let name = folder_name.trim();
+    if name.is_empty() {
+        return Err("Folder name cannot be empty".to_string());
+    }
+    if name == "." || name == ".." || name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err("Invalid folder name".to_string());
+    }
+
+    let new_path = std::path::Path::new(&parent).join(name);
+    let parent_canonical = std::path::Path::new(&parent)
+        .canonicalize()
+        .map_err(|e| format!("Cannot resolve parent path: {e}"))?;
+    if !new_path.starts_with(&parent_canonical) {
+        return Err("Invalid folder path".to_string());
+    }
+
+    std::fs::create_dir_all(&new_path)
+        .map_err(|e| format!("Failed to create folder: {e}"))?;
+
+    let final_path = new_path.to_str()
+        .ok_or_else(|| "Created folder path has invalid characters".to_string())?;
+    Ok(final_path.to_string())
 }
 
 // === MCP Manager Commands ===
@@ -2381,6 +2562,7 @@ pub struct GitSetupStatus {
     pub gh_authenticated: bool,
     pub gh_username: Option<String>,
     pub ssh_key_exists: bool,
+    pub credential_helper_configured: bool,
 }
 
 #[tauri::command]
@@ -2440,6 +2622,25 @@ pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
         None
     };
 
+    // Check if any credential helper is configured for github.com.
+    // Query without --global so system-level helpers (e.g. osxkeychain) count too.
+    let credential_helper_configured = {
+        let env2 = env.clone();
+        let has_helper = std::process::Command::new("git")
+            .args(["config", "credential.helper"])
+            .envs(&env2)
+            .output()
+            .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .unwrap_or(false);
+        let has_scoped = std::process::Command::new("git")
+            .args(["config", "credential.https://github.com.helper"])
+            .envs(&env2)
+            .output()
+            .map(|o| o.status.success() && !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+            .unwrap_or(false);
+        has_helper || has_scoped
+    };
+
     let home = std::env::var("HOME").unwrap_or_default();
     let ssh_key_exists = std::path::Path::new(&format!("{home}/.ssh/id_ed25519.pub")).exists()
         || std::path::Path::new(&format!("{home}/.ssh/id_rsa.pub")).exists();
@@ -2452,6 +2653,7 @@ pub async fn check_git_setup() -> Result<GitSetupStatus, String> {
         gh_authenticated,
         gh_username,
         ssh_key_exists,
+        credential_helper_configured,
     })
 }
 
@@ -2503,6 +2705,11 @@ pub async fn run_gh_auth_login() -> Result<String, String> {
         .map_err(|e| format!("Failed to run gh auth login: {e}"))?;
 
     if output.status.success() {
+        // Also run gh auth setup-git to wire up the git credential helper
+        let _ = std::process::Command::new(&gh_path)
+            .args(["auth", "setup-git"])
+            .envs(&env)
+            .output();
         Ok("Authentication successful".to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -2533,6 +2740,150 @@ pub async fn get_gh_install_instructions() -> Result<String, String> {
     {
         Ok("winget install --id GitHub.cli".to_string())
     }
+}
+
+#[tauri::command]
+pub async fn run_gh_setup_git() -> Result<(), String> {
+    let gh_path = resolve_gh_path()?;
+    let env = shell_env();
+    let output = std::process::Command::new(&gh_path)
+        .args(["auth", "setup-git"])
+        .envs(&env)
+        .output()
+        .map_err(|e| format!("Failed to run gh auth setup-git: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("gh auth setup-git failed: {stderr}"));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DeviceFlowStart {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub interval: u64,
+    pub expires_in: u64,
+}
+
+#[tauri::command]
+pub async fn start_github_device_flow(client_id: String) -> Result<DeviceFlowStart, String> {
+    if client_id.is_empty() || client_id.len() > 100 {
+        return Err("Invalid client_id".to_string());
+    }
+    if !client_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("Invalid client_id: must be alphanumeric".to_string());
+    }
+    let body_arg = format!("client_id={}&scope=repo%20read:user", client_id);
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-X", "POST",
+            "https://github.com/login/device/code",
+            "-H", "Accept: application/json",
+            "-H", "Content-Type: application/x-www-form-urlencoded",
+            "-d", &body_arg,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to contact GitHub: {e}"))?;
+    let body = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| format!("Invalid response from GitHub: {body}"))?;
+    if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
+        let desc = json.get("error_description").and_then(|v| v.as_str()).unwrap_or(err);
+        return Err(format!("GitHub error: {desc}"));
+    }
+    Ok(DeviceFlowStart {
+        device_code: json["device_code"].as_str().unwrap_or("").to_string(),
+        user_code: json["user_code"].as_str().unwrap_or("").to_string(),
+        verification_uri: json["verification_uri"].as_str().unwrap_or("https://github.com/login/device").to_string(),
+        interval: json["interval"].as_u64().unwrap_or(5),
+        expires_in: json["expires_in"].as_u64().unwrap_or(900),
+    })
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct TokenPollResult {
+    pub token: Option<String>,
+    pub pending: bool,
+    pub error: Option<String>,
+}
+
+#[tauri::command]
+pub async fn poll_github_token(client_id: String, device_code: String) -> Result<TokenPollResult, String> {
+    if !client_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("Invalid client_id".to_string());
+    }
+    if !device_code.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("Invalid device_code".to_string());
+    }
+    let body_arg = format!(
+        "client_id={}&device_code={}&grant_type=urn:ietf:params:oauth:grant-type:device_code",
+        client_id, device_code
+    );
+    let output = std::process::Command::new("curl")
+        .args(["-s", "-X", "POST",
+            "https://github.com/login/oauth/access_token",
+            "-H", "Accept: application/json",
+            "-H", "Content-Type: application/x-www-form-urlencoded",
+            "-d", &body_arg,
+        ])
+        .output()
+        .map_err(|e| format!("Poll failed: {e}"))?;
+    let body = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(_) => return Ok(TokenPollResult { token: None, pending: true, error: None }),
+    };
+    if let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
+        if !token.is_empty() {
+            return Ok(TokenPollResult { token: Some(token.to_string()), pending: false, error: None });
+        }
+    }
+    let err = json.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    match err {
+        "authorization_pending" | "slow_down" => Ok(TokenPollResult { token: None, pending: true, error: None }),
+        "expired_token" => Ok(TokenPollResult { token: None, pending: false, error: Some("Code expired. Please start again.".to_string()) }),
+        "access_denied" => Ok(TokenPollResult { token: None, pending: false, error: Some("Access denied by user.".to_string()) }),
+        _ => Ok(TokenPollResult { token: None, pending: true, error: None }),
+    }
+}
+
+#[tauri::command]
+pub async fn save_github_token(token: String) -> Result<(), String> {
+    // Validate: GitHub tokens are alphanumeric with underscores/hyphens
+    if token.is_empty() || token.len() > 256 {
+        return Err("Invalid token".to_string());
+    }
+    if !token.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err("Invalid token format".to_string());
+    }
+    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
+    let env = shell_env();
+    // Write to ~/.git-credentials
+    let creds_path = format!("{home}/.git-credentials");
+    let existing = std::fs::read_to_string(&creds_path).unwrap_or_default();
+    let filtered: String = existing
+        .lines()
+        .filter(|l| !l.contains("@github.com"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let creds_entry = format!("https://oauth2:{token}@github.com\n");
+    let new_creds = format!("{filtered}{creds_entry}");
+    std::fs::write(&creds_path, &new_creds)
+        .map_err(|e| format!("Failed to write credentials: {e}"))?;
+    // Set permissions to 600
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&creds_path, std::fs::Permissions::from_mode(0o600));
+    }
+    // Set credential.helper=store globally
+    std::process::Command::new("git")
+        .args(["config", "--global", "credential.helper", "store"])
+        .envs(&env)
+        .output()
+        .map_err(|e| format!("Failed to set credential helper: {e}"))?;
+    Ok(())
 }
 
 // === Code Viewer ===
@@ -2597,4 +2948,37 @@ pub async fn read_file_contents(file_path: String) -> Result<String, String> {
         .map_err(|e| format!("Failed to read file: {e}"))?;
     String::from_utf8(bytes)
         .map_err(|_| "Binary file: contents are not valid UTF-8 text".to_string())
+}
+
+#[tauri::command]
+pub async fn write_file_contents(file_path: String, content: String) -> Result<(), String> {
+    if file_path.contains("..") || file_path.contains('\0') {
+        return Err("Path traversal not allowed".to_string());
+    }
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let target = std::path::Path::new(&file_path);
+
+    let allowed = if target.exists() {
+        let canonical = target.canonicalize()
+            .map_err(|e| format!("Invalid path: {e}"))?;
+        let canonical_str = canonical.to_str()
+            .ok_or_else(|| "Path contains invalid characters".to_string())?;
+        canonical_str.starts_with(&home) || canonical_str.starts_with("/tmp")
+    } else {
+        let parent = target.parent()
+            .ok_or_else(|| "File path must include a parent directory".to_string())?;
+        let parent_canonical = parent.canonicalize()
+            .map_err(|e| format!("Invalid parent path: {e}"))?;
+        let parent_str = parent_canonical.to_str()
+            .ok_or_else(|| "Parent path contains invalid characters".to_string())?;
+        parent_str.starts_with(&home) || parent_str.starts_with("/tmp")
+    };
+    if !allowed {
+        return Err("File must be under home directory".to_string());
+    }
+
+    std::fs::write(target, content.as_bytes())
+        .map_err(|e| format!("Failed to write file: {e}"))?;
+    Ok(())
 }

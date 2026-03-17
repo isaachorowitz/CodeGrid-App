@@ -429,6 +429,10 @@ export async function listDirectory(path: string, maxDepth?: number): Promise<Fi
   return invoke("list_directory", { path, maxDepth: maxDepth ?? null });
 }
 
+export async function createFolder(parentPath: string, folderName: string): Promise<string> {
+  return invoke("create_folder", { parentPath, folderName });
+}
+
 // === Git Setup Wizard Commands ===
 
 export interface GitSetupStatus {
@@ -439,6 +443,7 @@ export interface GitSetupStatus {
   gh_authenticated: boolean;
   gh_username: string | null;
   ssh_key_exists: boolean;
+  credential_helper_configured: boolean;
 }
 
 export async function checkGitSetup(): Promise<GitSetupStatus> {
@@ -457,10 +462,44 @@ export async function getGhInstallInstructions(): Promise<string> {
   return invoke("get_gh_install_instructions");
 }
 
+export async function runGhSetupGit(): Promise<void> {
+  return invoke("run_gh_setup_git");
+}
+
+export interface DeviceFlowStart {
+  device_code: string;
+  user_code: string;
+  verification_uri: string;
+  interval: number;
+  expires_in: number;
+}
+
+export async function startGithubDeviceFlow(clientId: string): Promise<DeviceFlowStart> {
+  return invoke("start_github_device_flow", { clientId });
+}
+
+export interface TokenPollResult {
+  token: string | null;
+  pending: boolean;
+  error: string | null;
+}
+
+export async function pollGithubToken(clientId: string, deviceCode: string): Promise<TokenPollResult> {
+  return invoke("poll_github_token", { clientId, deviceCode });
+}
+
+export async function saveGithubToken(token: string): Promise<void> {
+  return invoke("save_github_token", { token });
+}
+
 // === Code Viewer Commands ===
 
 export async function readFileContents(filePath: string): Promise<string> {
   return invoke("read_file_contents", { filePath });
+}
+
+export async function writeFileContents(filePath: string, content: string): Promise<void> {
+  return invoke("write_file_contents", { filePath, content });
 }
 
 // === Repo Quick Status ===

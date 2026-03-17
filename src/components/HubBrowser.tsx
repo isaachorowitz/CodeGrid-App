@@ -51,11 +51,16 @@ const FEATURED_REPOS: HubRepo[] = [
 
 type Tab = "my-repos" | "featured";
 
+function shortenPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
+}
+
 export const HubBrowser = memo(function HubBrowser() {
   const { hubBrowserOpen, setHubBrowserOpen } = useAppStore();
   const [tab, setTab] = useState<Tab>("my-repos");
   const [filter, setFilter] = useState("");
   const [customUrl, setCustomUrl] = useState("");
+  const [cloneTargetDir, setCloneTargetDir] = useState("");
   const [cloning, setCloning] = useState<string | null>(null);
   const [cloned, setCloned] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +85,19 @@ export const HubBrowser = memo(function HubBrowser() {
           setGhLoading(false);
         });
     }
+  }, [hubBrowserOpen]);
+
+  useEffect(() => {
+    if (!hubBrowserOpen) return;
+    (async () => {
+      try {
+        const { getHomeDir } = await import("../lib/ipc");
+        const home = await getHomeDir();
+        setCloneTargetDir(`${home}/Projects`);
+      } catch {
+        // Keep current value if home lookup fails
+      }
+    })();
   }, [hubBrowserOpen]);
 
   // Org repos loading
@@ -145,7 +163,8 @@ export const HubBrowser = memo(function HubBrowser() {
       setCloning(name);
       setError(null);
       try {
-        const path = await cloneRepo(url);
+        const targetDir = cloneTargetDir.trim() || undefined;
+        const path = await cloneRepo(url, targetDir);
         setCloned((prev) => ({ ...prev, [name]: path }));
         setCloning(null);
       } catch (e) {
@@ -153,7 +172,7 @@ export const HubBrowser = memo(function HubBrowser() {
         setCloning(null);
       }
     },
-    [],
+    [cloneTargetDir],
   );
 
   const handleCloneCustom = useCallback(async () => {
@@ -173,6 +192,16 @@ export const HubBrowser = memo(function HubBrowser() {
     },
     [setHubBrowserOpen],
   );
+
+  const handlePickCloneDestination = useCallback(async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false, title: "Choose clone destination" });
+      if (selected) setCloneTargetDir(selected as string);
+    } catch {
+      // Not in Tauri
+    }
+  }, []);
 
   if (!hubBrowserOpen) return null;
 
@@ -287,6 +316,48 @@ export const HubBrowser = memo(function HubBrowser() {
             >
               CLONE
             </button>
+          </div>
+          <div style={{ marginTop: "8px" }}>
+            <div style={{ color: "#666666", fontSize: "9px", marginBottom: "4px", letterSpacing: "0.4px" }}>
+              CLONE DESTINATION
+            </div>
+            <div style={{ display: "flex", gap: "4px" }}>
+              <input
+                value={cloneTargetDir}
+                onChange={(e) => setCloneTargetDir(e.target.value)}
+                placeholder="~/Projects (or absolute path)"
+                style={{
+                  flex: 1,
+                  background: "#0a0a0a",
+                  border: "1px solid #2a2a2a",
+                  color: "#e0e0e0",
+                  fontSize: "11px",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  padding: "7px 8px",
+                  outline: "none",
+                }}
+                onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
+                onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+              />
+              <button
+                onClick={handlePickCloneDestination}
+                style={{
+                  background: "#1e1e1e",
+                  border: "1px solid #2a2a2a",
+                  color: "#888888",
+                  fontSize: "10px",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  cursor: "pointer",
+                  padding: "7px 10px",
+                  fontWeight: "bold",
+                }}
+              >
+                BROWSE
+              </button>
+            </div>
+            <div style={{ color: "#555555", fontSize: "9px", marginTop: "4px" }}>
+              Saving to {cloneTargetDir ? shortenPath(cloneTargetDir) : "default location"}
+            </div>
           </div>
           {error && (
             <div style={{ color: "#ff3d00", fontSize: "10px", marginTop: "4px" }}>

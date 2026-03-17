@@ -75,8 +75,10 @@ export default function App() {
   useEffect(() => {
     const init = async () => {
       // Load workspaces
+      let isFirstLaunch = false;
       try {
         const existing = await getWorkspaces();
+        isFirstLaunch = existing.length === 0;
         if (existing.length > 0) {
           setWorkspaces(existing);
           const active = existing.find((w) => w.is_active) ?? existing[0];
@@ -124,10 +126,10 @@ export default function App() {
       // Load vibe mode setting
       try { const vm = await getSetting("vibeMode"); if (vm === "true") setVibeMode(true); } catch (e) { console.warn("Failed to load vibe mode:", e); }
 
-      // Auto-open Git Setup Wizard on first launch if git is not configured
+      // Show Git Setup Wizard on first launch (no workspaces existed) OR if not fully configured
       try {
         const gitStatus = await checkGitSetup();
-        if (!gitStatus.git_installed || !gitStatus.git_user_name || !gitStatus.git_user_email || !gitStatus.gh_authenticated) {
+        if (isFirstLaunch || !gitStatus.gh_authenticated) {
           setGitSetupWizardOpen(true);
         }
       } catch (e) { console.warn("Failed to check git setup:", e); }

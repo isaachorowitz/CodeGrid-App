@@ -4,7 +4,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
-import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc } from "../lib/ipc";
+import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc, deleteWorkspace as deleteWorkspaceIpc } from "../lib/ipc";
 import { vibeLabel } from "../lib/vibeMode";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -26,6 +26,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     activeWorkspaceId,
     setActiveWorkspace,
     addWorkspace,
+    removeWorkspace,
     setNewSessionDialogOpen,
     setCommandPaletteOpen,
     toggleSidebar,
@@ -45,6 +46,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editSessionName, setEditSessionName] = useState("");
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{
@@ -159,6 +161,21 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     },
     [editSessionName, setSessionManualName],
   );
+
+  const handleDeleteWorkspace = useCallback(async (wsId: string) => {
+    if (confirmDeleteId !== wsId) {
+      setConfirmDeleteId(wsId);
+      setCtxMenu(null);
+      return;
+    }
+    setConfirmDeleteId(null);
+    try {
+      await deleteWorkspaceIpc(wsId);
+      removeWorkspace(wsId);
+    } catch (e) {
+      addToast(`Failed to delete workspace: ${e}`, "error");
+    }
+  }, [confirmDeleteId, removeWorkspace, addToast]);
 
   const presets: { label: string; value: PresetLayout }[] = [
     { label: "1", value: "1x1" },
@@ -528,36 +545,66 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             border: "1px solid #2a2a2a",
             boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
             fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-            minWidth: "140px",
+            minWidth: "160px",
             padding: "4px 0",
           }}
         >
-          <div
-            style={{
-              padding: "4px 12px",
-              fontSize: "9px",
-              color: "#555555",
-              letterSpacing: "1px",
-              borderBottom: "1px solid #2a2a2a",
-              marginBottom: "2px",
-            }}
-          >
+          <div style={{ padding: "4px 12px", fontSize: "9px", color: "#555555", letterSpacing: "1px", borderBottom: "1px solid #2a2a2a", marginBottom: "2px" }}>
             {ctxMenu.type === "workspace" ? "WORKSPACE" : "TERMINAL"}
           </div>
           <button
             onClick={startRenameFromCtx}
-            style={{
-              display: "block", width: "100%", textAlign: "left",
-              background: "transparent", border: "none",
-              color: "#e0e0e0", fontSize: "11px",
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-              padding: "6px 14px", cursor: "pointer",
-            }}
+            style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 14px", cursor: "pointer" }}
             onMouseEnter={(e) => { e.currentTarget.style.background = "#ff8c0020"; e.currentTarget.style.color = "#ff8c00"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#e0e0e0"; }}
           >
             ✎ Rename
           </button>
+          {ctxMenu.type === "workspace" && (
+            <>
+              <div style={{ height: "1px", background: "#2a2a2a", margin: "2px 0" }} />
+              <button
+                onClick={() => handleDeleteWorkspace(ctxMenu.id)}
+                style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: "#ff3d00", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 14px", cursor: "pointer" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#ff3d0020"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >
+                ✕ Delete Workspace
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Delete confirmation overlay */}
+      {confirmDeleteId && (
+        <div
+          style={{ position: "fixed", inset: 0, zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.5)" }}
+          onClick={() => setConfirmDeleteId(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ background: "#1a1a1a", border: "1px solid #ff3d00", padding: "24px 28px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", minWidth: "320px" }}
+          >
+            <div style={{ color: "#ff3d00", fontWeight: "bold", fontSize: "12px", letterSpacing: "1px", marginBottom: "8px" }}>DELETE WORKSPACE</div>
+            <div style={{ color: "#888888", fontSize: "11px", marginBottom: "20px", lineHeight: "1.6" }}>
+              This will close all terminals in "{workspaces.find((w) => w.id === confirmDeleteId)?.name ?? "this workspace"}" and remove it permanently.
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                onClick={() => handleDeleteWorkspace(confirmDeleteId)}
+                style={{ flex: 1, background: "#ff3d00", border: "none", color: "#fff", fontSize: "11px", fontWeight: "bold", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "8px", cursor: "pointer" }}
+              >
+                DELETE
+              </button>
+              <button
+                onClick={() => setConfirmDeleteId(null)}
+                style={{ flex: 1, background: "transparent", border: "1px solid #333333", color: "#888888", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "8px", cursor: "pointer" }}
+              >
+                CANCEL
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

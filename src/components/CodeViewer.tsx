@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAppStore } from "../stores/appStore";
-import { readFileContents, gitDiffFile } from "../lib/ipc";
+import { readFileContents, gitDiffFile, writeFileContents } from "../lib/ipc";
 
 // ─── VS Code Dark+ Inspired Color Scheme ───
 const COLORS = {
@@ -523,9 +523,12 @@ export const CodeViewer = memo(function CodeViewer() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [wrapLines, setWrapLines] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(600);
+  const [panelWidth, setPanelWidth] = useState(920);
   const [isResizing, setIsResizing] = useState(false);
   const [scrollState, setScrollState] = useState({ top: 0, clientH: 0, scrollH: 0 });
+  const [editorLocked, setEditorLocked] = useState(true);
+  const [editBuffer, setEditBuffer] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const contentRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -545,9 +548,11 @@ export const CodeViewer = memo(function CodeViewer() {
     try {
       const result = await readFileContents(codeViewerFile);
       setContent(result);
+      setEditBuffer(result);
     } catch (e) {
       setError(String(e));
       setContent("");
+      setEditBuffer("");
     }
     setLoading(false);
   }, [codeViewerFile]);
@@ -582,6 +587,7 @@ export const CodeViewer = memo(function CodeViewer() {
   useEffect(() => {
     if (codeViewerOpen && codeViewerFile) {
       fetchContent();
+      setEditorLocked(true);
       if (contentRef.current) contentRef.current.scrollTop = 0;
     }
   }, [codeViewerOpen, codeViewerFile, fetchContent]);
@@ -617,6 +623,33 @@ export const CodeViewer = memo(function CodeViewer() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [codeViewerOpen, setCodeViewerOpen]);
 
+  const hasPendingChanges = viewMode === "code" && editBuffer !== content;
+
+  const handleApply = useCallback(async () => {
+    if (!codeViewerFile || editorLocked || !hasPendingChanges || saving) return;
+    setSaving(true);
+    try {
+      await writeFileContents(codeViewerFile, editBuffer);
+      setContent(editBuffer);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [codeViewerFile, editorLocked, hasPendingChanges, saving, editBuffer]);
+
+  useEffect(() => {
+    if (!codeViewerOpen || viewMode !== "code" || editorLocked) return;
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        handleApply();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [codeViewerOpen, viewMode, editorLocked, handleApply]);
+
   // Resize handling
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -626,7 +659,7 @@ export const CodeViewer = memo(function CodeViewer() {
     const handleMove = (me: MouseEvent) => {
       if (!resizeRef.current) return;
       const delta = resizeRef.current.startX - me.clientX;
-      const newWidth = Math.max(300, Math.min(window.innerWidth * 0.85, resizeRef.current.startWidth + delta));
+      const newWidth = Math.max(520, Math.min(window.innerWidth * 0.95, resizeRef.current.startWidth + delta));
       setPanelWidth(newWidth);
     };
 
@@ -679,11 +712,11 @@ export const CodeViewer = memo(function CodeViewer() {
         top: 0,
         right: 0,
         bottom: 0,
-        width: `min(${panelWidth}px, 85vw)`,
+        width: `min(${panelWidth}px, 95vw)`,
         zIndex: 900,
         background: "#141414",
         borderLeft: "1px solid #ff8c00",
-        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+        fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace",
         display: "flex",
         flexDirection: "column",
         boxShadow: "-4px 0 20px rgba(0,0,0,0.5)",
@@ -825,6 +858,41 @@ export const CodeViewer = memo(function CodeViewer() {
               WRAP
             </button>
           )}
+          {viewMode === "code" && (
+            <button
+              onClick={() => setEditorLocked((v) => !v)}
+              title={editorLocked ? "Unlock editor for manual edits" : "Lock editor (read-only)"}
+              style={{
+                background: editorLocked ? "transparent" : "#1e1e1e",
+                border: editorLocked ? "1px solid #2a2a2a" : "1px solid #ff8c00",
+                color: editorLocked ? "#555555" : "#ff8c00",
+                fontSize: "9px",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                padding: "2px 6px",
+                cursor: "pointer",
+              }}
+            >
+              {editorLocked ? "UNLOCK" : "LOCK"}
+            </button>
+          )}
+          {viewMode === "code" && !editorLocked && (
+            <button
+              onClick={handleApply}
+              disabled={!hasPendingChanges || saving}
+              style={{
+                background: hasPendingChanges ? "#ff8c00" : "#1e1e1e",
+                border: "1px solid #2a2a2a",
+                color: hasPendingChanges ? "#0a0a0a" : "#555555",
+                fontSize: "9px",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                padding: "2px 6px",
+                cursor: hasPendingChanges ? "pointer" : "default",
+                fontWeight: "bold",
+              }}
+            >
+              {saving ? "APPLYING..." : "APPLY"}
+            </button>
+          )}
           <button
             onClick={() => setCodeViewerOpen(false)}
             style={{
@@ -864,67 +932,92 @@ export const CodeViewer = memo(function CodeViewer() {
               </div>
             )}
             {!loading && !error && (
-              <div style={{ minWidth: wrapLines ? undefined : "fit-content", paddingRight: "68px" }}>
-                {lines.map((_line, idx) => {
-                  const tokens = tokenizedLines[idx] ?? [];
-                  const isHovered = hoveredLine === idx;
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        display: "flex",
-                        background: isHovered ? "#1e1e1e" : "transparent",
-                        fontSize: "13px",
-                        lineHeight: "1.5",
-                        minHeight: "20px",
-                      }}
-                      onMouseEnter={() => setHoveredLine(idx)}
-                      onMouseLeave={() => setHoveredLine(null)}
-                    >
-                      {/* Line number */}
-                      <span
+              !editorLocked ? (
+                <div style={{ padding: "10px 12px" }}>
+                  <textarea
+                    value={editBuffer}
+                    onChange={(e) => setEditBuffer(e.target.value)}
+                    spellCheck={false}
+                    style={{
+                      width: "100%",
+                      minHeight: "100%",
+                      height: "calc(100vh - 180px)",
+                      resize: "vertical",
+                      boxSizing: "border-box",
+                      background: "#0a0a0a",
+                      border: "1px solid #2a2a2a",
+                      color: "#e0e0e0",
+                      padding: "12px",
+                          fontSize: "15px",
+                      lineHeight: 1.6,
+                      fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace",
+                      outline: "none",
+                    }}
+                  />
+                </div>
+              ) : (
+                <div style={{ minWidth: wrapLines ? undefined : "fit-content", paddingRight: "68px" }}>
+                  {lines.map((_line, idx) => {
+                    const tokens = tokenizedLines[idx] ?? [];
+                    const isHovered = hoveredLine === idx;
+                    return (
+                      <div
+                        key={idx}
                         style={{
-                          width: `${lineNumWidth}px`,
-                          minWidth: `${lineNumWidth}px`,
-                          textAlign: "right",
-                          paddingRight: "12px",
-                          color: isHovered ? "#888888" : "#444444",
-                          fontSize: "11px",
-                          lineHeight: "1.5",
-                          fontWeight: 400,
-                          userSelect: "none",
-                          borderRight: "1px solid #2a2a2a",
-                          flexShrink: 0,
+                          display: "flex",
+                          background: isHovered ? "#1e1e1e" : "transparent",
+                          fontSize: "15px",
+                          lineHeight: "1.6",
+                          minHeight: "22px",
                         }}
+                        onMouseEnter={() => setHoveredLine(idx)}
+                        onMouseLeave={() => setHoveredLine(null)}
                       >
-                        {idx + 1}
-                      </span>
-                      {/* Code content */}
-                      <span
-                        style={{
-                          flex: 1,
-                          whiteSpace: wrapLines ? "pre-wrap" : "pre",
-                          wordBreak: wrapLines ? "break-all" : undefined,
-                          paddingLeft: "12px",
-                          paddingRight: "16px",
-                          overflow: wrapLines ? undefined : "hidden",
-                          fontWeight: 400,
-                        }}
-                      >
-                        {tokens.map((token, ti) => (
-                          <span key={ti} style={{ color: token.color }}>
-                            {token.text}
-                          </span>
-                        ))}
-                        {tokens.length === 0 && "\u200B"}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+                        {/* Line number */}
+                        <span
+                          style={{
+                            width: `${lineNumWidth}px`,
+                            minWidth: `${lineNumWidth}px`,
+                            textAlign: "right",
+                            paddingRight: "12px",
+                            color: isHovered ? "#888888" : "#444444",
+                            fontSize: "11px",
+                            lineHeight: "1.6",
+                            fontWeight: 400,
+                            userSelect: "none",
+                            borderRight: "1px solid #2a2a2a",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {idx + 1}
+                        </span>
+                        {/* Code content */}
+                        <span
+                          style={{
+                            flex: 1,
+                            whiteSpace: wrapLines ? "pre-wrap" : "pre",
+                            wordBreak: wrapLines ? "break-all" : undefined,
+                            paddingLeft: "12px",
+                            paddingRight: "16px",
+                            overflow: wrapLines ? undefined : "hidden",
+                            fontWeight: 400,
+                          }}
+                        >
+                          {tokens.map((token, ti) => (
+                            <span key={ti} style={{ color: token.color }}>
+                              {token.text}
+                            </span>
+                          ))}
+                          {tokens.length === 0 && "\u200B"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
             )}
             {/* Minimap */}
-            {!loading && !error && content.length > 0 && (
+            {!loading && !error && content.length > 0 && editorLocked && (
               <Minimap
                 content={content}
                 scrollTop={scrollState.top}

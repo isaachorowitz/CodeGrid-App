@@ -36,6 +36,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
   const [tab, setTab] = useState<"recent" | "browse" | "clone" | "github">("recent");
   const [path, setPath] = useState("");
   const [cloneUrl, setCloneUrl] = useState("");
+  const [cloneTargetDir, setCloneTargetDir] = useState("");
   const [resume, setResume] = useState(false);
   const [sessionType, setSessionType] = useState<"claude" | "shell">("claude");
   const [filter, setFilter] = useState("");
@@ -56,6 +57,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     if (newSessionDialogOpen) {
       setPath("");
       setCloneUrl("");
+      setCloneTargetDir("");
       setResume(false);
       setSessionType("claude");
       setFilter("");
@@ -66,6 +68,20 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [newSessionDialogOpen, recentDirs.length]);
+
+  // Default clone destination: ~/Projects
+  useEffect(() => {
+    if (!newSessionDialogOpen) return;
+    (async () => {
+      try {
+        const { getHomeDir } = await import("../lib/ipc");
+        const home = await getHomeDir();
+        setCloneTargetDir(`${home}/Projects`);
+      } catch {
+        // Keep empty and let backend fallback if home can't be resolved
+      }
+    })();
+  }, [newSessionDialogOpen]);
 
   // Fetch repo statuses for recent dirs (batch, non-blocking)
   useEffect(() => {
@@ -191,19 +207,21 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     if (!cloneUrl.trim()) return;
     try {
       const { cloneRepo } = await import("../lib/ipc");
-      const clonedPath = await cloneRepo(cloneUrl.trim());
+      const targetDir = cloneTargetDir.trim() || undefined;
+      const clonedPath = await cloneRepo(cloneUrl.trim(), targetDir);
       onCreateSession(clonedPath, false, false, false);
       setNewSessionDialogOpen(false);
     } catch (e) {
       addToast(`Clone failed: ${e}`, "error", 5000);
     }
-  }, [cloneUrl, onCreateSession, setNewSessionDialogOpen, addToast]);
+  }, [cloneUrl, cloneTargetDir, onCreateSession, setNewSessionDialogOpen, addToast]);
 
   const handleGhCloneAndOpen = useCallback(async (repo: GitHubRepo) => {
     setGhCloning(repo.full_name);
     try {
       const { cloneRepo } = await import("../lib/ipc");
-      const clonedPath = await cloneRepo(repo.clone_url);
+      const targetDir = cloneTargetDir.trim() || undefined;
+      const clonedPath = await cloneRepo(repo.clone_url, targetDir);
       onCreateSession(clonedPath, false, false, sessionType === "shell");
       setNewSessionDialogOpen(false);
     } catch (e) {
@@ -212,7 +230,17 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     } finally {
       setGhCloning(null);
     }
-  }, [onCreateSession, setNewSessionDialogOpen, sessionType, addToast]);
+  }, [cloneTargetDir, onCreateSession, setNewSessionDialogOpen, sessionType, addToast]);
+
+  const handlePickCloneDestination = useCallback(async () => {
+    try {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const selected = await open({ directory: true, multiple: false, title: "Choose clone destination" });
+      if (selected) setCloneTargetDir(selected as string);
+    } catch {
+      // Not in Tauri
+    }
+  }, []);
 
   const handleBrowse = useCallback(async () => {
     try {
@@ -554,6 +582,45 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
                 />
               </div>
+              <div style={{ padding: "0 16px 8px 16px" }}>
+                <div style={{ color: "#666666", fontSize: "9px", marginBottom: "4px", letterSpacing: "0.4px" }}>
+                  CLONE DESTINATION
+                </div>
+                <div style={{ display: "flex", gap: "4px" }}>
+                  <input
+                    value={cloneTargetDir}
+                    onChange={(e) => setCloneTargetDir(e.target.value)}
+                    placeholder="~/Projects (or absolute path)"
+                    style={{
+                      flex: 1,
+                      background: "#0a0a0a",
+                      border: "1px solid #2a2a2a",
+                      color: "#e0e0e0",
+                      fontSize: "11px",
+                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      padding: "6px 8px",
+                      outline: "none",
+                    }}
+                    onFocus={(e) => (e.currentTarget.style.borderColor = "#00c853")}
+                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                  />
+                  <button
+                    onClick={handlePickCloneDestination}
+                    style={{
+                      background: "#1e1e1e",
+                      border: "1px solid #2a2a2a",
+                      color: "#888888",
+                      fontSize: "10px",
+                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      cursor: "pointer",
+                      padding: "6px 10px",
+                      fontWeight: "bold",
+                    }}
+                  >
+                    BROWSE
+                  </button>
+                </div>
+              </div>
               {ghLoading && (
                 <div style={{ padding: "20px", textAlign: "center", color: "#555555", fontSize: "11px" }}>
                   Loading...
@@ -761,8 +828,45 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   }}
                 />
               </div>
+              <div style={{ color: "#888888", fontSize: "10px", marginBottom: "6px", letterSpacing: "0.5px" }}>
+                DESTINATION FOLDER
+              </div>
+              <div style={{ display: "flex", gap: "4px", marginBottom: "10px" }}>
+                <input
+                  value={cloneTargetDir}
+                  onChange={(e) => setCloneTargetDir(e.target.value)}
+                  placeholder="~/Projects (or absolute path)"
+                  style={{
+                    flex: 1,
+                    background: "#0a0a0a",
+                    border: "1px solid #2a2a2a",
+                    color: "#e0e0e0",
+                    fontSize: "13px",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                    padding: "10px",
+                    outline: "none",
+                  }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                />
+                <button
+                  onClick={handlePickCloneDestination}
+                  style={{
+                    background: "#1e1e1e",
+                    border: "1px solid #2a2a2a",
+                    color: "#888888",
+                    fontSize: "11px",
+                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                    cursor: "pointer",
+                    padding: "10px 12px",
+                    fontWeight: "bold",
+                  }}
+                >
+                  BROWSE
+                </button>
+              </div>
               <div style={{ color: "#555555", fontSize: "10px", marginBottom: "16px" }}>
-                Clones to ~/Projects/ and opens a Claude session automatically
+                Repo will be saved in this folder and then opened automatically
               </div>
               <button
                 onClick={handleClone}

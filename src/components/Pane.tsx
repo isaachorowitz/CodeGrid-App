@@ -180,12 +180,12 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
           </span>
           <span
             style={{
-              width: "6px", height: "6px", borderRadius: "50%",
-              background: statusColor,
-              boxShadow: session.status === "running" ? `0 0 4px ${statusColor}` : "none",
-              flexShrink: 0,
+              fontSize: "8px", fontWeight: "bold", letterSpacing: "0.5px",
+              color: statusColor, flexShrink: 0,
             }}
-          />
+          >
+            {(session.status ?? "idle").toUpperCase()}
+          </span>
           {renaming ? (
             <input
               ref={renameInputRef}
@@ -217,13 +217,28 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
             aria-label={`Minimize pane ${session.pane_number}`}
             style={{
               background: "none", border: "none", color: "#555555", cursor: "pointer",
-              fontSize: "12px", padding: "0 3px", lineHeight: 1,
+              fontSize: "11px", padding: "0 3px", lineHeight: 1,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
             onMouseEnter={(e) => (e.currentTarget.style.color = "#ffab00")}
             onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
           >
-            _
+            −
+          </button>
+          {/* Maximize/restore button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); toggleMaximize(session.id); }}
+            title={isMaximized ? "Restore pane" : "Maximize pane"}
+            aria-label={isMaximized ? "Restore pane" : "Maximize pane"}
+            style={{
+              background: "none", border: "none", color: "#555555", cursor: "pointer",
+              fontSize: "10px", padding: "0 3px", lineHeight: 1,
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "#00c853")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
+          >
+            {isMaximized ? "⊡" : "⊞"}
           </button>
           {/* Close button */}
           <button
