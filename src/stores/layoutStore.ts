@@ -35,6 +35,31 @@ function clampLayout(l: Layout): Layout {
   return { ...l, x, y, w, h };
 }
 
+function toFiniteNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+export function sanitizeLayouts(raw: unknown): Layout[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Layout[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    if (typeof obj.i !== "string" || obj.i.length === 0) continue;
+    const layout: Layout = {
+      i: obj.i,
+      x: toFiniteNumber(obj.x, 0),
+      y: toFiniteNumber(obj.y, 0),
+      w: toFiniteNumber(obj.w, 4),
+      h: toFiniteNumber(obj.h, 4),
+      minW: toFiniteNumber(obj.minW, 2),
+      minH: toFiniteNumber(obj.minH, 2),
+    };
+    out.push(clampLayout(layout));
+  }
+  return out;
+}
+
 function generatePresetLayout(preset: PresetLayout, sessionIds: string[]): Layout[] {
   switch (preset) {
     case "1x1":
@@ -211,6 +236,8 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
         },
         // Remove from grid layouts so the pane is no longer rendered in the grid
         layouts: state.layouts.filter((l) => l.i !== sessionId),
+        maximizedPane:
+          state.maximizedPane === sessionId ? null : state.maximizedPane,
       };
     }),
 

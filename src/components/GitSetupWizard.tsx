@@ -106,6 +106,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
   const [deviceFlow, setDeviceFlow] = useState<{ device_code: string; user_code: string; verification_uri: string; interval: number } | null>(null);
   const [oauthPolling, setOauthPolling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // PAT state
   const [pat, setPat] = useState("");
@@ -136,12 +137,20 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
     if (!gitSetupWizardOpen && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
+      if (pollStopRef.current) {
+        clearTimeout(pollStopRef.current);
+        pollStopRef.current = null;
+      }
       setOauthPolling(false);
     }
   }, [gitSetupWizardOpen]);
 
   const allGood = status
-    ? status.git_installed && !!status.git_user_name && !!status.git_user_email && status.credential_helper_configured
+    ? status.git_installed
+      && !!status.git_user_name
+      && !!status.git_user_email
+      && status.credential_helper_configured
+      && status.gh_authenticated
     : false;
 
   const handleSaveIdentity = useCallback(async () => {
@@ -189,11 +198,21 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
       window.open(flow.verification_uri, "_blank");
       // Start polling
       const interval = Math.max(flow.interval, 5) * 1000;
+      pollStopRef.current = setTimeout(() => {
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        setOauthPolling(false);
+        setDeviceFlow(null);
+        setError("OAuth device flow expired. Please start again.");
+      }, Math.max(60, flow.expires_in) * 1000);
       pollRef.current = setInterval(async () => {
         try {
           const result = await pollGithubToken(oauthClientId.trim(), flow.device_code);
           if (result.token) {
             clearInterval(pollRef.current!); pollRef.current = null;
+            if (pollStopRef.current) { clearTimeout(pollStopRef.current); pollStopRef.current = null; }
             setOauthPolling(false);
             await saveGithubToken(result.token);
             addToast("GitHub connected via OAuth!", "success");
@@ -201,11 +220,18 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
             setStep("done");
           } else if (result.error) {
             clearInterval(pollRef.current!); pollRef.current = null;
+            if (pollStopRef.current) { clearTimeout(pollStopRef.current); pollStopRef.current = null; }
             setOauthPolling(false);
             setError(result.error);
             setDeviceFlow(null);
           }
-        } catch (e) { console.warn("Poll error:", e); }
+        } catch (e) {
+          clearInterval(pollRef.current!); pollRef.current = null;
+          if (pollStopRef.current) { clearTimeout(pollStopRef.current); pollStopRef.current = null; }
+          setOauthPolling(false);
+          setError(`Token polling failed: ${e}`);
+          setDeviceFlow(null);
+        }
       }, interval);
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -213,6 +239,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
 
   const cancelDeviceFlow = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (pollStopRef.current) { clearTimeout(pollStopRef.current); pollStopRef.current = null; }
     setOauthPolling(false); setDeviceFlow(null); setError(null);
   }, []);
 
@@ -447,7 +474,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
                     />
                   </div>
                   <div style={{ color: "#444444", fontSize: "10px", marginBottom: "12px" }}>
-                    Saved securely to ~/.git-credentials (readable only by you)
+                    Saved using your configured Git credential helper (keychain preferred)
                   </div>
                   <Btn label={patSaving ? "SAVING..." : "SAVE TOKEN"} onClick={handleSavePat} disabled={patSaving || !pat.trim()} color="#ff8c00" />
                 </div>

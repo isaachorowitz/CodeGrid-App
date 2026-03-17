@@ -8,22 +8,6 @@
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
-    "shell:default",
-    "shell:allow-open",
-    "dialog:default",
-    "dialog:allow-open",
-    "dialog:allow-save",
-    "fs:default",
-    "fs:allow-read-text-file",
-    "fs:allow-write-text-file",
-    "fs:allow-exists",
-    {
-      "identifier": "fs:scope",
-      "allow": [
-        { "path": "$HOME/**" },
-        { "path": "$CONFIG/**" },
-        { "path": "$APPDATA/**" }
-      ]
-    }
+    "dialog:allow-open"
   ]
 }

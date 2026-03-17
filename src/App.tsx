@@ -14,7 +14,7 @@ import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
 import { useSessionStore, MAX_TERMINALS_PER_WORKSPACE } from "./stores/sessionStore";
-import { useLayoutStore } from "./stores/layoutStore";
+import { sanitizeLayouts, useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useAppStore } from "./stores/appStore";
 import { useToastStore } from "./stores/toastStore";
@@ -27,6 +27,7 @@ import {
   getWorkspaces,
   saveLayout as saveLayoutIpc,
   spawnShellSession,
+  setActiveWorkspace as setActiveWorkspaceIpc,
   listRecentDirs,
   detectClaudeSkills,
   getAvailableModels,
@@ -84,7 +85,7 @@ export default function App() {
           const active = existing.find((w) => w.is_active) ?? existing[0];
           setActiveWorkspace(active.id);
           if (active.layout_json) {
-            try { setLayouts(JSON.parse(active.layout_json)); } catch (e) { console.warn("Failed to parse layout JSON:", e); }
+            try { setLayouts(sanitizeLayouts(JSON.parse(active.layout_json))); } catch (e) { console.warn("Failed to parse layout JSON:", e); setLayouts([]); }
           }
 
           // Restore persisted sessions (as dead) for ALL workspaces so switching
@@ -104,6 +105,7 @@ export default function App() {
         } else {
           const ws = await createWorkspace("Default");
           addWorkspace(ws);
+          try { await setActiveWorkspaceIpc(ws.id); } catch {}
         }
       } catch {
         const mockWs = {
@@ -159,7 +161,11 @@ export default function App() {
     const timer = setTimeout(() => {
       saveLayoutIpc(activeWorkspaceId, layoutJson).catch(() => {});
     }, 1000);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      // Best-effort flush on workspace switch/unmount so we don't lose the latest drag/resize.
+      saveLayoutIpc(activeWorkspaceId, layoutJson).catch(() => {});
+    };
   }, [layouts, activeWorkspaceId, updateWorkspace]);
 
   // Broadcast input routing (only to sessions in the active workspace)
@@ -180,6 +186,7 @@ export default function App() {
       try {
         const ws = await createWorkspace(`Workspace ${workspaces.length + 1}`);
         addWorkspace(ws);
+        try { await setActiveWorkspaceIpc(ws.id); } catch {}
       } catch (e) { addToast(`Failed to create workspace: ${e}`, "error"); }
     };
     window.addEventListener("codegrid:new-workspace", handler);
@@ -193,6 +200,7 @@ export default function App() {
       try {
         const ws = await createWorkspaceWithRepo(detail.name, detail.repoPath);
         addWorkspace(ws);
+        try { await setActiveWorkspaceIpc(ws.id); } catch {}
         addToast(`Workspace "${ws.name}" created`, "success");
       } catch (err) {
         addToast(`Failed to create workspace: ${err}`, "error");

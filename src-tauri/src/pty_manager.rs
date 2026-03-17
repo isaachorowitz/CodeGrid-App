@@ -178,6 +178,16 @@ impl PtyManager {
         }
     }
 
+    pub fn remove_session(&self, session_id: &str) -> Result<(), String> {
+        let mut instances = lock_instances(&self.instances)?;
+        if let Some(mut instance) = instances.remove(session_id) {
+            let _ = instance.child.wait();
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_alive(&self, session_id: &str) -> bool {
         let Ok(mut instances) = lock_instances(&self.instances) else {

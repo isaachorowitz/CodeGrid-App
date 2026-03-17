@@ -129,12 +129,13 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   // Listen for broadcast write -- use ref to avoid stale closure
   useEffect(() => {
     const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
+      const detail = (e as CustomEvent<{ sessionId?: string; data?: string }>).detail;
+      if (!detail || detail.sessionId !== sessionId || typeof detail.data !== "string") return;
       ptyControlsRef.current.write(detail.data);
     };
     window.addEventListener("codegrid:broadcast-write", handler);
     return () => window.removeEventListener("codegrid:broadcast-write", handler);
-  }, []);
+  }, [sessionId]);
 
   // Fit on mount
   useEffect(() => {

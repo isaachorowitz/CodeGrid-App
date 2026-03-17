@@ -237,10 +237,10 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, multiple: false, title: "Choose clone destination" });
       if (selected) setCloneTargetDir(selected as string);
-    } catch {
-      // Not in Tauri
+    } catch (e) {
+      addToast(`Could not open folder picker: ${e}`, "error");
     }
-  }, []);
+  }, [addToast]);
 
   const handleBrowse = useCallback(async () => {
     try {
@@ -250,10 +250,10 @@ export const NewSessionDialog = memo(function NewSessionDialog({
         setPath(selected as string);
         setTab("browse");
       }
-    } catch {
-      // Not in Tauri
+    } catch (e) {
+      addToast(`Could not open folder picker: ${e}`, "error");
     }
-  }, []);
+  }, [addToast]);
 
   const filteredDirs = useMemo(() => {
     if (!filter) return recentDirs;

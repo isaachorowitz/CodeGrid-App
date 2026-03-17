@@ -1,7 +1,7 @@
 import { memo, useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
+import { sanitizeLayouts, useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
 import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc, deleteWorkspace as deleteWorkspaceIpc } from "../lib/ipc";
@@ -99,6 +99,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     try {
       const ws = await createWorkspace(name);
       addWorkspace(ws);
+      await setActiveWorkspaceIpc(ws.id);
     } catch (e) {
       addToast(`Failed to create workspace: ${e}`, "error");
     }
@@ -111,7 +112,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
 
     const targetWs = workspaces.find((w) => w.id === wsId);
     if (targetWs?.layout_json) {
-      try { setLayouts(JSON.parse(targetWs.layout_json)); } catch { setLayouts([]); }
+      try { setLayouts(sanitizeLayouts(JSON.parse(targetWs.layout_json))); } catch { setLayouts([]); }
     } else {
       setLayouts([]);
     }

@@ -51,9 +51,5 @@
     "longDescription": "Code Grid is a desktop terminal multiplexer that lets you run multiple Claude Code sessions in a free-form 2D grid layout. Features include workspace management, broadcast mode, git manager, MCP server management, and a dense dark theme.",
     "copyright": "Copyright © 2026 Code Grid"
   },
-  "plugins": {
-    "shell": {
-      "open": true
-    }
-  }
+  "plugins": {}
 }

@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from "react";
 import { matchKeybinding } from "../lib/keybindings";
 import { useSessionStore } from "../stores/sessionStore";
-import { useLayoutStore } from "../stores/layoutStore";
+import { sanitizeLayouts, useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
 
@@ -154,7 +154,7 @@ export function useKeyboardNav() {
             setActiveWorkspace(targetWs.id);
             // Restore layout for the target workspace
             if (targetWs.layout_json) {
-              try { setLayouts(JSON.parse(targetWs.layout_json)); } catch { setLayouts([]); }
+              try { setLayouts(sanitizeLayouts(JSON.parse(targetWs.layout_json))); } catch { setLayouts([]); }
             } else {
               setLayouts([]);
             }

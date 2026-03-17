@@ -198,8 +198,8 @@ export const HubBrowser = memo(function HubBrowser() {
       const { open } = await import("@tauri-apps/plugin-dialog");
       const selected = await open({ directory: true, multiple: false, title: "Choose clone destination" });
       if (selected) setCloneTargetDir(selected as string);
-    } catch {
-      // Not in Tauri
+    } catch (e) {
+      setError(`Could not open folder picker: ${e}`);
     }
   }, []);
 

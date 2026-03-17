@@ -25,6 +25,15 @@ impl Database {
 
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open database: {e}"))?;
+        conn.execute_batch(
+            "
+            PRAGMA foreign_keys = ON;
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA busy_timeout = 5000;
+            ",
+        )
+        .map_err(|e| format!("Failed to initialize SQLite pragmas: {e}"))?;
 
         let db = Self {
             conn: Mutex::new(conn),
@@ -42,10 +51,76 @@ impl Database {
 
     fn migrate_tables(&self) -> Result<(), String> {
         let conn = self.conn()?;
-        // Add repo_path column if it doesn't exist (migration for existing DBs)
-        let _ = conn.execute("ALTER TABLE workspaces ADD COLUMN repo_path TEXT", []);
-        // Add name column to sessions if it doesn't exist (migration for existing DBs)
-        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN name TEXT", []);
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            );
+            ",
+        )
+        .map_err(|e| format!("Failed to initialize migrations table: {e}"))?;
+
+        // v1: ensure optional workspace/session columns exist for older databases.
+        let already_v1 = conn
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = 1",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if !already_v1 {
+            conn.execute("ALTER TABLE workspaces ADD COLUMN repo_path TEXT", [])
+                .or_else(|e| {
+                    let msg = e.to_string().to_lowercase();
+                    if msg.contains("duplicate column name") {
+                        Ok(0)
+                    } else {
+                        Err(e)
+                    }
+                })
+                .map_err(|e| format!("Failed migration v1 (workspaces.repo_path): {e}"))?;
+            conn.execute("ALTER TABLE sessions ADD COLUMN name TEXT", [])
+                .or_else(|e| {
+                    let msg = e.to_string().to_lowercase();
+                    if msg.contains("duplicate column name") {
+                        Ok(0)
+                    } else {
+                        Err(e)
+                    }
+                })
+                .map_err(|e| format!("Failed migration v1 (sessions.name): {e}"))?;
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (1, datetime('now'))",
+                [],
+            )
+            .map_err(|e| format!("Failed to record migration v1: {e}"))?;
+        }
+
+        // v2: add integrity/performance indexes and constraints.
+        let already_v2 = conn
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version = 2",
+                [],
+                |_| Ok(()),
+            )
+            .is_ok();
+        if !already_v2 {
+            conn.execute_batch(
+                "
+                CREATE INDEX IF NOT EXISTS idx_sessions_workspace_pane ON sessions(workspace_id, pane_number);
+                CREATE INDEX IF NOT EXISTS idx_workspaces_created_at ON workspaces(created_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_workspaces_single_active ON workspaces(is_active) WHERE is_active = 1;
+                ",
+            )
+            .map_err(|e| format!("Failed migration v2: {e}"))?;
+            conn.execute(
+                "INSERT INTO schema_migrations (version, applied_at) VALUES (2, datetime('now'))",
+                [],
+            )
+            .map_err(|e| format!("Failed to record migration v2: {e}"))?;
+        }
+
         Ok(())
     }
 

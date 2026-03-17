@@ -4,6 +4,7 @@ use crate::session::{Session, SessionStatus};
 use crate::workspace::Workspace;
 use crate::worktree::WorktreeManager;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex as TokioMutex;
@@ -69,6 +70,40 @@ fn expand_tilde(path: &str) -> String {
     path.to_string()
 }
 
+fn allowed_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let home_path = PathBuf::from(home);
+        if let Ok(canonical) = home_path.canonicalize() {
+            roots.push(canonical);
+        } else {
+            roots.push(home_path);
+        }
+    }
+    roots.push(PathBuf::from("/tmp"));
+    roots
+}
+
+fn is_path_within_allowed_roots(path: &Path) -> bool {
+    let canonical_path = match path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    allowed_roots()
+        .iter()
+        .any(|root| canonical_path.starts_with(root))
+}
+
+fn is_path_or_parent_within_allowed_roots(path: &Path) -> bool {
+    if path.exists() {
+        return is_path_within_allowed_roots(path);
+    }
+    match path.parent() {
+        Some(parent) => is_path_within_allowed_roots(parent),
+        None => false,
+    }
+}
+
 // === Session Commands ===
 
 #[tauri::command]
@@ -82,13 +117,7 @@ pub async fn create_session(
 ) -> Result<SessionInfo, String> {
     let working_dir = validate_dir(&working_dir)?;
     let session_id = Uuid::new_v4().to_string();
-    let sessions = state.sessions.lock().await;
-    let pane_number = sessions.iter()
-        .filter(|s| s.workspace_id == workspace_id)
-        .map(|s| s.pane_number)
-        .max()
-        .unwrap_or(0) + 1;
-    drop(sessions);
+    let pane_number = 1;
 
     // Determine actual working directory (possibly a worktree)
     let (actual_dir, worktree_path, git_branch) = if use_worktree
@@ -156,18 +185,26 @@ pub async fn create_session(
     session.worktree_path = worktree_path;
     session.status = SessionStatus::Running;
 
-    // Save to DB
+    // Assign pane number under lock to avoid races with concurrent session creation.
+    {
+        let mut sessions = state.sessions.lock().await;
+        session.pane_number = sessions
+            .iter()
+            .filter(|s| s.workspace_id == session.workspace_id)
+            .map(|s| s.pane_number)
+            .max()
+            .unwrap_or(0) + 1;
+        sessions.push(session.clone());
+    }
     let _ = state.db.save_session(&session);
-
-    // Store in memory
     let info = SessionInfo::from(&session);
-    state.sessions.lock().await.push(session);
 
     // Buffer PTY output until frontend connects its event listeners
     let (connect_tx, connect_rx) = tokio::sync::oneshot::channel::<()>();
     state.connect_signals.lock().await.insert(session_id.clone(), connect_tx);
 
     let app_handle = app.clone();
+    let state_for_task = state.inner().clone();
     let sid = session_id.clone();
     eprintln!("[CodeGrid] Session {session_id} created, waiting for frontend connect");
 
@@ -194,6 +231,14 @@ pub async fn create_session(
             );
         }
         eprintln!("[CodeGrid] Session {sid} ended (total bytes: {count})");
+        state_for_task.connect_signals.lock().await.remove(&sid);
+        let _ = state_for_task.pty_manager.remove_session(&sid);
+        {
+            let mut sessions = state_for_task.sessions.lock().await;
+            if let Some(s) = sessions.iter_mut().find(|s| s.id == sid) {
+                s.status = SessionStatus::Dead;
+            }
+        }
         let _ = app_handle.emit(
             "session-ended",
             serde_json::json!({ "session_id": sid }),
@@ -540,13 +585,7 @@ pub async fn spawn_shell_session(
 ) -> Result<SessionInfo, String> {
     let working_dir = validate_dir(&working_dir)?;
     let session_id = Uuid::new_v4().to_string();
-    let sessions = state.sessions.lock().await;
-    let pane_number = sessions.iter()
-        .filter(|s| s.workspace_id == workspace_id)
-        .map(|s| s.pane_number)
-        .max()
-        .unwrap_or(0) + 1;
-    drop(sessions);
+    let pane_number = 1;
 
     let shell = get_default_shell().await?;
     let git_branch = if WorktreeManager::is_git_repo(&working_dir) {
@@ -574,15 +613,25 @@ pub async fn spawn_shell_session(
     session.git_branch = git_branch;
     session.status = SessionStatus::Running;
 
+    {
+        let mut sessions = state.sessions.lock().await;
+        session.pane_number = sessions
+            .iter()
+            .filter(|s| s.workspace_id == session.workspace_id)
+            .map(|s| s.pane_number)
+            .max()
+            .unwrap_or(0) + 1;
+        sessions.push(session.clone());
+    }
     let _ = state.db.save_session(&session);
     let info = SessionInfo::from(&session);
-    state.sessions.lock().await.push(session);
 
     // Buffer PTY output until frontend connects its event listeners
     let (connect_tx, connect_rx) = tokio::sync::oneshot::channel::<()>();
     state.connect_signals.lock().await.insert(session_id.clone(), connect_tx);
 
     let app_handle = app.clone();
+    let state_for_task = state.inner().clone();
     let sid = session_id.clone();
     tokio::spawn(async move {
         // Wait for frontend to signal it's ready (or timeout after 5s as fallback)
@@ -599,6 +648,14 @@ pub async fn spawn_shell_session(
                     data,
                 },
             );
+        }
+        state_for_task.connect_signals.lock().await.remove(&sid);
+        let _ = state_for_task.pty_manager.remove_session(&sid);
+        {
+            let mut sessions = state_for_task.sessions.lock().await;
+            if let Some(s) = sessions.iter_mut().find(|s| s.id == sid) {
+                s.status = SessionStatus::Dead;
+            }
         }
         let _ = app_handle.emit(
             "session-ended",
@@ -632,21 +689,20 @@ pub async fn clone_repo(
     target_dir: Option<String>,
 ) -> Result<String, String> {
     // Validate URL - must look like a git URL
-    if !url.starts_with("https://") && !url.starts_with("http://") && !url.starts_with("git@") && !url.starts_with("ssh://") {
-        return Err("Invalid URL: must start with https://, http://, git@, or ssh://".to_string());
+    if !url.starts_with("https://") && !url.starts_with("git@") && !url.starts_with("ssh://") {
+        return Err("Invalid URL: must start with https://, git@, or ssh://".to_string());
     }
 
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let projects_dir = target_dir.unwrap_or_else(|| format!("{home}/Projects"));
 
-    // Validate projects_dir is under home or /tmp
-    if !projects_dir.starts_with(&home) && !projects_dir.starts_with("/tmp") {
-        return Err("Target directory must be under your home directory".to_string());
-    }
-
     // Create Projects dir if needed
     std::fs::create_dir_all(&projects_dir)
         .map_err(|e| format!("Failed to create directory: {e}"))?;
+    let projects_dir_path = Path::new(&projects_dir);
+    if !is_path_within_allowed_roots(projects_dir_path) {
+        return Err("Target directory must be under your home directory or /tmp".to_string());
+    }
 
     // Extract repo name from URL and sanitize
     let repo_name = url
@@ -1201,23 +1257,19 @@ pub struct GitBranchInfo {
 
 fn validate_dir(dir: &str) -> Result<String, String> {
     let expanded = expand_tilde(dir);
-    let path = std::path::Path::new(&expanded);
+    let path = Path::new(&expanded);
     if !path.is_dir() {
         return Err(format!("Directory does not exist: {expanded}"));
     }
     // Canonicalize to resolve symlinks and ".." components
     let canonical = path.canonicalize()
         .map_err(|e| format!("Invalid path: {e}"))?;
-    let canonical_str = canonical.to_str()
-        .ok_or_else(|| "Path contains invalid characters".to_string())?;
-
-    // Enforce that the resolved path is under the user's home directory or /tmp.
-    // This prevents operations on system directories like /etc, /var, etc.
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && !canonical_str.starts_with(&home) && !canonical_str.starts_with("/tmp") {
-        return Err("Access denied: path must be under your home directory".to_string());
+    if !is_path_within_allowed_roots(&canonical) {
+        return Err("Access denied: path must be under your home directory or /tmp".to_string());
     }
 
+    let canonical_str = canonical.to_str()
+        .ok_or_else(|| "Path contains invalid characters".to_string())?;
     Ok(canonical_str.to_string())
 }
 
@@ -2165,30 +2217,27 @@ pub async fn create_folder(parent_path: String, folder_name: String) -> Result<S
 // === MCP Manager Commands ===
 
 fn validate_mcp_config_path(config_path: &str) -> Result<(), String> {
-    let home = std::env::var("HOME").unwrap_or_default();
+    let expanded = expand_tilde(config_path);
+    let path = Path::new(&expanded);
 
     // Reject null bytes and path traversal early
-    if config_path.contains('\0') || config_path.contains("..") {
+    if expanded.contains('\0') || expanded.contains("..") {
         return Err("MCP config path must not contain path traversal".to_string());
     }
-    if !config_path.ends_with(".json") {
+    if !expanded.ends_with(".json") {
         return Err("MCP config path must be a .json file".to_string());
     }
 
-    // Config path must be under home dir (check before and after canonicalization)
-    if !config_path.starts_with(&home) {
-        return Err("MCP config path must be under home directory".to_string());
+    // Only allow known MCP config file names.
+    let file_name = path.file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Invalid MCP config filename".to_string())?;
+    if file_name != "mcp.json" && file_name != ".mcp.json" && file_name != ".claude.json" {
+        return Err("MCP config filename must be mcp.json, .mcp.json, or .claude.json".to_string());
     }
 
-    // If the file already exists, canonicalize and re-verify to block symlink escapes
-    let path = std::path::Path::new(config_path);
-    if path.exists() {
-        if let Ok(canonical) = path.canonicalize() {
-            let canonical_str = canonical.to_str().unwrap_or("");
-            if !canonical_str.starts_with(&home) {
-                return Err("MCP config path resolves outside home directory".to_string());
-            }
-        }
+    if !is_path_or_parent_within_allowed_roots(path) {
+        return Err("MCP config path must be under your home directory or /tmp".to_string());
     }
 
     Ok(())
@@ -2237,46 +2286,47 @@ pub struct McpServerEntry {
 /// without modifying string literals.
 fn strip_json_comments(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
+    let chars: Vec<char> = input.chars().collect();
+    let len = chars.len();
+    let mut i = 0usize;
     let mut in_string = false;
     let mut escape = false;
+
     while i < len {
         if escape {
-            result.push(bytes[i] as char);
+            result.push(chars[i]);
             escape = false;
             i += 1;
             continue;
         }
         if in_string {
-            if bytes[i] == b'\\' {
+            if chars[i] == '\\' {
                 escape = true;
-            } else if bytes[i] == b'"' {
+            } else if chars[i] == '"' {
                 in_string = false;
             }
-            result.push(bytes[i] as char);
+            result.push(chars[i]);
             i += 1;
             continue;
         }
-        if bytes[i] == b'"' {
+        if chars[i] == '"' {
             in_string = true;
             result.push('"');
             i += 1;
-        } else if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'/' {
-            while i < len && bytes[i] != b'\n' {
+        } else if i + 1 < len && chars[i] == '/' && chars[i + 1] == '/' {
+            while i < len && chars[i] != '\n' {
                 i += 1;
             }
-        } else if i + 1 < len && bytes[i] == b'/' && bytes[i + 1] == b'*' {
+        } else if i + 1 < len && chars[i] == '/' && chars[i + 1] == '*' {
             i += 2;
-            while i + 1 < len && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+            while i + 1 < len && !(chars[i] == '*' && chars[i + 1] == '/') {
                 i += 1;
             }
             if i + 1 < len {
                 i += 2;
             }
         } else {
-            result.push(bytes[i] as char);
+            result.push(chars[i]);
             i += 1;
         }
     }
@@ -2368,7 +2418,7 @@ pub async fn save_mcp_config(
     validate_mcp_config_path(&config_path)?;
 
     // Ensure parent directory exists
-    let path = std::path::Path::new(&config_path);
+    let path = Path::new(&config_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {e}"))?;
@@ -2377,7 +2427,8 @@ pub async fn save_mcp_config(
     // Preserve existing file structure if it exists
     let mut doc: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
         let cleaned = strip_json_comments(&content);
-        serde_json::from_str(&cleaned).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::from_str(&cleaned)
+            .map_err(|e| format!("Failed to parse existing config: {e}"))?
     } else {
         serde_json::json!({})
     };
@@ -2483,6 +2534,14 @@ pub async fn add_mcp_server(params: AddMcpServerParams) -> Result<(), String> {
 
     validate_mcp_config_path(&config_path)?;
 
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Server name cannot be empty".to_string());
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return Err("Server name contains invalid characters".to_string());
+    }
+
     // Must provide either command (stdio) or url (http)
     if command.is_none() && url.is_none() {
         return Err("Must provide either 'command' (stdio) or 'url' (http)".to_string());
@@ -2510,7 +2569,7 @@ pub async fn add_mcp_server(params: AddMcpServerParams) -> Result<(), String> {
         }
     }
 
-    let path = std::path::Path::new(&config_path);
+    let path = Path::new(&config_path);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create directory: {e}"))?;
@@ -2519,7 +2578,8 @@ pub async fn add_mcp_server(params: AddMcpServerParams) -> Result<(), String> {
     // Preserve existing file structure
     let mut doc: serde_json::Value = if let Ok(content) = std::fs::read_to_string(&config_path) {
         let cleaned = strip_json_comments(&content);
-        serde_json::from_str(&cleaned).unwrap_or_else(|_| serde_json::json!({}))
+        serde_json::from_str(&cleaned)
+            .map_err(|e| format!("Failed to parse existing config: {e}"))?
     } else {
         serde_json::json!({})
     };
@@ -2542,7 +2602,7 @@ pub async fn add_mcp_server(params: AddMcpServerParams) -> Result<(), String> {
         .or_insert_with(|| serde_json::json!({}));
     servers.as_object_mut()
         .ok_or("mcpServers is not an object")?
-        .insert(name, entry_value);
+        .insert(name.to_string(), entry_value);
 
     let json = serde_json::to_string_pretty(&doc)
         .map_err(|e| format!("Failed to serialize: {e}"))?;
@@ -2705,11 +2765,16 @@ pub async fn run_gh_auth_login() -> Result<String, String> {
         .map_err(|e| format!("Failed to run gh auth login: {e}"))?;
 
     if output.status.success() {
-        // Also run gh auth setup-git to wire up the git credential helper
-        let _ = std::process::Command::new(&gh_path)
+        // Require setup-git to succeed so we don't report a false-success state.
+        let setup = std::process::Command::new(&gh_path)
             .args(["auth", "setup-git"])
             .envs(&env)
-            .output();
+            .output()
+            .map_err(|e| format!("Failed to run gh auth setup-git: {e}"))?;
+        if !setup.status.success() {
+            let stderr = String::from_utf8_lossy(&setup.stderr).trim().to_string();
+            return Err(format!("GitHub login succeeded, but git credential setup failed: {stderr}"));
+        }
         Ok("Authentication successful".to_string())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -2775,7 +2840,7 @@ pub async fn start_github_device_flow(client_id: String) -> Result<DeviceFlowSta
     if !client_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         return Err("Invalid client_id: must be alphanumeric".to_string());
     }
-    let body_arg = format!("client_id={}&scope=repo%20read:user", client_id);
+    let body_arg = format!("client_id={}&scope=repo", client_id);
     let output = std::process::Command::new("curl")
         .args(["-s", "-X", "POST",
             "https://github.com/login/device/code",
@@ -2832,7 +2897,13 @@ pub async fn poll_github_token(client_id: String, device_code: String) -> Result
     let body = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = match serde_json::from_str(&body) {
         Ok(v) => v,
-        Err(_) => return Ok(TokenPollResult { token: None, pending: true, error: None }),
+        Err(_) => {
+            return Ok(TokenPollResult {
+                token: None,
+                pending: false,
+                error: Some("Invalid response while polling GitHub token".to_string()),
+            });
+        }
     };
     if let Some(token) = json.get("access_token").and_then(|v| v.as_str()) {
         if !token.is_empty() {
@@ -2844,7 +2915,14 @@ pub async fn poll_github_token(client_id: String, device_code: String) -> Result
         "authorization_pending" | "slow_down" => Ok(TokenPollResult { token: None, pending: true, error: None }),
         "expired_token" => Ok(TokenPollResult { token: None, pending: false, error: Some("Code expired. Please start again.".to_string()) }),
         "access_denied" => Ok(TokenPollResult { token: None, pending: false, error: Some("Access denied by user.".to_string()) }),
-        _ => Ok(TokenPollResult { token: None, pending: true, error: None }),
+        _ => {
+            let desc = json.get("error_description").and_then(|v| v.as_str()).unwrap_or("Unknown token polling error");
+            Ok(TokenPollResult {
+                token: None,
+                pending: false,
+                error: Some(desc.to_string()),
+            })
+        }
     }
 }
 
@@ -2857,32 +2935,47 @@ pub async fn save_github_token(token: String) -> Result<(), String> {
     if !token.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         return Err("Invalid token format".to_string());
     }
-    let home = std::env::var("HOME").map_err(|_| "HOME not set".to_string())?;
     let env = shell_env();
-    // Write to ~/.git-credentials
-    let creds_path = format!("{home}/.git-credentials");
-    let existing = std::fs::read_to_string(&creds_path).unwrap_or_default();
-    let filtered: String = existing
-        .lines()
-        .filter(|l| !l.contains("@github.com"))
-        .map(|l| format!("{l}\n"))
-        .collect();
-    let creds_entry = format!("https://oauth2:{token}@github.com\n");
-    let new_creds = format!("{filtered}{creds_entry}");
-    std::fs::write(&creds_path, &new_creds)
-        .map_err(|e| format!("Failed to write credentials: {e}"))?;
-    // Set permissions to 600
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&creds_path, std::fs::Permissions::from_mode(0o600));
-    }
-    // Set credential.helper=store globally
-    std::process::Command::new("git")
-        .args(["config", "--global", "credential.helper", "store"])
+
+    // For security, do not allow plaintext helper mode.
+    let helper_output = std::process::Command::new("git")
+        .args(["config", "--global", "--get-all", "credential.helper"])
         .envs(&env)
         .output()
-        .map_err(|e| format!("Failed to set credential helper: {e}"))?;
+        .map_err(|e| format!("Failed to check credential helper: {e}"))?;
+    let helper_text = String::from_utf8_lossy(&helper_output.stdout).to_lowercase();
+    if helper_text.lines().any(|h| h.trim() == "store" || h.contains("credential-store")) {
+        return Err("Insecure credential.helper=store detected. Please switch to your OS keychain helper or run `gh auth login`.".to_string());
+    }
+
+    // Store token through git's credential helper protocol instead of writing plaintext files.
+    let mut child = std::process::Command::new("git")
+        .args(["credential", "approve"])
+        .envs(&env)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to run git credential approve: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        let payload = format!(
+            "protocol=https\nhost=github.com\nusername=oauth2\npassword={token}\n\n"
+        );
+        stdin
+            .write_all(payload.as_bytes())
+            .map_err(|e| format!("Failed to write credential payload: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to finalize credential save: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!("Could not store credential via configured helper: {stderr}"));
+    }
+
     Ok(())
 }
 
@@ -2916,9 +3009,8 @@ pub async fn read_file_contents(file_path: String) -> Result<String, String> {
     let canonical_str = canonical.to_str()
         .ok_or_else(|| "Path contains invalid characters".to_string())?;
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    if !home.is_empty() && !canonical_str.starts_with(&home) && !canonical_str.starts_with("/tmp") {
-        return Err("File must be under home directory".to_string());
+    if !is_path_within_allowed_roots(&canonical) {
+        return Err("File must be under home directory or /tmp".to_string());
     }
 
     // Reject known binary extensions
@@ -2956,26 +3048,10 @@ pub async fn write_file_contents(file_path: String, content: String) -> Result<(
         return Err("Path traversal not allowed".to_string());
     }
 
-    let home = std::env::var("HOME").unwrap_or_default();
-    let target = std::path::Path::new(&file_path);
-
-    let allowed = if target.exists() {
-        let canonical = target.canonicalize()
-            .map_err(|e| format!("Invalid path: {e}"))?;
-        let canonical_str = canonical.to_str()
-            .ok_or_else(|| "Path contains invalid characters".to_string())?;
-        canonical_str.starts_with(&home) || canonical_str.starts_with("/tmp")
-    } else {
-        let parent = target.parent()
-            .ok_or_else(|| "File path must include a parent directory".to_string())?;
-        let parent_canonical = parent.canonicalize()
-            .map_err(|e| format!("Invalid parent path: {e}"))?;
-        let parent_str = parent_canonical.to_str()
-            .ok_or_else(|| "Parent path contains invalid characters".to_string())?;
-        parent_str.starts_with(&home) || parent_str.starts_with("/tmp")
-    };
+    let target = Path::new(&file_path);
+    let allowed = is_path_or_parent_within_allowed_roots(target);
     if !allowed {
-        return Err("File must be under home directory".to_string());
+        return Err("File must be under home directory or /tmp".to_string());
     }
 
     std::fs::write(target, content.as_bytes())
