@@ -30,6 +30,8 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
   const canvas = useLayoutStore((s) => s.canvas);
   const toggleLocked = useLayoutStore((s) => s.toggleLocked);
   const zoomToFit = useLayoutStore((s) => s.zoomToFit);
+  const autoLayout = useLayoutStore((s) => s.autoLayout);
+  const setCanvas = useLayoutStore((s) => s.setCanvas);
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
@@ -246,8 +248,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       } else if (L.mode === "drag" && L.dragEl) {
         const x = parseFloat(L.dragEl.style.left);
         const y = parseFloat(L.dragEl.style.top);
-        commitPaneLayout(L.dragId, x, y, L.resizeOrigW, L.resizeOrigH);
-        // Also commit using dragEl dimensions from layout
+        // Use current layout w/h (drag doesn't change size)
         const layout = useLayoutStore.getState().layouts.find((l) => l.i === L.dragId);
         if (layout) commitPaneLayout(L.dragId, x, y, layout.w, layout.h);
       } else if (L.mode === "resize" && L.resizeEl) {
@@ -328,6 +329,33 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     L.resizeEl = el;
     document.body.style.userSelect = "none";
   }, [maximizedPane]);
+
+  const handleAutoGrid = useCallback(() => {
+    const ids = visibleSessions.map((s) => s.id);
+    autoLayout(ids, width, canvasHeight);
+    // Reset zoom/pan to origin
+    setCanvas({ zoom: 1, panX: 0, panY: 0 });
+    live.current.zoom = 1;
+    live.current.panX = 0;
+    live.current.panY = 0;
+    applySurfaceTransform();
+    applyBgTransform();
+    updateZoomLabel();
+  }, [visibleSessions, width, canvasHeight, autoLayout, setCanvas]);
+
+  const handleFitAll = useCallback(() => {
+    zoomToFit(width, canvasHeight);
+    // Sync live ref from store after zoomToFit updates it
+    requestAnimationFrame(() => {
+      const c = useLayoutStore.getState().canvas;
+      live.current.zoom = c.zoom;
+      live.current.panX = c.panX;
+      live.current.panY = c.panY;
+      applySurfaceTransform();
+      applyBgTransform();
+      updateZoomLabel();
+    });
+  }, [width, canvasHeight, zoomToFit]);
 
   const zoomPercent = Math.round(canvas.zoom * 100);
 
@@ -425,24 +453,28 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          {/* Auto-grid: reset all panes to a clean tiled layout */}
           <button
-            onClick={() => toggleLocked()}
-            title={canvas.locked ? "Unlock canvas" : "Lock canvas"}
+            onClick={handleAutoGrid}
+            title="Auto-grid: tile all panes neatly and reset zoom/pan"
             style={{
-              background: canvas.locked ? "rgba(255, 140, 0, 0.2)" : "#1a1a1a",
-              border: `1px solid ${canvas.locked ? "#ff8c00" : "#2a2a2a"}`,
-              color: canvas.locked ? "#ff8c00" : "#555555",
-              padding: "3px 6px",
+              background: "#ff8c00",
+              border: "1px solid #ff8c00",
+              color: "#0a0a0a",
+              padding: "3px 8px",
               cursor: "pointer",
               fontFamily: MONO,
               fontSize: "10px",
+              fontWeight: "bold",
             }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = "#ffa040"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = "#ff8c00"; }}
           >
-            {canvas.locked ? "LOCKED" : "UNLOCKED"}
+            AUTO
           </button>
           <button
-            onClick={() => zoomToFit(width, canvasHeight)}
-            title="Zoom to fit all panes"
+            onClick={handleFitAll}
+            title="Zoom to fit all panes into view"
             style={{
               background: "#1a1a1a",
               border: "1px solid #2a2a2a",
@@ -456,6 +488,21 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
             onMouseLeave={(e) => { e.currentTarget.style.color = "#555555"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
           >
             FIT
+          </button>
+          <button
+            onClick={() => toggleLocked()}
+            title={canvas.locked ? "Unlock canvas" : "Lock canvas"}
+            style={{
+              background: canvas.locked ? "rgba(255, 140, 0, 0.2)" : "#1a1a1a",
+              border: `1px solid ${canvas.locked ? "#ff8c00" : "#2a2a2a"}`,
+              color: canvas.locked ? "#ff8c00" : "#555555",
+              padding: "3px 6px",
+              cursor: "pointer",
+              fontFamily: MONO,
+              fontSize: "10px",
+            }}
+          >
+            {canvas.locked ? "LOCKED" : "UNLCK"}
           </button>
           <span
             ref={zoomLabelRef}

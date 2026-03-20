@@ -135,15 +135,24 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const handlePreset = useCallback(
     (preset: PresetLayout) => {
       const ids = activeSessions.map((s) => s.id);
-      applyPreset(preset, ids);
+      // Use actual viewport size (subtract sidebar + topbar estimate)
+      const vw = window.innerWidth - 60;
+      const vh = window.innerHeight - 100;
+      applyPreset(preset, ids, vw, vh);
+      // Reset zoom/pan so panes are visible
+      setCanvas({ zoom: 1, panX: 0, panY: 0 });
     },
-    [activeSessions, applyPreset],
+    [activeSessions, applyPreset, setCanvas],
   );
 
   const handleAutoLayout = useCallback(() => {
     const ids = activeSessions.map((s) => s.id);
-    autoLayout(ids);
-  }, [activeSessions, autoLayout]);
+    const vw = window.innerWidth - 60;
+    const vh = window.innerHeight - 100;
+    autoLayout(ids, vw, vh);
+    // Reset zoom/pan so panes are visible
+    setCanvas({ zoom: 1, panX: 0, panY: 0 });
+  }, [activeSessions, autoLayout, setCanvas]);
 
   const handleRenameEnd = useCallback(
     async (id: string) => {
