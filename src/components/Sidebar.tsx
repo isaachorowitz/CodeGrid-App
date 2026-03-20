@@ -727,7 +727,7 @@ const GitPanel = memo(function GitPanel({
                   color: "#00c853", fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
                 }}>{badge}</span>
-                <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}
                 </span>
                 <button
@@ -764,7 +764,7 @@ const GitPanel = memo(function GitPanel({
                   color: badgeColor, fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
                 }}>{badge}</span>
-                <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}
                 </span>
                 <button
@@ -799,7 +799,7 @@ const GitPanel = memo(function GitPanel({
                   color: "#555555", fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
                 }}>?</span>
-                <span style={{ color: "#888888", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span style={{ color: "#888888", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}
                 </span>
                 <button
@@ -1146,7 +1146,7 @@ export const Sidebar = memo(function Sidebar() {
     gitStatus(dir).then(setWorkspaceGitStatus).catch(() => setWorkspaceGitStatus(null));
     const interval = setInterval(() => {
       gitStatus(dir).then(setWorkspaceGitStatus).catch(() => setWorkspaceGitStatus(null));
-    }, 15000);
+    }, 3000);
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally keying on the first session's dir
   }, [activeWorkspace?.repo_path, activeSessions[0]?.working_dir]);

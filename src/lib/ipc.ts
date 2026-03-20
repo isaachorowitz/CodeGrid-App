@@ -542,6 +542,16 @@ export async function quickSave(dir: string): Promise<QuickPublishResult> {
   return invoke("quick_save", { dir });
 }
 
+// === Env Allow Commands ===
+
+export async function getEnvAllowStatus(workingDir: string): Promise<boolean> {
+  return invoke<boolean>("get_env_allow_status", { workingDir });
+}
+
+export async function toggleEnvAllow(workingDir: string, enabled: boolean): Promise<void> {
+  return invoke<void>("toggle_env_allow", { workingDir, enabled });
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,

@@ -88,10 +88,25 @@ export function useTerminal(
       const webglAddon = new WebglAddon();
       webglAddon.onContextLoss(() => {
         webglAddon.dispose();
+        // Load canvas addon as fallback when WebGL context is lost
+        try {
+          import("@xterm/addon-canvas").then(({ CanvasAddon }) => {
+            if (!disposedRef.current) {
+              terminal.loadAddon(new CanvasAddon());
+            }
+          }).catch(() => {});
+        } catch {}
       });
       terminal.loadAddon(webglAddon);
     } catch {
-      // WebGL not available, canvas fallback is fine
+      // WebGL not available, try canvas addon as fallback
+      try {
+        import("@xterm/addon-canvas").then(({ CanvasAddon }) => {
+          if (!disposedRef.current) {
+            terminal.loadAddon(new CanvasAddon());
+          }
+        }).catch(() => {});
+      } catch {}
     }
 
     // Fit to container

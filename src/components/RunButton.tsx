@@ -24,7 +24,7 @@ export const RunButton = memo(function RunButton() {
       return;
     }
     const port = generateRandomPort();
-    const message = `Run this project. Use port ${port} for the dev server. If the project has a dev server script (like npm run dev, cargo run, etc.), use that. Make sure to use port ${port} specifically since other ports may be in use.`;
+    const message = `Run this application. Use port ${port} if it's a web app with a dev server. Detect the project type and use the appropriate run command: for web apps use the dev server script (npm run dev, yarn dev, etc.) on port ${port}; for desktop apps (Tauri, Electron) use the appropriate dev/run command; for mobile apps (React Native, Flutter) use the standard run command. Make sure to use port ${port} for any web server since other ports may be in use.`;
     try {
       await sendToSession(focusedSessionId, message);
       setRunningPort(port);
@@ -39,7 +39,7 @@ export const RunButton = memo(function RunButton() {
       <button
         onClick={handleRun}
         disabled={!focusedSessionId}
-        title="Run the project dev server on a random port"
+        title="Run the application (web, desktop, or mobile)"
         style={{
           background: focusedSessionId ? "#00c853" : "#1e1e1e",
           border: `1px solid ${focusedSessionId ? "#00c853" : "#2a2a2a"}`,
@@ -65,7 +65,7 @@ export const RunButton = memo(function RunButton() {
           }
         }}
       >
-        {"\u25B6"} RUN LOCALHOST
+        {"\u25B6"} RUN APP
       </button>
       {runningPort !== null && (
         <span

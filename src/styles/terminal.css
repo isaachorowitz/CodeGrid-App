@@ -92,20 +92,6 @@ html, body, #root {
   height: 100%;
 }
 
-/* react-grid-layout overrides */
-.codegrid-layout {
-  background: transparent;
-}
-
-.react-grid-item {
-  transition: none !important;
-}
-
-.react-grid-item.react-grid-placeholder {
-  background: rgba(255, 140, 0, 0.15) !important;
-  border: 1px dashed var(--text-accent) !important;
-  opacity: 1 !important;
-}
 
 .react-grid-item > .react-resizable-handle {
   background: none;

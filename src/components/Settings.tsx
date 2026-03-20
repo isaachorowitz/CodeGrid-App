@@ -1,26 +1,21 @@
 import React, { memo, useState, useEffect, useCallback } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useToastStore } from "../stores/toastStore";
-import { getSetting, setSetting, getClaudePath } from "../lib/ipc";
+import { getSetting, setSetting, getClaudePath, getEnvAllowStatus, toggleEnvAllow } from "../lib/ipc";
 
 export const Settings = memo(function Settings() {
   const { settingsOpen, setSettingsOpen, vibeMode, setVibeMode } = useWorkspaceStore();
   const addToast = useToastStore((s) => s.addToast);
-  const [fontSize, setFontSize] = useState("13");
-  const [fontFamily, setFontFamily] = useState("SF Mono");
   const [claudePath, setClaudePath] = useState("");
   const [maxSessions, setMaxSessions] = useState("20");
   const [autoWorktree, setAutoWorktree] = useState("true");
   const [tab, setTab] = useState<"general" | "terminal" | "shortcuts">("general");
+  const [envAllow, setEnvAllow] = useState(false);
 
   useEffect(() => {
     if (!settingsOpen) return;
     const load = async () => {
       try {
-        const fs = await getSetting("fontSize");
-        if (fs) setFontSize(fs);
-        const ff = await getSetting("fontFamily");
-        if (ff) setFontFamily(ff);
         const ms = await getSetting("maxSessions");
         if (ms) setMaxSessions(ms);
         const aw = await getSetting("autoWorktree");
@@ -29,6 +24,14 @@ export const Settings = memo(function Settings() {
         if (vm) setVibeMode(vm === "true");
         const cp = await getClaudePath();
         setClaudePath(cp);
+        // Load env allow status
+        const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === useWorkspaceStore.getState().activeWorkspaceId);
+        if (ws?.repo_path) {
+          try {
+            const status = await getEnvAllowStatus(ws.repo_path);
+            setEnvAllow(status);
+          } catch {}
+        }
       } catch (e) { console.warn("Failed to load settings:", e); }
     };
     load();
@@ -45,10 +48,20 @@ export const Settings = memo(function Settings() {
     }
   }, [vibeMode, setVibeMode]);
 
+  const handleEnvAllowToggle = useCallback(async () => {
+    const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === useWorkspaceStore.getState().activeWorkspaceId);
+    if (!ws?.repo_path) return;
+    const newVal = !envAllow;
+    setEnvAllow(newVal);
+    try {
+      await toggleEnvAllow(ws.repo_path, newVal);
+    } catch {
+      setEnvAllow(!newVal);
+    }
+  }, [envAllow]);
+
   const handleSave = useCallback(async () => {
     try {
-      await setSetting("fontSize", fontSize);
-      await setSetting("fontFamily", fontFamily);
       await setSetting("maxSessions", maxSessions);
       await setSetting("autoWorktree", autoWorktree);
       await setSetting("vibeMode", vibeMode ? "true" : "false");
@@ -56,7 +69,7 @@ export const Settings = memo(function Settings() {
     } catch {
       addToast("Failed to save settings", "error");
     }
-  }, [fontSize, fontFamily, maxSessions, autoWorktree, vibeMode, addToast]);
+  }, [maxSessions, autoWorktree, vibeMode, addToast]);
 
   if (!settingsOpen) return null;
 
@@ -157,16 +170,76 @@ export const Settings = memo(function Settings() {
                 </div>
               </div>
 
+              {/* .env Editing Toggle */}
+              {(() => {
+                const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === useWorkspaceStore.getState().activeWorkspaceId);
+                const hasRepo = !!ws?.repo_path;
+                return (
+                  <div
+                    onClick={hasRepo ? handleEnvAllowToggle : undefined}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      padding: "10px 14px",
+                      background: envAllow ? "rgba(255, 140, 0, 0.1)" : "#0a0a0a",
+                      border: envAllow ? "1px solid #ff8c00" : "1px solid #2a2a2a",
+                      cursor: hasRepo ? "pointer" : "not-allowed",
+                      transition: "all 0.2s ease",
+                      opacity: hasRepo ? 1 : 0.4,
+                    }}
+                  >
+                    <div>
+                      <div style={{
+                        color: envAllow ? "#ff8c00" : "#e0e0e0",
+                        fontSize: "11px",
+                        fontWeight: "bold",
+                        letterSpacing: "1.5px",
+                        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      }}>
+                        .ENV EDITING
+                      </div>
+                      <div style={{ color: "#888888", fontSize: "10px", marginTop: "3px", lineHeight: "1.4" }}>
+                        {hasRepo
+                          ? "Let Claude Code read and modify .env files in this workspace"
+                          : "Set a repo path on this workspace to enable"}
+                      </div>
+                    </div>
+                    <div style={{
+                      width: "36px",
+                      height: "18px",
+                      borderRadius: "9px",
+                      background: envAllow ? "#ff8c00" : "#333333",
+                      position: "relative",
+                      flexShrink: 0,
+                      marginLeft: "12px",
+                      transition: "background 0.2s ease",
+                    }}>
+                      <div style={{
+                        width: "14px",
+                        height: "14px",
+                        borderRadius: "50%",
+                        background: envAllow ? "#0a0a0a" : "#888888",
+                        position: "absolute",
+                        top: "2px",
+                        left: envAllow ? "20px" : "2px",
+                        transition: "left 0.2s ease, background 0.2s ease",
+                      }} />
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div>
                 <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>MAX SESSIONS</div>
                 <input value={maxSessions} onChange={(e) => setMaxSessions(e.target.value)} type="number" min="1" max="50"
                   style={{ width: "80px", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }} />
               </div>
               <div>
-                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>AUTO GIT WORKTREE</div>
+                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>ISOLATED SESSIONS</div>
                 <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#888888", fontSize: "11px", cursor: "pointer" }}>
                   <input type="checkbox" checked={autoWorktree === "true"} onChange={(e) => setAutoWorktree(e.target.checked ? "true" : "false")} style={{ accentColor: "#ff8c00" }} />
-                  Automatically create git worktrees for new sessions in the same repo
+                  Give each terminal its own isolated copy of your project so they can work on different things without conflicting
                 </label>
               </div>
               <div>
@@ -185,18 +258,12 @@ export const Settings = memo(function Settings() {
           {tab === "terminal" && (
             <>
               <div>
-                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>FONT SIZE</div>
-                <input value={fontSize} onChange={(e) => setFontSize(e.target.value)} type="number" min="8" max="24"
-                  style={{ width: "80px", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }} />
-              </div>
-              <div>
-                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>FONT FAMILY</div>
-                <input value={fontFamily} onChange={(e) => setFontFamily(e.target.value)}
-                  style={{ width: "100%", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }} />
-              </div>
-              <div>
                 <div style={{ color: "#888888", fontSize: "10px", marginBottom: "8px", letterSpacing: "0.5px" }}>THEME</div>
                 <div style={{ color: "#555555", fontSize: "11px" }}>Code Grid Dark (default)</div>
+              </div>
+              <div>
+                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>TERMINAL FONT</div>
+                <div style={{ color: "#555555", fontSize: "11px" }}>JetBrains Mono, 13px (fixed)</div>
               </div>
             </>
           )}

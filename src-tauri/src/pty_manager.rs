@@ -60,6 +60,7 @@ impl PtyManager {
         {
             cmd.env("TERM", "xterm-256color");
             cmd.env("COLORTERM", "truecolor");
+            cmd.env("FORCE_COLOR", "1");
             if let Ok(home) = std::env::var("HOME") {
                 cmd.env("HOME", &home);
             }

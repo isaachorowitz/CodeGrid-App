@@ -1111,43 +1111,61 @@ pub struct SkillInfo {
 #[tauri::command]
 pub async fn detect_claude_skills() -> Result<Vec<SkillInfo>, String> {
     let mut skills = vec![
+        // General
         SkillInfo { name: "/help".to_string(), description: "Get help with Claude Code".to_string(), category: "General".to_string() },
         SkillInfo { name: "/clear".to_string(), description: "Clear conversation history".to_string(), category: "General".to_string() },
         SkillInfo { name: "/compact".to_string(), description: "Compact conversation to save context".to_string(), category: "General".to_string() },
         SkillInfo { name: "/cost".to_string(), description: "Show token usage and costs".to_string(), category: "General".to_string() },
         SkillInfo { name: "/doctor".to_string(), description: "Check Claude Code health and config".to_string(), category: "General".to_string() },
-        SkillInfo { name: "/init".to_string(), description: "Initialize CLAUDE.md project file".to_string(), category: "Project".to_string() },
-        SkillInfo { name: "/review".to_string(), description: "Review code changes".to_string(), category: "Coding".to_string() },
-        SkillInfo { name: "/bug".to_string(), description: "Report or investigate a bug".to_string(), category: "Coding".to_string() },
         SkillInfo { name: "/config".to_string(), description: "Open or edit configuration".to_string(), category: "General".to_string() },
         SkillInfo { name: "/login".to_string(), description: "Log in to Anthropic".to_string(), category: "General".to_string() },
         SkillInfo { name: "/logout".to_string(), description: "Log out of current account".to_string(), category: "General".to_string() },
-        SkillInfo { name: "/model".to_string(), description: "Switch or display current model".to_string(), category: "Models".to_string() },
-        SkillInfo { name: "/permissions".to_string(), description: "View or modify tool permissions".to_string(), category: "General".to_string() },
         SkillInfo { name: "/status".to_string(), description: "Show session status and info".to_string(), category: "General".to_string() },
         SkillInfo { name: "/vim".to_string(), description: "Toggle vim keybindings".to_string(), category: "General".to_string() },
-        SkillInfo { name: "/memory".to_string(), description: "Save info to project memory".to_string(), category: "Project".to_string() },
+        SkillInfo { name: "/permissions".to_string(), description: "View or modify tool permissions".to_string(), category: "General".to_string() },
         SkillInfo { name: "/terminal-setup".to_string(), description: "Configure terminal integration".to_string(), category: "General".to_string() },
-        SkillInfo { name: "/pr-comments".to_string(), description: "Address PR review comments".to_string(), category: "Coding".to_string() },
         SkillInfo { name: "/mcp".to_string(), description: "Manage MCP server connections".to_string(), category: "General".to_string() },
+        // Project
+        SkillInfo { name: "/init".to_string(), description: "Initialize CLAUDE.md project file".to_string(), category: "Project".to_string() },
+        SkillInfo { name: "/memory".to_string(), description: "Save info to project memory".to_string(), category: "Project".to_string() },
+        SkillInfo { name: "/add-dir".to_string(), description: "Add a directory to context".to_string(), category: "Project".to_string() },
+        // Coding
+        SkillInfo { name: "/review".to_string(), description: "Review code changes".to_string(), category: "Coding".to_string() },
+        SkillInfo { name: "/bug".to_string(), description: "Report or investigate a bug".to_string(), category: "Coding".to_string() },
+        SkillInfo { name: "/pr-comments".to_string(), description: "Address PR review comments".to_string(), category: "Coding".to_string() },
+        SkillInfo { name: "/commit".to_string(), description: "Commit staged changes with a message".to_string(), category: "Coding".to_string() },
+        // Models
+        SkillInfo { name: "/model".to_string(), description: "Switch or display current model".to_string(), category: "Models".to_string() },
+        SkillInfo { name: "/fast".to_string(), description: "Toggle fast mode (faster output)".to_string(), category: "Models".to_string() },
     ];
 
-    // Detect custom skills
+    // Detect custom skills from ~/.claude/skills/ and ~/.claude/commands/
     let home = std::env::var("HOME").unwrap_or_default();
-    let config_path = format!("{home}/.claude/skills");
-    if let Ok(entries) = std::fs::read_dir(&config_path) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md" || e == "txt") {
-                let name = path.file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                skills.push(SkillInfo {
-                    name: format!("/{name}"),
-                    description: "Custom skill".to_string(),
-                    category: "Custom".to_string(),
-                });
+    for dir_name in &["skills", "commands"] {
+        let config_path = format!("{home}/.claude/{dir_name}");
+        if let Ok(entries) = std::fs::read_dir(&config_path) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "md" || e == "txt") {
+                    let name = path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    // Read first non-empty line as description
+                    let description = std::fs::read_to_string(&path)
+                        .ok()
+                        .and_then(|content| {
+                            content.lines()
+                                .find(|l| !l.trim().is_empty() && !l.starts_with('#') && !l.starts_with("---"))
+                                .map(|l| l.trim().chars().take(80).collect::<String>())
+                        })
+                        .unwrap_or_else(|| "Custom skill".to_string());
+                    skills.push(SkillInfo {
+                        name: format!("/{name}"),
+                        description,
+                        category: "Custom".to_string(),
+                    });
+                }
             }
         }
     }
@@ -3056,5 +3074,54 @@ pub async fn write_file_contents(file_path: String, content: String) -> Result<(
 
     std::fs::write(target, content.as_bytes())
         .map_err(|e| format!("Failed to write file: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_env_allow_status(working_dir: String) -> Result<bool, String> {
+    let settings_path = PathBuf::from(&working_dir).join(".claude").join("settings.local.json");
+    if !settings_path.exists() {
+        return Ok(false);
+    }
+    let content = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let allowed = json.get("permissions")
+        .and_then(|p| p.get("allow"))
+        .and_then(|a| a.as_array())
+        .map(|arr| arr.iter().any(|v| v.as_str() == Some("Edit:.env")))
+        .unwrap_or(false);
+    Ok(allowed)
+}
+
+#[tauri::command]
+pub async fn toggle_env_allow(working_dir: String, enabled: bool) -> Result<(), String> {
+    let claude_dir = PathBuf::from(&working_dir).join(".claude");
+    let settings_path = claude_dir.join("settings.local.json");
+
+    let mut json: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    let permissions = json.as_object_mut().ok_or("Invalid JSON")?
+        .entry("permissions").or_insert(serde_json::json!({}));
+    let allow = permissions.as_object_mut().ok_or("Invalid permissions")?
+        .entry("allow").or_insert(serde_json::json!([]));
+    let arr = allow.as_array_mut().ok_or("Invalid allow array")?;
+
+    let entry = serde_json::Value::String("Edit:.env".to_string());
+    if enabled {
+        if !arr.contains(&entry) {
+            arr.push(entry);
+        }
+    } else {
+        arr.retain(|v| v != &entry);
+    }
+
+    std::fs::create_dir_all(&claude_dir).map_err(|e| e.to_string())?;
+    let content = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
+    std::fs::write(&settings_path, content).map_err(|e| e.to_string())?;
     Ok(())
 }

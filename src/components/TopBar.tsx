@@ -1,7 +1,7 @@
 import { memo, useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { sanitizeLayouts, useLayoutStore, type PresetLayout } from "../stores/layoutStore";
+import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
 import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc, deleteWorkspace as deleteWorkspaceIpc } from "../lib/ipc";
@@ -40,6 +40,9 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const setSessionManualName = useSessionStore((s) => s.setSessionManualName);
   const applyPreset = useLayoutStore((s) => s.applyPreset);
   const autoLayout = useLayoutStore((s) => s.autoLayout);
+  const canvasState = useLayoutStore((s) => s.canvas);
+  const toggleLocked = useLayoutStore((s) => s.toggleLocked);
+  const zoomToFit = useLayoutStore((s) => s.zoomToFit);
   const addToast = useToastStore((s) => s.addToast);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
@@ -106,19 +109,28 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   }, [workspaces.length, addWorkspace, addToast]);
 
   const setLayouts = useLayoutStore((s) => s.setLayouts);
+  const setCanvas = useLayoutStore((s) => s.setCanvas);
 
   const handleSwitchWorkspace = useCallback(async (wsId: string) => {
     setActiveWorkspace(wsId);
 
     const targetWs = workspaces.find((w) => w.id === wsId);
     if (targetWs?.layout_json) {
-      try { setLayouts(sanitizeLayouts(JSON.parse(targetWs.layout_json))); } catch { setLayouts([]); }
+      try {
+        const parsed = JSON.parse(targetWs.layout_json);
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.layouts)) {
+          setLayouts(sanitizeLayouts(parsed.layouts));
+          if (parsed.canvas) setCanvas(sanitizeCanvasState(parsed.canvas));
+        } else {
+          setLayouts(sanitizeLayouts(parsed));
+        }
+      } catch { setLayouts([]); }
     } else {
       setLayouts([]);
     }
 
     try { await setActiveWorkspaceIpc(wsId); } catch (e) { console.warn("Failed to set active workspace:", e); }
-  }, [setActiveWorkspace, workspaces, setLayouts]);
+  }, [setActiveWorkspace, workspaces, setLayouts, setCanvas]);
 
   const handlePreset = useCallback(
     (preset: PresetLayout) => {
@@ -354,6 +366,50 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           AUTO
         </button>
 
+        {/* Lock toggle */}
+        <button
+          onClick={toggleLocked}
+          title={canvasState.locked ? "Unlock canvas (allow drag/resize)" : "Lock canvas (prevent drag/resize)"}
+          style={{
+            background: canvasState.locked ? "rgba(255, 140, 0, 0.2)" : "#1e1e1e",
+            border: `1px solid ${canvasState.locked ? "#ff8c00" : "#2a2a2a"}`,
+            color: canvasState.locked ? "#ff8c00" : "#555555",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+            padding: "2px 6px", marginRight: "2px",
+          }}
+        >
+          {canvasState.locked ? "LOCKED" : "UNLCK"}
+        </button>
+
+        {/* Zoom indicator */}
+        <div
+          style={{
+            background: "#1e1e1e",
+            border: "1px solid #2a2a2a",
+            color: "#666666",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+            padding: "2px 5px", marginRight: "2px",
+            minWidth: "30px", textAlign: "center",
+          }}
+        >
+          {Math.round(canvasState.zoom * 100)}%
+        </div>
+
+        {/* Fit All */}
+        <button
+          onClick={() => zoomToFit(window.innerWidth, window.innerHeight - 100)}
+          title="Zoom to fit all panes"
+          style={{
+            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
+            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+            padding: "2px 6px", marginRight: "2px", letterSpacing: "0.5px",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          FIT
+        </button>
+
         {/* Broadcast */}
         <button
           onClick={toggleBroadcast}
@@ -508,10 +564,18 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             );
           })}
 
-          {/* Add session button at end of tabs */}
+          {/* Quick add terminal button */}
           <button
-            onClick={() => setNewSessionDialogOpen(true)}
-            title="New Session (Cmd+N)"
+            onClick={() => {
+              const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+              const dir = ws?.repo_path ?? activeSessions[0]?.working_dir ?? "";
+              if (dir) {
+                window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "shell" } }));
+              } else {
+                setNewSessionDialogOpen(true);
+              }
+            }}
+            title="Quick add terminal in workspace directory"
             style={{
               background: "none", border: "none", color: "#333333",
               fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",

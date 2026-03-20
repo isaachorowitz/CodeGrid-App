@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
-import { Grid } from "./components/Grid";
+import { Canvas } from "./components/Canvas";
 import { TopBar } from "./components/TopBar";
 import { Sidebar, ACTIVITY_BAR_WIDTH } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
@@ -14,7 +14,7 @@ import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
 import { useSessionStore, MAX_TERMINALS_PER_WORKSPACE } from "./stores/sessionStore";
-import { sanitizeLayouts, useLayoutStore } from "./stores/layoutStore";
+import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useAppStore } from "./stores/appStore";
 import { useToastStore } from "./stores/toastStore";
@@ -45,7 +45,7 @@ export default function App() {
     removeSession,
     setFocusedSession,
   } = useSessionStore();
-  const { layouts, addPaneLayout, removePaneLayout, setLayouts } = useLayoutStore();
+  const { layouts, canvas, addPaneLayout, removePaneLayout, setLayouts, setCanvas } = useLayoutStore();
   const {
     workspaces,
     activeWorkspaceId,
@@ -86,7 +86,16 @@ export default function App() {
           const active = existing.find((w) => w.is_active) ?? existing[0];
           setActiveWorkspace(active.id);
           if (active.layout_json) {
-            try { setLayouts(sanitizeLayouts(JSON.parse(active.layout_json))); } catch (e) { console.warn("Failed to parse layout JSON:", e); setLayouts([]); }
+            try {
+              const parsed = JSON.parse(active.layout_json);
+              if (parsed && typeof parsed === "object" && Array.isArray(parsed.layouts)) {
+                setLayouts(sanitizeLayouts(parsed.layouts, dimensions.width, dimensions.height));
+                if (parsed.canvas) setCanvas(sanitizeCanvasState(parsed.canvas));
+              } else {
+                // Legacy format: just an array of layouts
+                setLayouts(sanitizeLayouts(parsed, dimensions.width, dimensions.height));
+              }
+            } catch (e) { console.warn("Failed to parse layout JSON:", e); setLayouts([]); }
           }
 
           // Restore persisted sessions (as dead) for ALL workspaces so switching
@@ -156,7 +165,7 @@ export default function App() {
   // Persist layout (including empty layouts so closing all sessions clears saved state)
   useEffect(() => {
     if (!activeWorkspaceId) return;
-    const layoutJson = JSON.stringify(layouts);
+    const layoutJson = JSON.stringify({ layouts, canvas });
     // Keep workspace store in sync so workspace switching can read current layout
     updateWorkspace(activeWorkspaceId, { layout_json: layoutJson });
     const timer = setTimeout(() => {
@@ -167,7 +176,7 @@ export default function App() {
       // Best-effort flush on workspace switch/unmount so we don't lose the latest drag/resize.
       saveLayoutIpc(activeWorkspaceId, layoutJson).catch(() => {});
     };
-  }, [layouts, activeWorkspaceId, updateWorkspace]);
+  }, [layouts, canvas, activeWorkspaceId, updateWorkspace]);
 
   // Broadcast input routing (only to sessions in the active workspace)
   useEffect(() => {
@@ -291,7 +300,6 @@ export default function App() {
         // Remove dead session
         try { await killSession(detail.sessionId); } catch { /* already dead */ }
         removeSession(detail.sessionId);
-        removePaneLayout(detail.sessionId);
 
         // Create new live session in the same workspace
         const session = detail.isShell
@@ -299,13 +307,15 @@ export default function App() {
           : await createSession(detail.workingDir, detail.workspaceId, false, detail.resume);
 
         addSession(session);
-        // Restore exact layout position instead of computing a new slot
+        // Swap the layout ID in-place to avoid layout shifts from remove+add
         if (oldLayout) {
-          useLayoutStore.getState().setLayouts([
-            ...useLayoutStore.getState().layouts,
-            { ...oldLayout, i: session.id },
-          ]);
+          useLayoutStore.getState().setLayouts(
+            useLayoutStore.getState().layouts.map((l) =>
+              l.i === detail.sessionId ? { ...l, i: session.id } : l,
+            ),
+          );
         } else {
+          removePaneLayout(detail.sessionId);
           addPaneLayout(session.id);
         }
         setFocusedSession(session.id);
@@ -331,9 +341,11 @@ export default function App() {
 
   const handleCloseSession = useCallback(
     async (sessionId: string) => {
-      try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
+      // Optimistically remove from UI first for instant feedback
       removeSession(sessionId);
       removePaneLayout(sessionId);
+      // Then kill the PTY in the background
+      try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
     },
     [removeSession, removePaneLayout],
   );
@@ -383,7 +395,7 @@ export default function App() {
               onCreateSession={handleCreateSession}
             />
           ) : (
-            <Grid width={gridWidth} height={gridHeight} onCloseSession={handleCloseSession} />
+            <Canvas width={gridWidth} height={gridHeight} onCloseSession={handleCloseSession} />
           )}
         </div>
       </div>

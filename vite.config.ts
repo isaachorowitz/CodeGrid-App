@@ -30,7 +30,6 @@ export default defineConfig(async () => ({
         manualChunks: {
           "vendor-react": ["react", "react-dom"],
           "vendor-xterm": ["@xterm/xterm", "@xterm/addon-fit", "@xterm/addon-webgl", "@xterm/addon-web-links"],
-          "vendor-grid": ["react-grid-layout"],
         },
       },
     },

@@ -10,9 +10,10 @@ import { vibeLabel } from "../lib/vibeMode";
 interface PaneProps {
   session: SessionWithModel;
   onClose: (sessionId: string) => void;
+  onDragStart?: (e: React.MouseEvent) => void;
 }
 
-export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
+export const Pane = memo(function Pane({ session, onClose, onDragStart }: PaneProps) {
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const setFocusedSession = useSessionStore((s) => s.setFocusedSession);
@@ -152,6 +153,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
       {/* Title bar */}
       <div
         className="drag-handle"
+        onMouseDown={onDragStart}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         style={{
@@ -213,6 +215,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
           {/* Minimize button */}
           <button
             onClick={handleMinimize}
+            onMouseDown={(e) => e.stopPropagation()}
             title="Minimize pane"
             aria-label={`Minimize pane ${session.pane_number}`}
             style={{
@@ -228,6 +231,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
           {/* Maximize/restore button */}
           <button
             onClick={(e) => { e.stopPropagation(); toggleMaximize(session.id); }}
+            onMouseDown={(e) => e.stopPropagation()}
             title={isMaximized ? "Restore pane" : "Maximize pane"}
             aria-label={isMaximized ? "Restore pane" : "Maximize pane"}
             style={{
@@ -243,6 +247,7 @@ export const Pane = memo(function Pane({ session, onClose }: PaneProps) {
           {/* Close button */}
           <button
             onClick={handleClose}
+            onMouseDown={(e) => e.stopPropagation()}
             title="Close pane (Cmd+W)"
             aria-label={`Close pane ${session.pane_number}`}
             style={{

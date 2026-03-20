@@ -523,7 +523,7 @@ export const CodeViewer = memo(function CodeViewer() {
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [wrapLines, setWrapLines] = useState(false);
-  const [panelWidth, setPanelWidth] = useState(920);
+  const [panelHeight, setPanelHeight] = useState(Math.floor(window.innerHeight * 0.7));
   const [isResizing, setIsResizing] = useState(false);
   const [scrollState, setScrollState] = useState({ top: 0, clientH: 0, scrollH: 0 });
   const [editorLocked, setEditorLocked] = useState(true);
@@ -531,7 +531,7 @@ export const CodeViewer = memo(function CodeViewer() {
   const [saving, setSaving] = useState(false);
 
   const contentRef = useRef<HTMLDivElement>(null);
-  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
 
   // Sync viewMode with diffMode from store.
   // Include codeViewerOpen so that re-opening the same file resets the mode.
@@ -650,17 +650,17 @@ export const CodeViewer = memo(function CodeViewer() {
     return () => window.removeEventListener("keydown", onKey);
   }, [codeViewerOpen, viewMode, editorLocked, handleApply]);
 
-  // Resize handling
+  // Resize handling (vertical, drag top edge)
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
-    resizeRef.current = { startX: e.clientX, startWidth: panelWidth };
+    resizeRef.current = { startY: e.clientY, startHeight: panelHeight };
 
     const handleMove = (me: MouseEvent) => {
       if (!resizeRef.current) return;
-      const delta = resizeRef.current.startX - me.clientX;
-      const newWidth = Math.max(520, Math.min(window.innerWidth * 0.95, resizeRef.current.startWidth + delta));
-      setPanelWidth(newWidth);
+      const delta = resizeRef.current.startY - me.clientY;
+      const newHeight = Math.max(200, Math.min(window.innerHeight * 0.95, resizeRef.current.startHeight + delta));
+      setPanelHeight(newHeight);
     };
 
     const handleUp = () => {
@@ -672,7 +672,7 @@ export const CodeViewer = memo(function CodeViewer() {
 
     document.addEventListener("mousemove", handleMove);
     document.addEventListener("mouseup", handleUp);
-  }, [panelWidth]);
+  }, [panelHeight]);
 
   // Tokenize all lines with multi-line state tracking
   const tokenizedLines = useMemo(() => {
@@ -709,38 +709,38 @@ export const CodeViewer = memo(function CodeViewer() {
     <div
       style={{
         position: "fixed",
-        top: 0,
+        left: 0,
         right: 0,
         bottom: 0,
-        width: `min(${panelWidth}px, 95vw)`,
+        height: `min(${panelHeight}px, 95vh)`,
         zIndex: 900,
         background: "#141414",
-        borderLeft: "1px solid #ff8c00",
+        borderTop: "1px solid #ff8c00",
         fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace",
         display: "flex",
         flexDirection: "column",
-        boxShadow: "-4px 0 20px rgba(0,0,0,0.5)",
-        animation: "slideInRight 0.15s ease-out",
+        boxShadow: "0 -4px 20px rgba(0,0,0,0.5)",
+        animation: "slideInBottom 0.15s ease-out",
       }}
     >
       {/* Inline animation keyframes */}
       <style>{`
-        @keyframes slideInRight {
-          from { transform: translateX(100%); }
-          to { transform: translateX(0); }
+        @keyframes slideInBottom {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
         }
       `}</style>
 
-      {/* Resize handle on left edge */}
+      {/* Resize handle on top edge */}
       <div
         onMouseDown={handleResizeStart}
         style={{
           position: "absolute",
-          top: 0,
-          left: -3,
-          bottom: 0,
-          width: "6px",
-          cursor: "col-resize",
+          top: -3,
+          left: 0,
+          right: 0,
+          height: "6px",
+          cursor: "row-resize",
           zIndex: 10,
           background: isResizing ? "rgba(255, 140, 0, 0.3)" : "transparent",
         }}

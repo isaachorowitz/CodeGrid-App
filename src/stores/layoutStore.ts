@@ -1,171 +1,249 @@
 import { create } from "zustand";
-import type { Layout } from "react-grid-layout";
+
+export interface CanvasLayout {
+  i: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export type PresetLayout = "1x1" | "2x2" | "3x3" | "1+2" | "1+3";
 
+const MIN_W = 200;
+const MIN_H = 150;
+const DEFAULT_W = 600;
+const DEFAULT_H = 400;
+const CASCADE_OFFSET = 30;
+
 /** Saved layout info for a minimized pane so we can restore it later */
 interface MinimizedPaneInfo {
-  layout: Layout;
+  layout: CanvasLayout;
+}
+
+interface CanvasState {
+  zoom: number;
+  panX: number;
+  panY: number;
+  locked: boolean;
 }
 
 interface LayoutState {
-  layouts: Layout[];
+  layouts: CanvasLayout[];
+  canvas: CanvasState;
   maximizedPane: string | null;
-  savedLayouts: Layout[];  // Store layouts before maximize
-  minimizedPanes: Record<string, MinimizedPaneInfo>;  // pane id -> saved info
+  savedLayouts: CanvasLayout[];
+  minimizedPanes: Record<string, MinimizedPaneInfo>;
 
-  setLayouts: (layouts: Layout[]) => void;
+  setLayouts: (layouts: CanvasLayout[]) => void;
   addPaneLayout: (sessionId: string) => void;
   removePaneLayout: (sessionId: string) => void;
-  applyPreset: (preset: PresetLayout, sessionIds: string[]) => void;
+  applyPreset: (preset: PresetLayout, sessionIds: string[], viewportW?: number, viewportH?: number) => void;
   toggleMaximize: (sessionId: string) => void;
   swapPanes: (id1: string, id2: string) => void;
   minimizePane: (sessionId: string) => void;
   restorePane: (sessionId: string) => void;
   isMinimized: (sessionId: string) => boolean;
-  autoLayout: (sessionIds: string[]) => void;
+  autoLayout: (sessionIds: string[], viewportW?: number, viewportH?: number) => void;
+
+  // Canvas actions
+  setZoom: (zoom: number) => void;
+  setPan: (panX: number, panY: number) => void;
+  toggleLocked: () => void;
+  setCanvas: (canvas: Partial<CanvasState>) => void;
+  zoomToFit: (viewportW: number, viewportH: number) => void;
+  updatePaneLayout: (id: string, update: Partial<CanvasLayout>) => void;
 }
 
-/** Clamp a layout item so it stays within the 12-col, 12-row grid */
-function clampLayout(l: Layout): Layout {
-  const w = Math.max(l.w, l.minW ?? 2);
-  const h = Math.max(l.h, l.minH ?? 2);
-  const x = Math.max(0, Math.min(l.x, 12 - w));
-  const y = Math.max(0, Math.min(l.y, 12 - h));
-  return { ...l, x, y, w, h };
+function enforceMinSize(l: CanvasLayout): CanvasLayout {
+  return {
+    ...l,
+    w: Math.max(l.w, MIN_W),
+    h: Math.max(l.h, MIN_H),
+  };
 }
 
 function toFiniteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
-export function sanitizeLayouts(raw: unknown): Layout[] {
+/** Detect old 12x12 grid format: all x/y/w/h values are in 0-12 range */
+function isOldGridFormat(layouts: unknown[]): boolean {
+  if (layouts.length === 0) return false;
+  return layouts.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    const obj = item as Record<string, unknown>;
+    const x = typeof obj.x === "number" ? obj.x : -1;
+    const y = typeof obj.y === "number" ? obj.y : -1;
+    const w = typeof obj.w === "number" ? obj.w : -1;
+    const h = typeof obj.h === "number" ? obj.h : -1;
+    return x >= 0 && x <= 12 && y >= 0 && y <= 12 && w >= 0 && w <= 12 && h >= 0 && h <= 12;
+  });
+}
+
+/** Migrate old 12-col grid layout to pixel coords */
+function migrateFromGrid(raw: Record<string, unknown>[], viewportW: number, viewportH: number): CanvasLayout[] {
+  const colW = viewportW / 12;
+  const rowH = viewportH / 12;
+  return raw.map((obj) => enforceMinSize({
+    i: String(obj.i),
+    x: toFiniteNumber(obj.x, 0) * colW,
+    y: toFiniteNumber(obj.y, 0) * rowH,
+    w: toFiniteNumber(obj.w, 4) * colW,
+    h: toFiniteNumber(obj.h, 4) * rowH,
+  }));
+}
+
+export function sanitizeLayouts(raw: unknown, viewportW = 1200, viewportH = 800): CanvasLayout[] {
   if (!Array.isArray(raw)) return [];
-  const out: Layout[] = [];
+  const out: CanvasLayout[] = [];
+
+  // Check if this is old grid format and needs migration
+  if (isOldGridFormat(raw)) {
+    return migrateFromGrid(raw as Record<string, unknown>[], viewportW, viewportH);
+  }
+
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     if (typeof obj.i !== "string" || obj.i.length === 0) continue;
-    const layout: Layout = {
+    const layout: CanvasLayout = enforceMinSize({
       i: obj.i,
       x: toFiniteNumber(obj.x, 0),
       y: toFiniteNumber(obj.y, 0),
-      w: toFiniteNumber(obj.w, 4),
-      h: toFiniteNumber(obj.h, 4),
-      minW: toFiniteNumber(obj.minW, 2),
-      minH: toFiniteNumber(obj.minH, 2),
-    };
-    out.push(clampLayout(layout));
+      w: toFiniteNumber(obj.w, DEFAULT_W),
+      h: toFiniteNumber(obj.h, DEFAULT_H),
+    });
+    out.push(layout);
   }
   return out;
 }
 
-function generatePresetLayout(preset: PresetLayout, sessionIds: string[]): Layout[] {
+export function sanitizeCanvasState(raw: unknown): CanvasState {
+  const defaults: CanvasState = { zoom: 1, panX: 0, panY: 0, locked: false };
+  if (!raw || typeof raw !== "object") return defaults;
+  const obj = raw as Record<string, unknown>;
+  return {
+    zoom: Math.max(0.1, Math.min(2.0, toFiniteNumber(obj.zoom, 1))),
+    panX: toFiniteNumber(obj.panX, 0),
+    panY: toFiniteNumber(obj.panY, 0),
+    locked: typeof obj.locked === "boolean" ? obj.locked : false,
+  };
+}
+
+function computeAutoLayout(sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
+  const n = sessionIds.length;
+  if (n === 0) return [];
+  const gap = 4;
+
+  if (n === 1) {
+    return [{ i: sessionIds[0], x: 0, y: 0, w: viewportW, h: viewportH }];
+  }
+
+  // Determine grid dimensions
+  let cols: number, rows: number;
+  if (n === 2) { cols = 2; rows = 1; }
+  else if (n === 3) { cols = 2; rows = 2; }
+  else if (n === 4) { cols = 2; rows = 2; }
+  else if (n <= 6) { cols = 3; rows = 2; }
+  else { cols = 3; rows = 3; }
+
+  const cellW = (viewportW - gap * (cols - 1)) / cols;
+  const cellH = (viewportH - gap * (rows - 1)) / rows;
+
+  return sessionIds.map((id, idx) => {
+    // Special case: 3 terminals - 2 on top, 1 full-width bottom
+    if (n === 3 && idx === 2) {
+      return enforceMinSize({
+        i: id,
+        x: 0,
+        y: cellH + gap,
+        w: viewportW,
+        h: cellH,
+      });
+    }
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    return enforceMinSize({
+      i: id,
+      x: col * (cellW + gap),
+      y: row * (cellH + gap),
+      w: cellW,
+      h: cellH,
+    });
+  });
+}
+
+function generatePresetLayout(preset: PresetLayout, sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
+  const gap = 4;
   switch (preset) {
     case "1x1":
       return sessionIds.slice(0, 1).map((id) => ({
-        i: id, x: 0, y: 0, w: 12, h: 12,
+        i: id, x: 0, y: 0, w: viewportW, h: viewportH,
       }));
-    case "2x2":
+    case "2x2": {
+      const hw = (viewportW - gap) / 2;
+      const hh = (viewportH - gap) / 2;
       return sessionIds.slice(0, 4).map((id, idx) => ({
         i: id,
-        x: (idx % 2) * 6,
-        y: Math.floor(idx / 2) * 6,
-        w: 6,
-        h: 6,
+        x: (idx % 2) * (hw + gap),
+        y: Math.floor(idx / 2) * (hh + gap),
+        w: hw,
+        h: hh,
       }));
-    case "3x3":
+    }
+    case "3x3": {
+      const tw = (viewportW - gap * 2) / 3;
+      const th = (viewportH - gap * 2) / 3;
       return sessionIds.slice(0, 9).map((id, idx) => ({
         i: id,
-        x: (idx % 3) * 4,
-        y: Math.floor(idx / 3) * 4,
-        w: 4,
-        h: 4,
+        x: (idx % 3) * (tw + gap),
+        y: Math.floor(idx / 3) * (th + gap),
+        w: tw,
+        h: th,
       }));
-    case "1+2":
+    }
+    case "1+2": {
+      const mainW = viewportW * 2 / 3 - gap / 2;
+      const sideW = viewportW / 3 - gap / 2;
+      const sideH = (viewportH - gap) / 2;
       return sessionIds.slice(0, 3).map((id, idx) => {
-        if (idx === 0) return { i: id, x: 0, y: 0, w: 8, h: 12 };
-        return { i: id, x: 8, y: (idx - 1) * 6, w: 4, h: 6 };
+        if (idx === 0) return { i: id, x: 0, y: 0, w: mainW, h: viewportH };
+        return { i: id, x: mainW + gap, y: (idx - 1) * (sideH + gap), w: sideW, h: sideH };
       });
-    case "1+3":
+    }
+    case "1+3": {
+      const topH = viewportH * 2 / 3 - gap / 2;
+      const botH = viewportH / 3 - gap / 2;
+      const botW = (viewportW - gap * 2) / 3;
       return sessionIds.slice(0, 4).map((id, idx) => {
-        if (idx === 0) return { i: id, x: 0, y: 0, w: 12, h: 8 };
-        return { i: id, x: (idx - 1) * 4, y: 8, w: 4, h: 4 };
+        if (idx === 0) return { i: id, x: 0, y: 0, w: viewportW, h: topH };
+        return { i: id, x: (idx - 1) * (botW + gap), y: topH + gap, w: botW, h: botH };
       });
+    }
     default:
       return [];
   }
 }
 
-/**
- * Compute an auto-layout grid for N visible panes.
- * - 1 terminal: full screen
- * - 2 terminals: side by side (50/50)
- * - 3 terminals: 2 on top, 1 full-width bottom
- * - 4 terminals: 2x2 grid
- * - 5-6 terminals: 2 rows of 3
- * - 7-9 terminals: 3x3 grid
- */
-function computeAutoLayout(sessionIds: string[]): Layout[] {
-  const n = sessionIds.length;
-  if (n === 0) return [];
-
-  if (n === 1) {
-    return [{ i: sessionIds[0], x: 0, y: 0, w: 12, h: 12, minW: 2, minH: 2 }];
-  }
-  if (n === 2) {
-    return sessionIds.map((id, idx) => ({
-      i: id, x: idx * 6, y: 0, w: 6, h: 12, minW: 2, minH: 2,
-    }));
-  }
-  if (n === 3) {
-    return [
-      { i: sessionIds[0], x: 0, y: 0, w: 6, h: 6, minW: 2, minH: 2 },
-      { i: sessionIds[1], x: 6, y: 0, w: 6, h: 6, minW: 2, minH: 2 },
-      { i: sessionIds[2], x: 0, y: 6, w: 12, h: 6, minW: 2, minH: 2 },
-    ];
-  }
-  if (n === 4) {
-    return sessionIds.map((id, idx) => ({
-      i: id, x: (idx % 2) * 6, y: Math.floor(idx / 2) * 6, w: 6, h: 6, minW: 2, minH: 2,
-    }));
-  }
-  if (n <= 6) {
-    return sessionIds.map((id, idx) => ({
-      i: id, x: (idx % 3) * 4, y: Math.floor(idx / 3) * 6, w: 4, h: 6, minW: 2, minH: 2,
-    }));
-  }
-  // 7-9: 3x3
-  return sessionIds.map((id, idx) => ({
-    i: id, x: (idx % 3) * 4, y: Math.floor(idx / 3) * 4, w: 4, h: 4, minW: 2, minH: 2,
-  }));
-}
-
 export const useLayoutStore = create<LayoutState>((set, get) => ({
   layouts: [],
+  canvas: { zoom: 1, panX: 0, panY: 0, locked: false },
   maximizedPane: null,
   savedLayouts: [],
   minimizedPanes: {},
 
-  setLayouts: (layouts) => set({ layouts: layouts.map(clampLayout) }),
+  setLayouts: (layouts) => set({ layouts: layouts.map(enforceMinSize) }),
 
   addPaneLayout: (sessionId) =>
     set((state) => {
-      // Count only non-minimized layouts for placement
-      const visibleCount = state.layouts.filter(
-        (l) => !state.minimizedPanes[l.i],
-      ).length;
-      const cols = visibleCount < 4 ? 2 : 3;
-      const w = Math.floor(12 / cols);
-      const h = 6;
-      const x = (visibleCount % cols) * w;
-      const y = Math.floor(visibleCount / cols) * h;
-
-      const newLayout = clampLayout({ i: sessionId, x, y, w, h, minW: 2, minH: 2 });
-
-      return {
-        layouts: [...state.layouts, newLayout],
-      };
+      // Cascade from last visible pane
+      const visible = state.layouts.filter((l) => !state.minimizedPanes[l.i]);
+      const last = visible[visible.length - 1];
+      const x = last ? last.x + CASCADE_OFFSET : 0;
+      const y = last ? last.y + CASCADE_OFFSET : 0;
+      const newLayout = enforceMinSize({ i: sessionId, x, y, w: DEFAULT_W, h: DEFAULT_H });
+      return { layouts: [...state.layouts, newLayout] };
     }),
 
   removePaneLayout: (sessionId) =>
@@ -174,37 +252,29 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       delete newMinimized[sessionId];
       return {
         layouts: state.layouts.filter((l) => l.i !== sessionId),
-        maximizedPane:
-          state.maximizedPane === sessionId ? null : state.maximizedPane,
+        maximizedPane: state.maximizedPane === sessionId ? null : state.maximizedPane,
         minimizedPanes: newMinimized,
       };
     }),
 
-  applyPreset: (preset, sessionIds) =>
+  applyPreset: (preset, sessionIds, viewportW = 1200, viewportH = 800) =>
     set({
-      layouts: generatePresetLayout(preset, sessionIds),
+      layouts: generatePresetLayout(preset, sessionIds, viewportW, viewportH),
       maximizedPane: null,
     }),
 
   toggleMaximize: (sessionId) =>
     set((state) => {
       if (state.maximizedPane === sessionId) {
-        // Restore
         return {
           maximizedPane: null,
           layouts: state.savedLayouts.length > 0 ? state.savedLayouts : state.layouts,
           savedLayouts: [],
         };
       }
-      // Maximize
       return {
         maximizedPane: sessionId,
         savedLayouts: state.layouts,
-        layouts: state.layouts.map((l) =>
-          l.i === sessionId
-            ? { ...l, x: 0, y: 0, w: 12, h: 12 }
-            : { ...l, w: 0, h: 0 },
-        ),
       };
     }),
 
@@ -213,7 +283,6 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       const l1 = state.layouts.find((l) => l.i === id1);
       const l2 = state.layouts.find((l) => l.i === id2);
       if (!l1 || !l2) return state;
-
       return {
         layouts: state.layouts.map((l) => {
           if (l.i === id1) return { ...l, x: l2.x, y: l2.y, w: l2.w, h: l2.h };
@@ -226,18 +295,14 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   minimizePane: (sessionId) =>
     set((state) => {
       const existing = state.layouts.find((l) => l.i === sessionId);
-      if (!existing) return state;
-      // Already minimized?
-      if (state.minimizedPanes[sessionId]) return state;
+      if (!existing || state.minimizedPanes[sessionId]) return state;
       return {
         minimizedPanes: {
           ...state.minimizedPanes,
           [sessionId]: { layout: { ...existing } },
         },
-        // Remove from grid layouts so the pane is no longer rendered in the grid
         layouts: state.layouts.filter((l) => l.i !== sessionId),
-        maximizedPane:
-          state.maximizedPane === sessionId ? null : state.maximizedPane,
+        maximizedPane: state.maximizedPane === sessionId ? null : state.maximizedPane,
       };
     }),
 
@@ -249,20 +314,67 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       delete newMinimized[sessionId];
       return {
         minimizedPanes: newMinimized,
-        layouts: [...state.layouts, clampLayout(info.layout)],
+        layouts: [...state.layouts, enforceMinSize(info.layout)],
       };
     }),
 
   isMinimized: (sessionId) => !!get().minimizedPanes[sessionId],
 
-  autoLayout: (sessionIds) =>
+  autoLayout: (sessionIds, viewportW = 1200, viewportH = 800) =>
     set((state) => {
-      // Only layout non-minimized panes; keep minimized panes minimized
       const visibleIds = sessionIds.filter((id) => !state.minimizedPanes[id]);
-      const autoLayouts = computeAutoLayout(visibleIds);
       return {
-        layouts: autoLayouts,
+        layouts: computeAutoLayout(visibleIds, viewportW, viewportH),
         maximizedPane: null,
       };
     }),
+
+  // Canvas actions
+  setZoom: (zoom) => set((state) => ({
+    canvas: { ...state.canvas, zoom: Math.max(0.1, Math.min(2.0, zoom)) },
+  })),
+
+  setPan: (panX, panY) => set((state) => ({
+    canvas: { ...state.canvas, panX, panY },
+  })),
+
+  toggleLocked: () => set((state) => ({
+    canvas: { ...state.canvas, locked: !state.canvas.locked },
+  })),
+
+  setCanvas: (partial) => set((state) => ({
+    canvas: { ...state.canvas, ...partial },
+  })),
+
+  zoomToFit: (viewportW, viewportH) =>
+    set((state) => {
+      const visible = state.layouts.filter((l) => !state.minimizedPanes[l.i]);
+      if (visible.length === 0) return state;
+
+      const minX = Math.min(...visible.map((l) => l.x));
+      const minY = Math.min(...visible.map((l) => l.y));
+      const maxX = Math.max(...visible.map((l) => l.x + l.w));
+      const maxY = Math.max(...visible.map((l) => l.y + l.h));
+
+      const contentW = maxX - minX;
+      const contentH = maxY - minY;
+      if (contentW === 0 || contentH === 0) return state;
+
+      const padding = 40;
+      const zoom = Math.max(0.1, Math.min(2.0,
+        Math.min((viewportW - padding * 2) / contentW, (viewportH - padding * 2) / contentH)
+      ));
+
+      const panX = (viewportW / zoom - contentW) / 2 - minX;
+      const panY = (viewportH / zoom - contentH) / 2 - minY;
+
+      return { canvas: { ...state.canvas, zoom, panX, panY } };
+    }),
+
+  updatePaneLayout: (id, update) =>
+    set((state) => ({
+      layouts: state.layouts.map((l) =>
+        l.i === id ? enforceMinSize({ ...l, ...update }) : l
+      ),
+    })),
 }));

@@ -111,6 +111,8 @@ pub fn run() {
             // Quick publish / save
             commands::quick_publish,
             commands::quick_save,
+            commands::get_env_allow_status,
+            commands::toggle_env_allow,
         ])
         // Hide window on close (red X) instead of quitting so PTY sessions
         // stay alive. Cmd+Q / File→Quit still exits normally.
