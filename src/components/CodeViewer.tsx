@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useAppStore } from "../stores/appStore";
-import { readFileContents, gitDiffFile, writeFileContents } from "../lib/ipc";
+import { readFileContents, gitDiffFile, writeFileContents, gitStageHunk } from "../lib/ipc";
 
 // ─── VS Code Dark+ Inspired Color Scheme ───
 const COLORS = {
@@ -529,6 +529,8 @@ export const CodeViewer = memo(function CodeViewer() {
   const [editorLocked, setEditorLocked] = useState(true);
   const [editBuffer, setEditBuffer] = useState("");
   const [saving, setSaving] = useState(false);
+  const [stagingHunk, setStagingHunk] = useState<string | null>(null);
+  const [stageSuccess, setStageSuccess] = useState<string | null>(null);
 
   const contentRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
@@ -583,6 +585,29 @@ export const CodeViewer = memo(function CodeViewer() {
     }
     setDiffLoading(false);
   }, [codeViewerFile, codeViewerWorkingDir]);
+
+  const handleStageHunk = useCallback(async (hunkHeader: string, filePath: string) => {
+    if (!codeViewerWorkingDir || stagingHunk) return;
+    setStagingHunk(hunkHeader);
+    setStageSuccess(null);
+    try {
+      let relativePath = filePath || codeViewerFile || "";
+      if (codeViewerWorkingDir && relativePath.startsWith(codeViewerWorkingDir)) {
+        relativePath = relativePath.slice(codeViewerWorkingDir.length);
+        if (relativePath.startsWith("/")) relativePath = relativePath.slice(1);
+      }
+      await gitStageHunk(codeViewerWorkingDir, relativePath, hunkHeader);
+      setStageSuccess(hunkHeader);
+      setTimeout(() => {
+        fetchDiff();
+        setStageSuccess(null);
+      }, 1000);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setStagingHunk(null);
+    }
+  }, [codeViewerWorkingDir, codeViewerFile, stagingHunk, fetchDiff]);
 
   useEffect(() => {
     if (codeViewerOpen && codeViewerFile) {
@@ -1062,9 +1087,31 @@ export const CodeViewer = memo(function CodeViewer() {
                     fontSize: "10px",
                     borderTop: hi > 0 ? "1px solid #2a2a2a" : "none",
                     borderBottom: "1px solid #2a2a2a",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
                   }}
                 >
-                  {hunk.header}
+                  <span>{hunk.header}</span>
+                  <button
+                    onClick={() => handleStageHunk(hunk.header, codeViewerFile ?? "")}
+                    disabled={stagingHunk !== null}
+                    style={{
+                      background: stageSuccess === hunk.header ? "#00c853" : "#1e1e1e",
+                      border: "1px solid #4a9eff66",
+                      color: stageSuccess === hunk.header ? "#fff" : "#4a9eff",
+                      fontSize: "8px",
+                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      padding: "2px 8px",
+                      cursor: stagingHunk ? "default" : "pointer",
+                      fontWeight: "bold",
+                      letterSpacing: "0.5px",
+                      flexShrink: 0,
+                      marginLeft: "8px",
+                    }}
+                  >
+                    {stagingHunk === hunk.header ? "STAGING..." : stageSuccess === hunk.header ? "STAGED" : "STAGE HUNK"}
+                  </button>
                 </div>
                 {/* Lines */}
                 {hunk.lines.filter(l => l.type !== "hunk-header").map((line, li) => {

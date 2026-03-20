@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback, memo } from "react";
+import { useRef, useEffect, useCallback, useState, memo } from "react";
 import { useTerminal } from "../hooks/useTerminal";
 import { usePty } from "../hooks/usePty";
 import { useSessionStore } from "../stores/sessionStore";
@@ -30,6 +30,10 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const addToast = useToastStore((s) => s.addToast);
 
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
   // Use refs to avoid stale closures in callbacks that reference each other
   const ptyControlsRef = useRef<{ write: (data: string) => void; resize: (cols: number, rows: number) => void }>({
     write: () => {},
@@ -56,7 +60,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     [broadcastMode],
   );
 
-  const { write, fit, focus } = useTerminal(containerRef, {
+  const { write, fit, focus, searchAddon } = useTerminal(containerRef, {
     onData: handleData,
     onResize: handleResize,
   });
@@ -173,6 +177,42 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     return () => clearTimeout(timer);
   }, [fit]);
 
+  const handleSearchNext = useCallback(() => {
+    if (searchAddon.current && searchTerm) {
+      searchAddon.current.findNext(searchTerm);
+    }
+  }, [searchTerm, searchAddon]);
+
+  const handleSearchPrev = useCallback(() => {
+    if (searchAddon.current && searchTerm) {
+      searchAddon.current.findPrevious(searchTerm);
+    }
+  }, [searchTerm, searchAddon]);
+
+  // Auto-search on term change
+  useEffect(() => {
+    if (searchAddon.current && searchTerm) {
+      searchAddon.current.findNext(searchTerm);
+    }
+  }, [searchTerm, searchAddon]);
+
+  // Intercept Cmd+F / Ctrl+F
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSearchOpen(true);
+        setTimeout(() => searchInputRef.current?.focus(), 50);
+      }
+    };
+    const el = containerRef.current;
+    if (el) {
+      el.addEventListener("keydown", handler, true);
+      return () => el.removeEventListener("keydown", handler, true);
+    }
+  }, [containerRef]);
+
   return (
     <div
       ref={containerRef}
@@ -182,7 +222,58 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
         width: "100%",
         height: "100%",
         overflow: "hidden",
+        position: "relative",
       }}
-    />
+    >
+      {searchOpen && (
+        <div style={{
+          position: "absolute", top: 4, right: 16, zIndex: 10,
+          display: "flex", gap: "4px", alignItems: "center",
+          background: "#1e1e1e", border: "1px solid #ff8c00",
+          padding: "4px 8px",
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+        }}>
+          <input
+            ref={searchInputRef}
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.shiftKey ? handleSearchPrev() : handleSearchNext();
+              }
+              if (e.key === "Escape") {
+                setSearchOpen(false);
+                setSearchTerm("");
+                searchAddon.current?.clearDecorations();
+                focus();
+              }
+            }}
+            placeholder="Find..."
+            style={{
+              background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
+              fontSize: "11px", padding: "3px 6px", outline: "none", width: "160px",
+              fontFamily: "'JetBrains Mono', 'SF Mono', monospace",
+            }}
+          />
+          <button onClick={handleSearchPrev} style={{
+            background: "none", border: "1px solid #2a2a2a", color: "#888", fontSize: "10px",
+            cursor: "pointer", padding: "2px 6px", fontFamily: "monospace",
+          }}>↑</button>
+          <button onClick={handleSearchNext} style={{
+            background: "none", border: "1px solid #2a2a2a", color: "#888", fontSize: "10px",
+            cursor: "pointer", padding: "2px 6px", fontFamily: "monospace",
+          }}>↓</button>
+          <button onClick={() => {
+            setSearchOpen(false);
+            setSearchTerm("");
+            searchAddon.current?.clearDecorations();
+            focus();
+          }} style={{
+            background: "none", border: "none", color: "#555", fontSize: "12px",
+            cursor: "pointer", padding: "0 4px", fontFamily: "monospace",
+          }}>×</button>
+        </div>
+      )}
+    </div>
   );
 });

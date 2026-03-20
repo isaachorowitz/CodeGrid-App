@@ -10,6 +10,7 @@ import {
   type GitStatusInfo, type GitBranchInfo, type GitLogEntry,
 } from "../lib/ipc";
 import { FileTree } from "./FileTree";
+import { ProjectSearch } from "./ProjectSearch";
 import { vibeLabel, vibeDescription } from "../lib/vibeMode";
 
 // ---------------------------------------------------------------------------
@@ -18,6 +19,7 @@ import { vibeLabel, vibeDescription } from "../lib/vibeMode";
 
 const ACTIVITY_ITEMS: { id: ActivityPanel; label: string; icon: string }[] = [
   { id: "files",    label: "Files",    icon: "\u2630" },
+  { id: "search",   label: "Search",   icon: "\u2315" },
   { id: "git",      label: "Git",      icon: "\u2387" },
   { id: "hub",      label: "Hub",      icon: "\u2302" },
   { id: "mcp",      label: "MCP",      icon: "\u2699" },
@@ -1233,6 +1235,7 @@ export const Sidebar = memo(function Sidebar() {
           }}>
             <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "10px", letterSpacing: "1px" }}>
               {activePanel === "files" ? "FILES" :
+               activePanel === "search" ? "SEARCH" :
                activePanel === "git" ? vibeLabel("SOURCE CONTROL", vibeMode) :
                activePanel === "hub" ? "GITHUB HUB" :
                activePanel === "mcp" ? `${vibeLabel("MCP", vibeMode)} SERVERS` :
@@ -1247,6 +1250,14 @@ export const Sidebar = memo(function Sidebar() {
         {/* Panel body */}
         {showPanel && activePanel === "files" && (
           <FilesPanel fileTreeDir={fileTreeDir} gitChangesMap={gitChangesMap} />
+        )}
+        {showPanel && activePanel === "search" && fileTreeDir && (
+          <ProjectSearch rootPath={fileTreeDir} />
+        )}
+        {showPanel && activePanel === "search" && !fileTreeDir && (
+          <div style={{ padding: "16px 12px", color: "#555555", fontSize: "10px" }}>
+            Open a session to search files.
+          </div>
         )}
         {showPanel && activePanel === "git" && (
           <GitPanel

@@ -21,6 +21,8 @@ export function useKeyboardNav() {
     setNewSessionDialogOpen,
     toggleSidebar,
     setSettingsOpen,
+    setActivePanel,
+    setSidebarOpen,
   } = useWorkspaceStore();
 
   const findAdjacentPane = useCallback(
@@ -75,7 +77,7 @@ export function useKeyboardNav() {
       // Don't intercept when typing in an input/dialog
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") {
-        if (action !== "command-palette") return;
+        if (action !== "command-palette" && action !== "project-search") return;
       }
 
       e.preventDefault();
@@ -139,6 +141,10 @@ export function useKeyboardNav() {
         case "settings":
           setSettingsOpen(true);
           break;
+        case "project-search":
+          setSidebarOpen(true);
+          setActivePanel("search");
+          break;
         case "new-workspace":
           window.dispatchEvent(new CustomEvent("codegrid:new-workspace"));
           break;
@@ -195,6 +201,8 @@ export function useKeyboardNav() {
     setCommandPaletteOpen,
     toggleSidebar,
     setSettingsOpen,
+    setActivePanel,
+    setSidebarOpen,
     toggleBroadcast,
     swapPanes,
     toggleMaximize,

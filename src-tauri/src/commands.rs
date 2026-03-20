@@ -3125,3 +3125,341 @@ pub async fn toggle_env_allow(working_dir: String, enabled: bool) -> Result<(), 
     std::fs::write(&settings_path, content).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// File operations
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn rename_file(old_path: String, new_name: String) -> Result<String, String> {
+    if old_path.contains('\0') || new_name.contains('\0') || new_name.contains('/') || new_name.contains('\\') {
+        return Err("Invalid characters in path or name".to_string());
+    }
+    if new_name.trim().is_empty() || new_name == "." || new_name == ".." {
+        return Err("Invalid file name".to_string());
+    }
+    let source = Path::new(&old_path);
+    if !source.exists() {
+        return Err("Source file does not exist".to_string());
+    }
+    if !is_path_within_allowed_roots(source) {
+        return Err("File must be under home directory or /tmp".to_string());
+    }
+    let parent = source.parent().ok_or("Cannot determine parent directory")?;
+    let dest = parent.join(new_name.trim());
+    if dest.exists() {
+        return Err("A file with that name already exists".to_string());
+    }
+    std::fs::rename(source, &dest).map_err(|e| format!("Rename failed: {e}"))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn delete_file(file_path: String) -> Result<(), String> {
+    if file_path.contains('\0') {
+        return Err("Invalid path".to_string());
+    }
+    let target = Path::new(&file_path);
+    if !target.exists() {
+        return Err("File does not exist".to_string());
+    }
+    if !is_path_within_allowed_roots(target) {
+        return Err("File must be under home directory or /tmp".to_string());
+    }
+    if target.is_dir() {
+        std::fs::remove_dir_all(target).map_err(|e| format!("Delete failed: {e}"))?;
+    } else {
+        std::fs::remove_file(target).map_err(|e| format!("Delete failed: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn move_file(source_path: String, dest_dir: String) -> Result<String, String> {
+    if source_path.contains('\0') || dest_dir.contains('\0') {
+        return Err("Invalid path".to_string());
+    }
+    let source = Path::new(&source_path);
+    let dest_parent = Path::new(&dest_dir);
+    if !source.exists() {
+        return Err("Source does not exist".to_string());
+    }
+    if !dest_parent.is_dir() {
+        return Err("Destination is not a directory".to_string());
+    }
+    if !is_path_within_allowed_roots(source) || !is_path_within_allowed_roots(dest_parent) {
+        return Err("Paths must be under home directory or /tmp".to_string());
+    }
+    let file_name = source.file_name().ok_or("Cannot determine file name")?;
+    let dest = dest_parent.join(file_name);
+    if dest.exists() {
+        return Err("A file with that name already exists at the destination".to_string());
+    }
+    std::fs::rename(source, &dest).map_err(|e| format!("Move failed: {e}"))?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub async fn copy_file(source_path: String, dest_dir: String) -> Result<String, String> {
+    if source_path.contains('\0') || dest_dir.contains('\0') {
+        return Err("Invalid path".to_string());
+    }
+    let source = Path::new(&source_path);
+    let dest_parent = Path::new(&dest_dir);
+    if !source.exists() {
+        return Err("Source does not exist".to_string());
+    }
+    if !dest_parent.is_dir() {
+        return Err("Destination is not a directory".to_string());
+    }
+    if !is_path_within_allowed_roots(source) || !is_path_within_allowed_roots(dest_parent) {
+        return Err("Paths must be under home directory or /tmp".to_string());
+    }
+    let file_name = source.file_name().ok_or("Cannot determine file name")?;
+    let dest = dest_parent.join(file_name);
+    if dest.exists() {
+        return Err("A file with that name already exists at the destination".to_string());
+    }
+    if source.is_dir() {
+        copy_dir_recursive(source, &dest)?;
+    } else {
+        std::fs::copy(source, &dest).map_err(|e| format!("Copy failed: {e}"))?;
+    }
+    Ok(dest.to_string_lossy().to_string())
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dst).map_err(|e| format!("Failed to create directory: {e}"))?;
+    for entry in std::fs::read_dir(src).map_err(|e| format!("Failed to read directory: {e}"))? {
+        let entry = entry.map_err(|e| format!("Failed to read entry: {e}"))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path).map_err(|e| format!("Failed to copy file: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Project-wide search
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Clone)]
+pub struct SearchResult {
+    pub file_path: String,
+    pub line_number: u32,
+    pub line_content: String,
+    pub match_start: u32,
+    pub match_end: u32,
+}
+
+#[tauri::command]
+pub async fn search_files(
+    working_dir: String,
+    query: String,
+    case_sensitive: Option<bool>,
+    use_regex: Option<bool>,
+    max_results: Option<u32>,
+) -> Result<Vec<SearchResult>, String> {
+    use walkdir::WalkDir;
+
+    let dir = validate_dir(&working_dir)?;
+    let case_sensitive = case_sensitive.unwrap_or(false);
+    let _use_regex = use_regex.unwrap_or(false);
+    let max = max_results.unwrap_or(500) as usize;
+    let gitignore_patterns = collect_gitignore_patterns(&dir);
+
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query_lower = if case_sensitive { query.clone() } else { query.to_lowercase() };
+
+    // Binary file extensions to skip
+    let binary_exts: std::collections::HashSet<&str> = [
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "svg",
+        "woff", "woff2", "ttf", "otf", "eot",
+        "zip", "tar", "gz", "bz2", "xz", "7z", "rar",
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "exe", "dll", "so", "dylib", "o", "a",
+        "mp3", "mp4", "avi", "mov", "wav", "flac", "ogg",
+        "sqlite", "db", "wasm",
+    ].iter().copied().collect();
+
+    let skip_dirs: std::collections::HashSet<&str> = [
+        "node_modules", ".git", "target", "dist", "build", ".next",
+        "__pycache__", ".venv", "venv", ".tox", "vendor",
+        ".DS_Store", ".worktrees",
+    ].iter().copied().collect();
+
+    let mut results = Vec::new();
+
+    for entry in WalkDir::new(&dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            if e.file_type().is_dir() {
+                return !skip_dirs.contains(name.as_ref());
+            }
+            true
+        })
+    {
+        if results.len() >= max {
+            break;
+        }
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+
+        // Skip binary extensions
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if binary_exts.contains(ext.to_lowercase().as_str()) {
+                continue;
+            }
+        }
+
+        // Skip gitignored files (basic check)
+        let rel = path.strip_prefix(&dir).unwrap_or(path);
+        let rel_str = rel.to_string_lossy();
+        let is_ignored = gitignore_patterns.iter().any(|p| {
+            let p_trimmed = p.trim_start_matches('/');
+            rel_str.starts_with(p_trimmed) || rel_str.contains(&format!("/{}", p_trimmed))
+        });
+        if is_ignored {
+            continue;
+        }
+
+        // Read file
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue, // skip binary or unreadable files
+        };
+
+        for (line_idx, line) in content.lines().enumerate() {
+            if results.len() >= max {
+                break;
+            }
+            let (found, start, end) = if case_sensitive {
+                match line.find(&query) {
+                    Some(pos) => (true, pos, pos + query.len()),
+                    None => (false, 0, 0),
+                }
+            } else {
+                match line.to_lowercase().find(&query_lower) {
+                    Some(pos) => (true, pos, pos + query.len()),
+                    None => (false, 0, 0),
+                }
+            };
+            if found {
+                results.push(SearchResult {
+                    file_path: path.to_string_lossy().to_string(),
+                    line_number: (line_idx + 1) as u32,
+                    line_content: if line.len() > 500 { line[..500].to_string() } else { line.to_string() },
+                    match_start: start as u32,
+                    match_end: end as u32,
+                });
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
+// Git hunk staging
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn git_stage_hunk(working_dir: String, file_path: String, hunk_header: String) -> Result<(), String> {
+    let dir = validate_dir(&working_dir)?;
+
+    // Get the full diff for this file
+    let diff_output = std::process::Command::new("git")
+        .args(["diff", &file_path])
+        .current_dir(&dir)
+        .output()
+        .map_err(|e| format!("Failed to run git diff: {e}"))?;
+
+    let full_diff = String::from_utf8_lossy(&diff_output.stdout).to_string();
+
+    // Extract the file header and the target hunk
+    let mut patch = String::new();
+    let mut in_target_hunk = false;
+    let mut found_file_header = false;
+
+    for line in full_diff.lines() {
+        if line.starts_with("diff --git") {
+            if found_file_header && in_target_hunk {
+                break; // We've collected our hunk, stop
+            }
+            patch.push_str(line);
+            patch.push('\n');
+            found_file_header = true;
+            in_target_hunk = false;
+            continue;
+        }
+        if !found_file_header {
+            continue;
+        }
+        // Collect file-level headers (---, +++, index)
+        if line.starts_with("---") || line.starts_with("+++") || line.starts_with("index ") {
+            if !in_target_hunk {
+                patch.push_str(line);
+                patch.push('\n');
+            }
+            continue;
+        }
+        if line.starts_with("@@") {
+            in_target_hunk = line.contains(&hunk_header) || line == hunk_header;
+            if in_target_hunk {
+                patch.push_str(line);
+                patch.push('\n');
+            }
+            continue;
+        }
+        if in_target_hunk {
+            // Lines belonging to the target hunk
+            if line.starts_with('+') || line.starts_with('-') || line.starts_with(' ') || line == "\\ No newline at end of file" {
+                patch.push_str(line);
+                patch.push('\n');
+            }
+        }
+    }
+
+    if patch.is_empty() || !in_target_hunk {
+        return Err("Could not find the specified hunk in the diff".to_string());
+    }
+
+    // Apply the patch to the index
+    let mut child = std::process::Command::new("git")
+        .args(["apply", "--cached", "--unidiff-zero", "-"])
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to start git apply: {e}"))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin.write_all(patch.as_bytes()).map_err(|e| format!("Failed to write patch: {e}"))?;
+    }
+
+    let output = child.wait_with_output().map_err(|e| format!("Failed to wait for git apply: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to stage hunk: {stderr}"));
+    }
+
+    Ok(())
+}

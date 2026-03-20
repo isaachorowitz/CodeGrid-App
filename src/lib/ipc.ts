@@ -552,6 +552,56 @@ export async function toggleEnvAllow(workingDir: string, enabled: boolean): Prom
   return invoke<void>("toggle_env_allow", { workingDir, enabled });
 }
 
+// === File Operations ===
+
+export async function renameFile(oldPath: string, newName: string): Promise<string> {
+  return invoke("rename_file", { oldPath, newName });
+}
+
+export async function deleteFile(filePath: string): Promise<void> {
+  return invoke("delete_file", { filePath });
+}
+
+export async function moveFile(sourcePath: string, destDir: string): Promise<string> {
+  return invoke("move_file", { sourcePath, destDir });
+}
+
+export async function copyFile(sourcePath: string, destDir: string): Promise<string> {
+  return invoke("copy_file", { sourcePath, destDir });
+}
+
+// === Project Search ===
+
+export interface SearchResult {
+  file_path: string;
+  line_number: number;
+  line_content: string;
+  match_start: number;
+  match_end: number;
+}
+
+export async function searchFiles(
+  workingDir: string,
+  query: string,
+  caseSensitive?: boolean,
+  useRegex?: boolean,
+  maxResults?: number,
+): Promise<SearchResult[]> {
+  return invoke("search_files", {
+    workingDir,
+    query,
+    caseSensitive: caseSensitive ?? false,
+    useRegex: useRegex ?? false,
+    maxResults: maxResults ?? 500,
+  });
+}
+
+// === Git Hunk Staging ===
+
+export async function gitStageHunk(workingDir: string, filePath: string, hunkHeader: string): Promise<void> {
+  return invoke("git_stage_hunk", { workingDir, filePath, hunkHeader });
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,

@@ -93,6 +93,15 @@ pub fn run() {
             // File tree
             commands::list_directory,
             commands::create_folder,
+            // File operations
+            commands::rename_file,
+            commands::delete_file,
+            commands::move_file,
+            commands::copy_file,
+            // Project search
+            commands::search_files,
+            // Git hunk staging
+            commands::git_stage_hunk,
             // Git setup wizard
             commands::check_git_setup,
             commands::set_git_config,

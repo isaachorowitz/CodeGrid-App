@@ -24,6 +24,7 @@ which = "7"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 log = "0.4"
+walkdir = "2"
 
 [profile.release]
 opt-level = 3

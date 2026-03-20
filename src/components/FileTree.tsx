@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { createFolder, listDirectory, type FileEntry } from "../lib/ipc";
+import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 
 // File extension to color mapping for visual hints
@@ -54,6 +54,208 @@ const GIT_STATUS_COLORS: Record<string, string> = {
   "?": "#555555",
 };
 
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  entry: FileEntry;
+  rootPath: string;
+  onClose: () => void;
+  onRefresh: () => void;
+}
+
+const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, onRefresh }: ContextMenuProps) {
+  const [action, setAction] = useState<"rename" | "move" | "copy" | "delete" | null>(null);
+  const [inputValue, setInputValue] = useState(entry.name);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest("[data-context-menu]")) {
+        onClose();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  useEffect(() => {
+    if (action === "rename") {
+      setInputValue(entry.name);
+      setTimeout(() => {
+        inputRef.current?.focus();
+        // Select name without extension
+        const dotIdx = entry.name.lastIndexOf(".");
+        inputRef.current?.setSelectionRange(0, dotIdx > 0 && !entry.is_dir ? dotIdx : entry.name.length);
+      }, 50);
+    } else if (action === "move" || action === "copy") {
+      const parent = entry.path.substring(0, entry.path.lastIndexOf("/"));
+      setInputValue(parent);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [action, entry]);
+
+  const handleRename = async () => {
+    if (!inputValue.trim() || inputValue === entry.name) { onClose(); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      await renameFile(entry.path, inputValue.trim());
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const handleDelete = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await deleteFile(entry.path);
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const handleMove = async () => {
+    if (!inputValue.trim()) { onClose(); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      await moveFile(entry.path, inputValue.trim());
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const handleCopy = async () => {
+    if (!inputValue.trim()) { onClose(); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      await copyFile(entry.path, inputValue.trim());
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const handleDuplicate = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const parent = entry.path.substring(0, entry.path.lastIndexOf("/"));
+      await copyFile(entry.path, parent);
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const MONO = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
+
+  const menuItemStyle = (hovered: boolean): React.CSSProperties => ({
+    padding: "5px 12px",
+    fontSize: "11px",
+    color: hovered ? "#ff8c00" : "#e0e0e0",
+    background: hovered ? "#1e1e1e" : "transparent",
+    cursor: "pointer",
+    fontFamily: MONO,
+    border: "none",
+    width: "100%",
+    textAlign: "left",
+    display: "block",
+  });
+
+  if (action === "rename") {
+    return (
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "200px" }}>
+        <div style={{ fontSize: "9px", color: "#ff8c00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>RENAME</div>
+        <input ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handleRename(); if (e.key === "Escape") onClose(); }}
+          style={{ width: "100%", boxSizing: "border-box", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", padding: "4px 6px", fontFamily: MONO, outline: "none" }}
+        />
+        {error && <div style={{ color: "#ff3d00", fontSize: "9px", marginTop: "4px" }}>{error}</div>}
+        <div style={{ display: "flex", gap: "4px", marginTop: "6px", justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "none", border: "1px solid #2a2a2a", color: "#888", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO }}>Cancel</button>
+          <button onClick={handleRename} disabled={loading} style={{ background: "#ff8c00", border: "none", color: "#0a0a0a", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO, fontWeight: "bold" }}>
+            {loading ? "..." : "Rename"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (action === "delete") {
+    return (
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff3d00", padding: "8px", minWidth: "200px" }}>
+        <div style={{ fontSize: "9px", color: "#ff3d00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>DELETE</div>
+        <div style={{ color: "#e0e0e0", fontSize: "11px", fontFamily: MONO, marginBottom: "8px" }}>
+          Delete <span style={{ color: "#ff8c00" }}>{entry.name}</span>?{entry.is_dir ? " (and all contents)" : ""}
+        </div>
+        {error && <div style={{ color: "#ff3d00", fontSize: "9px", marginBottom: "4px" }}>{error}</div>}
+        <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "none", border: "1px solid #2a2a2a", color: "#888", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO }}>Cancel</button>
+          <button onClick={handleDelete} disabled={loading} style={{ background: "#ff3d00", border: "none", color: "#fff", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO, fontWeight: "bold" }}>
+            {loading ? "..." : "Delete"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (action === "move" || action === "copy") {
+    const isMove = action === "move";
+    return (
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "250px" }}>
+        <div style={{ fontSize: "9px", color: "#ff8c00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>{isMove ? "MOVE TO" : "COPY TO"}</div>
+        <input ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") isMove ? handleMove() : handleCopy(); if (e.key === "Escape") onClose(); }}
+          placeholder="Destination directory..."
+          style={{ width: "100%", boxSizing: "border-box", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", padding: "4px 6px", fontFamily: MONO, outline: "none" }}
+        />
+        {error && <div style={{ color: "#ff3d00", fontSize: "9px", marginTop: "4px" }}>{error}</div>}
+        <div style={{ display: "flex", gap: "4px", marginTop: "6px", justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "none", border: "1px solid #2a2a2a", color: "#888", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO }}>Cancel</button>
+          <button onClick={isMove ? handleMove : handleCopy} disabled={loading} style={{ background: "#ff8c00", border: "none", color: "#0a0a0a", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO, fontWeight: "bold" }}>
+            {loading ? "..." : isMove ? "Move" : "Copy"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Default: show menu items
+  return (
+    <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #2a2a2a", minWidth: "140px", padding: "4px 0" }}>
+      {[
+        { label: "Rename", action: "rename" as const },
+        { label: "Delete", action: "delete" as const },
+        { label: "Move to...", action: "move" as const },
+        { label: "Copy to...", action: "copy" as const },
+      ].map((item) => {
+        const [hovered, setHovered] = useState(false);
+        return (
+          <div
+            key={item.label}
+            onClick={() => setAction(item.action)}
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
+            style={menuItemStyle(hovered)}
+          >
+            {item.label}
+          </div>
+        );
+      })}
+    </div>
+  );
+});
+
 interface FileTreeNodeProps {
   entry: FileEntry;
   depth: number;
@@ -61,6 +263,7 @@ interface FileTreeNodeProps {
   gitChanges: Map<string, string>;
   onFileClick: (path: string) => void;
   selectedPath: string | null;
+  onContextMenu: (entry: FileEntry, x: number, y: number) => void;
 }
 
 const FileTreeNode = memo(function FileTreeNode({
@@ -70,6 +273,7 @@ const FileTreeNode = memo(function FileTreeNode({
   gitChanges,
   onFileClick,
   selectedPath,
+  onContextMenu,
 }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(depth < 1);
   const [children, setChildren] = useState<FileEntry[] | null>(
@@ -131,6 +335,11 @@ const FileTreeNode = memo(function FileTreeNode({
     <div>
       <div
         onClick={handleToggle}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onContextMenu(entry, e.clientX, e.clientY);
+        }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
@@ -211,6 +420,7 @@ const FileTreeNode = memo(function FileTreeNode({
               gitChanges={gitChanges}
               onFileClick={onFileClick}
               selectedPath={selectedPath}
+              onContextMenu={onContextMenu}
             />
           ))}
           {children.length === 0 && (
@@ -251,6 +461,7 @@ export const FileTree = memo(function FileTree({
   const [newFolderName, setNewFolderName] = useState("");
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const showPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -466,6 +677,7 @@ export const FileTree = memo(function FileTree({
             gitChanges={gitChanges}
             onFileClick={handleFileClick}
             selectedPath={selectedPath}
+            onContextMenu={(entry: FileEntry, x: number, y: number) => setContextMenu({ x, y, entry })}
           />
         ))}
         {entries.length === 0 && !loading && (
@@ -501,6 +713,17 @@ export const FileTree = memo(function FileTree({
         >
           <span style={{ unicodeBidi: "plaintext" }}>{selectedPath}</span>
         </div>
+      )}
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          entry={contextMenu.entry}
+          rootPath={rootPath}
+          onClose={() => setContextMenu(null)}
+          onRefresh={loadTree}
+        />
       )}
     </div>
   );

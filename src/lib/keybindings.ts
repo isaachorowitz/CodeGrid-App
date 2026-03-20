@@ -35,6 +35,7 @@ export const KEYBINDINGS: Keybinding[] = [
   { key: "7", meta: true, action: "focus-pane-7", label: "Focus Pane 7" },
   { key: "8", meta: true, action: "focus-pane-8", label: "Focus Pane 8" },
   { key: "9", meta: true, action: "focus-pane-9", label: "Focus Pane 9" },
+  { key: "F", meta: true, shift: true, action: "project-search", label: "Search in Files" },
 ];
 
 export function matchKeybinding(e: KeyboardEvent): string | null {

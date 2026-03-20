@@ -3,6 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { SearchAddon } from "@xterm/addon-search";
 import { CODEGRID_DARK } from "../lib/themes";
 
 interface UseTerminalOptions {
@@ -18,6 +19,7 @@ export function useTerminal(
 ) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const searchAddonRef = useRef<SearchAddon | null>(null);
   const disposedRef = useRef(false);
   // Use refs for callbacks to avoid recreating terminal on callback changes
   const onDataRef = useRef(options.onData);
@@ -80,6 +82,10 @@ export function useTerminal(
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(new WebLinksAddon());
+
+    const searchAddon = new SearchAddon();
+    terminal.loadAddon(searchAddon);
+    searchAddonRef.current = searchAddon;
 
     terminal.open(container);
 
@@ -155,8 +161,9 @@ export function useTerminal(
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      searchAddonRef.current = null;
     };
   }, [containerRef]);
 
-  return { write, fit, focus, clear, terminal: terminalRef };
+  return { write, fit, focus, clear, terminal: terminalRef, searchAddon: searchAddonRef };
 }
