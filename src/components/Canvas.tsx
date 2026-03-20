@@ -13,6 +13,7 @@ interface CanvasProps {
 }
 
 const MONO = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
+const ZOOMED_OUT_LABEL_THRESHOLD = 0.35;
 
 // ── Perf-critical: all pan/drag/resize runs via refs + direct DOM mutation.
 //    Zustand is only written on mouseup (commit), so React never re-renders mid-gesture.
@@ -80,10 +81,8 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(canvas.zoom * 100)}%`;
   }, [canvas.zoom, canvas.panX, canvas.panY, canvas.locked]);
 
-  // Reserve space for minimized pane bar
   const hasMinimized = Object.keys(minimizedPanes).length > 0;
-  const minimizedBarHeight = hasMinimized ? 34 : 0;
-  const canvasHeight = height - minimizedBarHeight;
+  const canvasHeight = height;
 
   const minimizedSessions = useMemo(() => {
     const minIds = new Set(Object.keys(minimizedPanes));
@@ -211,6 +210,50 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     window.addEventListener("keyup", up);
     return () => { window.removeEventListener("keydown", down); window.removeEventListener("keyup", up); };
   }, []);
+
+  // ── External zoom-to-pane command (from top terminal tabs) ──
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ sessionId?: string }>).detail;
+      const sessionId = detail?.sessionId;
+      if (!sessionId) return;
+
+      const store = useLayoutStore.getState();
+      if (store.maximizedPane) {
+        // Exit maximize mode so canvas zoom/pan can target any pane.
+        store.toggleMaximize(store.maximizedPane);
+      }
+      if (store.isMinimized(sessionId)) {
+        store.restorePane(sessionId);
+      }
+
+      const next = useLayoutStore.getState();
+      const layout = next.layouts.find((l) => l.i === sessionId);
+      if (!layout) return;
+
+      const padding = 24;
+      const zoomX = (width - padding * 2) / layout.w;
+      const zoomY = (canvasHeight - padding * 2) / layout.h;
+      const zoom = Math.max(0.1, Math.min(2.0, Math.min(zoomX, zoomY)));
+      const centerX = layout.x + layout.w / 2;
+      const centerY = layout.y + layout.h / 2;
+      const panX = width / (2 * zoom) - centerX;
+      const panY = canvasHeight / (2 * zoom) - centerY;
+
+      next.setCanvas({ zoom, panX, panY });
+
+      // Apply immediately for snappy feedback (store sync effect will keep it in sync).
+      live.current.zoom = zoom;
+      live.current.panX = panX;
+      live.current.panY = panY;
+      applySurfaceTransform();
+      applyBgTransform();
+      updateZoomLabel();
+    };
+
+    window.addEventListener("codegrid:zoom-to-session", handler);
+    return () => window.removeEventListener("codegrid:zoom-to-session", handler);
+  }, [width, canvasHeight]);
 
   // ── Global mousemove / mouseup (native, on window for capture outside viewport) ──
   useEffect(() => {
@@ -454,7 +497,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
                 style={{ ...paneStyle, overflow: "hidden", willChange: "left, top, width, height" }}
               >
                 {/* Zoomed-out label overlay */}
-                {canvas.zoom < 0.5 && !maximizedPane && (
+                {canvas.zoom < ZOOMED_OUT_LABEL_THRESHOLD && !maximizedPane && (
                   <ZoomedOutLabel session={session} zoom={canvas.zoom} />
                 )}
 
@@ -477,11 +520,11 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         <div
           style={{
             position: "absolute",
-            bottom: 8,
+            bottom: hasMinimized ? 44 : 8,
             right: 8,
             display: "flex",
             gap: "2px",
-            zIndex: 100,
+            zIndex: 120,
             fontFamily: MONO,
             fontSize: "10px",
           }}
@@ -559,7 +602,20 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
 
       {/* Minimized panes dock */}
       {minimizedSessions.length > 0 && (
-        <MinimizedPaneBar sessions={minimizedSessions} onCloseSession={onCloseSession} />
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 110,
+            pointerEvents: "none",
+          }}
+        >
+          <div style={{ pointerEvents: "auto" }}>
+            <MinimizedPaneBar sessions={minimizedSessions} onCloseSession={onCloseSession} />
+          </div>
+        </div>
       )}
     </div>
   );

@@ -2,6 +2,7 @@ import React, { memo, useState, useEffect, useCallback } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useToastStore } from "../stores/toastStore";
 import { getSetting, setSetting, getClaudePath, getEnvAllowStatus, toggleEnvAllow } from "../lib/ipc";
+import { useLicenseStore } from "../stores/licenseStore";
 
 export const Settings = memo(function Settings() {
   const { settingsOpen, setSettingsOpen, vibeMode, setVibeMode } = useWorkspaceStore();
@@ -9,8 +10,14 @@ export const Settings = memo(function Settings() {
   const [claudePath, setClaudePath] = useState("");
   const [maxSessions, setMaxSessions] = useState("20");
   const [autoWorktree, setAutoWorktree] = useState("true");
-  const [tab, setTab] = useState<"general" | "terminal" | "shortcuts">("general");
+  const [tab, setTab] = useState<"general" | "terminal" | "shortcuts" | "license">("general");
   const [envAllow, setEnvAllow] = useState(false);
+  const [licenseKey, setLicenseKey] = useState("");
+  const [licenseActivating, setLicenseActivating] = useState(false);
+  const licenseStatus = useLicenseStore((s) => s.status);
+  const licenseError = useLicenseStore((s) => s.error);
+  const licenseActivate = useLicenseStore((s) => s.activate);
+  const licenseDeactivate = useLicenseStore((s) => s.deactivate);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -77,6 +84,7 @@ export const Settings = memo(function Settings() {
     { id: "general" as const, label: "General" },
     { id: "terminal" as const, label: "Terminal" },
     { id: "shortcuts" as const, label: "Shortcuts" },
+    { id: "license" as const, label: "License" },
   ];
 
   return (
@@ -291,6 +299,94 @@ export const Settings = memo(function Settings() {
                 </React.Fragment>
               ))}
             </div>
+          )}
+
+          {tab === "license" && (
+            <>
+              <div>
+                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>STATUS</div>
+                <div style={{ color: licenseStatus?.is_licensed && !licenseStatus?.is_trial ? "#00c853" : "#888888", fontSize: "11px" }}>
+                  {!licenseStatus
+                    ? "Loading..."
+                    : licenseStatus.is_licensed && !licenseStatus.is_trial
+                    ? "Licensed — unlimited panes"
+                    : licenseStatus.is_trial && licenseStatus.trial_days_remaining > 0
+                    ? `Trial — ${licenseStatus.trial_days_remaining} day${licenseStatus.trial_days_remaining !== 1 ? "s" : ""} remaining (${licenseStatus.max_panes} pane limit)`
+                    : `Trial expired — limited to ${licenseStatus?.max_panes ?? 2} panes`}
+                </div>
+              </div>
+              {licenseStatus?.is_licensed && !licenseStatus?.is_trial ? (
+                <>
+                  <div>
+                    <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>LICENSE KEY</div>
+                    <div style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px" }}>
+                      {licenseStatus.license_key ? licenseStatus.license_key.slice(0, 4) + "-****-****-" + licenseStatus.license_key.slice(-4) : "Active"}
+                    </div>
+                  </div>
+                  <button
+                    onClick={async () => { await licenseDeactivate(); }}
+                    style={{
+                      background: "transparent", border: "1px solid #2a2a2a", color: "#888888",
+                      fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+                      padding: "6px 16px", alignSelf: "flex-start",
+                    }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff4444"; e.currentTarget.style.color = "#ff4444"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; e.currentTarget.style.color = "#888888"; }}
+                  >
+                    DEACTIVATE
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>LICENSE KEY</div>
+                    <input
+                      value={licenseKey}
+                      onChange={(e) => setLicenseKey(e.target.value)}
+                      placeholder="XXXX-XXXX-XXXX-XXXX"
+                      onKeyDown={async (e) => {
+                        if (e.key === "Enter" && licenseKey.trim()) {
+                          setLicenseActivating(true);
+                          const ok = await licenseActivate(licenseKey.trim());
+                          setLicenseActivating(false);
+                          if (ok) setLicenseKey("");
+                        }
+                      }}
+                      style={{
+                        width: "100%", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",
+                        fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                        padding: "6px 8px", outline: "none", boxSizing: "border-box",
+                      }}
+                      onFocus={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; }}
+                      onBlur={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
+                    />
+                  </div>
+                  {licenseError && (
+                    <div style={{ color: "#ff4444", fontSize: "11px" }}>{licenseError}</div>
+                  )}
+                  <button
+                    onClick={async () => {
+                      if (!licenseKey.trim()) return;
+                      setLicenseActivating(true);
+                      const ok = await licenseActivate(licenseKey.trim());
+                      setLicenseActivating(false);
+                      if (ok) setLicenseKey("");
+                    }}
+                    disabled={!licenseKey.trim() || licenseActivating}
+                    style={{
+                      background: licenseKey.trim() ? "#ff8c00" : "#2a2a2a", border: "1px solid #ff8c00",
+                      color: licenseKey.trim() ? "#0a0a0a" : "#555555",
+                      fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      cursor: licenseKey.trim() && !licenseActivating ? "pointer" : "default",
+                      padding: "6px 16px", fontWeight: "bold", alignSelf: "flex-start",
+                      opacity: licenseActivating ? 0.7 : 1,
+                    }}
+                  >
+                    {licenseActivating ? "ACTIVATING..." : "ACTIVATE"}
+                  </button>
+                </>
+              )}
+            </>
           )}
         </div>
 

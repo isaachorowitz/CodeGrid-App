@@ -43,7 +43,7 @@
       "minimumSystemVersion": "10.15",
       "frameworks": [],
       "exceptionDomain": "",
-      "signingIdentity": null,
+      "signingIdentity": "Developer ID Application: ZipLyne LLC (DHGG5BA7J7)",
       "entitlements": "Entitlements.plist"
     },
     "category": "DeveloperTool",

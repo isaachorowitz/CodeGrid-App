@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod license;
 mod pty_manager;
 mod session;
 mod workspace;
@@ -122,6 +123,11 @@ pub fn run() {
             commands::quick_save,
             commands::get_env_allow_status,
             commands::toggle_env_allow,
+            // License management
+            commands::get_license_status,
+            commands::activate_license,
+            commands::deactivate_license,
+            commands::generate_license_key_cmd,
         ])
         // Hide window on close (red X) instead of quitting so PTY sessions
         // stay alive. Cmd+Q / File→Quit still exits normally.

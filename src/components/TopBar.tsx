@@ -218,10 +218,14 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
       style={{
         display: "flex",
         flexDirection: "column",
-        background: "#141414",
-        borderBottom: "1px solid #2a2a2a",
+        background: "rgba(18, 18, 18, 0.9)",
+        border: "1px solid #2a2a2a",
+        borderRadius: "12px",
+        boxShadow: "0 10px 28px rgba(0, 0, 0, 0.35)",
+        backdropFilter: "blur(6px)",
         userSelect: "none",
         flexShrink: 0,
+        overflow: "hidden",
       }}
     >
       {/* Main bar */}
@@ -496,7 +500,14 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             return (
               <div
                 key={session.id}
-                onClick={() => onFocusSession(session.id)}
+                onClick={() => {
+                  onFocusSession(session.id);
+                  window.dispatchEvent(
+                    new CustomEvent("codegrid:zoom-to-session", {
+                      detail: { sessionId: session.id },
+                    }),
+                  );
+                }}
                 onDoubleClick={() => { setEditingSessionId(session.id); setEditSessionName(displayName); }}
                 onContextMenu={(e) => openCtxMenu(e, "session", session.id, displayName)}
                 onMouseEnter={() => setHoveredTab(session.id)}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Canvas } from "./components/Canvas";
 import { TopBar } from "./components/TopBar";
-import { Sidebar, ACTIVITY_BAR_WIDTH } from "./components/Sidebar";
+import { Sidebar } from "./components/Sidebar";
 import { CommandPalette } from "./components/CommandPalette";
 import { NewSessionDialog } from "./components/NewSessionDialog";
 import { Settings } from "./components/Settings";
@@ -13,11 +13,14 @@ import { ClaudeMdEditor } from "./components/ClaudeMdEditor";
 import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
+import { TrialBanner } from "./components/TrialBanner";
+import { LicenseDialog } from "./components/LicenseDialog";
 import { useSessionStore } from "./stores/sessionStore";
 import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useAppStore } from "./stores/appStore";
 import { useToastStore } from "./stores/toastStore";
+import { useLicenseStore } from "./stores/licenseStore";
 import { useKeyboardNav } from "./hooks/useKeyboardNav";
 import {
   createSession,
@@ -145,6 +148,9 @@ export default function App() {
       // Load vibe mode setting
       try { const vm = await getSetting("vibeMode"); if (vm === "true") setVibeMode(true); } catch (e) { console.warn("Failed to load vibe mode:", e); }
 
+      // Load license status
+      try { await useLicenseStore.getState().fetchStatus(); } catch (e) { console.warn("Failed to load license status:", e); }
+
       // Show Git Setup Wizard on first launch (no workspaces existed) OR if not fully configured
       try {
         const gitStatus = await checkGitSetup();
@@ -251,6 +257,9 @@ export default function App() {
   const handleCreateSession = useCallback(
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => {
       if (!activeWorkspaceId) return;
+
+      // TODO: Check useLicenseStore.getState().status?.max_panes against current session count
+      // and block session creation if the limit is reached (show toast or open license dialog).
 
       try {
         let session;
@@ -366,27 +375,42 @@ export default function App() {
     [setFocusedSession],
   );
 
-  const PANEL_WIDTHS: Record<string, number> = {
-    files: 220,
-    git: 240,
-    hub: 220,
-    mcp: 220,
-    settings: 220,
-  };
-  const panelWidth = (sidebarOpen && activePanel) ? (PANEL_WIDTHS[activePanel] ?? 220) : 0;
-  // Activity bar (40px) is always present; panel width is added when open
-  const sidebarTotalWidth = ACTIVITY_BAR_WIDTH + panelWidth + (panelWidth > 0 ? 1 : 0); // +1 for border
-  // dimensions are measured from containerRef which is the flex-1 div AFTER the sidebar,
-  // so dimensions.width is already the grid area — do not subtract sidebarTotalWidth again.
   const gridWidth = dimensions.width;
-  const gridHeight = dimensions.height - 58;
+  const gridHeight = dimensions.height;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100vh", width: "100vw", background: "#0a0a0a", overflow: "hidden" }}>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        height: "100vh",
+        width: "100vw",
+        overflow: "hidden",
+        backgroundColor: "#0a0a0a",
+        backgroundImage: "radial-gradient(circle, #202020 1px, transparent 1px)",
+        backgroundSize: "28px 28px",
+        padding: "10px",
+        gap: "10px",
+        boxSizing: "border-box",
+      }}
+    >
+      <TrialBanner />
       <TopBar onFocusSession={handleFocusSession} onCloseSession={handleCloseSession} />
-      <div style={{ display: "flex", flex: 1, overflow: "hidden" }}>
+      <div style={{ display: "flex", flex: 1, overflow: "hidden", gap: "10px", minHeight: 0 }}>
         <Sidebar />
-        <div ref={containerRef} style={{ flex: 1, overflow: "hidden", position: "relative" }}>
+        <div
+          ref={containerRef}
+          style={{
+            flex: 1,
+            overflow: "hidden",
+            position: "relative",
+            minHeight: 0,
+            borderRadius: "14px",
+            border: "1px solid #2a2a2a",
+            background: "rgba(12, 12, 12, 0.88)",
+            boxShadow: "0 14px 36px rgba(0, 0, 0, 0.4)",
+          }}
+        >
           {sessions.length === 0 ? (
             <EmptyState
               onNewSession={() => setNewSessionDialogOpen(true)}
@@ -409,6 +433,7 @@ export default function App() {
       <ClaudeMdEditor />
       <GitSetupWizard />
       <CodeViewer />
+      <LicenseDialog />
       <ToastContainer />
     </div>
   );

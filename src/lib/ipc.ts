@@ -602,6 +602,27 @@ export async function gitStageHunk(workingDir: string, filePath: string, hunkHea
   return invoke("git_stage_hunk", { workingDir, filePath, hunkHeader });
 }
 
+// License
+export interface LicenseStatus {
+  is_licensed: boolean;
+  is_trial: boolean;
+  trial_days_remaining: number;
+  license_key: string | null;
+  max_panes: number;
+}
+
+export async function getLicenseStatus(): Promise<LicenseStatus> {
+  return invoke("get_license_status");
+}
+
+export async function activateLicense(key: string): Promise<LicenseStatus> {
+  return invoke("activate_license", { key });
+}
+
+export async function deactivateLicense(): Promise<LicenseStatus> {
+  return invoke("deactivate_license");
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,

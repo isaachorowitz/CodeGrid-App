@@ -36,12 +36,14 @@ export const MinimizedPaneBar = memo(function MinimizedPaneBar({
         display: "flex",
         alignItems: "center",
         gap: "2px",
-        padding: "1px 4px",
-        height: "32px",
-        background: "#111111",
-        borderTop: "1px solid #2a2a2a",
+        padding: "2px 6px",
+        height: "34px",
+        margin: "0 8px 8px",
+        background: "rgba(17, 17, 17, 0.92)",
+        border: "1px solid #2a2a2a",
+        borderRadius: "8px",
+        boxShadow: "0 6px 18px rgba(0, 0, 0, 0.45)",
         overflow: "hidden",
-        flexShrink: 0,
       }}
     >
       <span

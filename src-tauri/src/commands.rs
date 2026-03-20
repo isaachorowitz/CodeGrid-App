@@ -3463,3 +3463,38 @@ pub async fn git_stage_hunk(working_dir: String, file_path: String, hunk_header:
 
     Ok(())
 }
+
+#[tauri::command]
+pub async fn get_license_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::license::LicenseStatus, String> {
+    Ok(crate::license::get_license_status(&state.db))
+}
+
+#[tauri::command]
+pub async fn activate_license(
+    key: String,
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::license::LicenseStatus, String> {
+    if crate::license::validate_license_key(&key) {
+        state.db.set_setting("license_key", &key)
+            .map_err(|e| format!("Failed to save license: {e}"))?;
+        Ok(crate::license::get_license_status(&state.db))
+    } else {
+        Err("Invalid license key".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn deactivate_license(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::license::LicenseStatus, String> {
+    state.db.set_setting("license_key", "")
+        .map_err(|e| format!("Failed to remove license: {e}"))?;
+    Ok(crate::license::get_license_status(&state.db))
+}
+
+#[tauri::command]
+pub async fn generate_license_key_cmd() -> Result<String, String> {
+    Ok(crate::license::generate_license_key())
+}

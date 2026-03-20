@@ -42,8 +42,10 @@ const ActivityBar = memo(function ActivityBar({
       style={{
         width: "40px",
         height: "100%",
-        background: "#0d0d0d",
-        borderRight: "1px solid #1a1a1a",
+        background: "rgba(13, 13, 13, 0.92)",
+        border: "1px solid #2a2a2a",
+        borderRadius: "12px",
+        boxShadow: "0 10px 24px rgba(0, 0, 0, 0.35)",
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
@@ -63,8 +65,8 @@ const ActivityBar = memo(function ActivityBar({
             onMouseLeave={() => setHoveredId(null)}
             title={item.label}
             style={{
-              width: "40px",
-              height: "40px",
+              width: "36px",
+              height: "36px",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -1198,6 +1200,7 @@ export const Sidebar = memo(function Sidebar() {
       style={{
         display: "flex",
         height: "100%",
+        gap: "8px",
         flexShrink: 0,
       }}
     >
@@ -1214,8 +1217,10 @@ export const Sidebar = memo(function Sidebar() {
           width: showPanel ? `${panelWidth}px` : "0px",
           overflow: "hidden",
           transition: "width 0.2s ease",
-          background: "#141414",
-          borderRight: showPanel ? "1px solid #2a2a2a" : "none",
+          background: "rgba(20, 20, 20, 0.9)",
+          border: showPanel ? "1px solid #2a2a2a" : "none",
+          borderRadius: showPanel ? "12px" : "0px",
+          boxShadow: showPanel ? "0 10px 24px rgba(0, 0, 0, 0.35)" : "none",
           display: "flex",
           flexDirection: "column",
           fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
