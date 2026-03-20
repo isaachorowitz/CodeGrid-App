@@ -233,7 +233,14 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   savedLayouts: [],
   minimizedPanes: {},
 
-  setLayouts: (layouts) => set({ layouts: layouts.map(enforceMinSize) }),
+  setLayouts: (layouts) =>
+    set({
+      layouts: layouts.map(enforceMinSize),
+      // setLayouts is used for workspace restore/switch; clear transient view state to prevent stale hidden panes.
+      maximizedPane: null,
+      savedLayouts: [],
+      minimizedPanes: {},
+    }),
 
   addPaneLayout: (sessionId) =>
     set((state) => {
@@ -243,7 +250,16 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       const x = last ? last.x + CASCADE_OFFSET : 0;
       const y = last ? last.y + CASCADE_OFFSET : 0;
       const newLayout = enforceMinSize({ i: sessionId, x, y, w: DEFAULT_W, h: DEFAULT_H });
-      return { layouts: [...state.layouts, newLayout] };
+      const nextLayouts = [...state.layouts, newLayout];
+      if (state.maximizedPane) {
+        // New panes should always appear immediately instead of being hidden behind maximize mode.
+        return {
+          layouts: nextLayouts,
+          maximizedPane: null,
+          savedLayouts: [],
+        };
+      }
+      return { layouts: nextLayouts };
     }),
 
   removePaneLayout: (sessionId) =>

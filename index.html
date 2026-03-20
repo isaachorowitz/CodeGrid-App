@@ -14,6 +14,19 @@
       body { -webkit-user-select: none; user-select: none; }
       /* Allow selection inside terminals */
       .terminal-container { -webkit-user-select: text; user-select: text; }
+      /*
+        Body user-select:none is inherited; without these overrides, native carets
+        often do not blink (or show) in inputs/textareas and xterm's helper textarea.
+      */
+      input, textarea, select {
+        -webkit-user-select: text;
+        user-select: text;
+        caret-color: #ff8c00;
+      }
+      .xterm .xterm-helper-textarea {
+        -webkit-user-select: text !important;
+        user-select: text !important;
+      }
     </style>
   </head>
   <body>

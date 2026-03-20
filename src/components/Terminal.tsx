@@ -15,11 +15,14 @@ interface TerminalProps {
   sessionId: string;
 }
 
+type SessionStatus = "idle" | "running" | "waiting" | "error" | "dead";
+
 export const TerminalView = memo(function TerminalView({ sessionId }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingOutputRef = useRef("");
+  const statusRef = useRef<SessionStatus | null>(null);
   const lastAttentionRef = useRef<{ reason: string; at: number } | null>(null);
   const statusToastSentRef = useRef<{ idle: boolean; dead: boolean }>({ idle: false, dead: false });
   // Each terminal needs its own TextDecoder because { stream: true } maintains
@@ -65,10 +68,19 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     onResize: handleResize,
   });
 
+  const setSessionStatus = useCallback(
+    (status: SessionStatus) => {
+      if (statusRef.current === status) return;
+      statusRef.current = status;
+      updateSession(sessionId, { status });
+    },
+    [sessionId, updateSession],
+  );
+
   const handleOutput = useCallback(
     (data: Uint8Array) => {
       write(data);
-      updateSession(sessionId, { status: "running" });
+      setSessionStatus("running");
 
       // Accumulate output for activity detection (debounced to avoid excessive processing)
       const text = textDecoderRef.current.decode(data, { stream: true });
@@ -108,7 +120,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
       // Reset idle timer
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
       statusTimerRef.current = setTimeout(() => {
-        updateSession(sessionId, { status: "idle" });
+        setSessionStatus("idle");
         updateSessionStatus(sessionId, "idle").catch((err) => {
           if (!statusToastSentRef.current.idle) {
             statusToastSentRef.current.idle = true;
@@ -117,11 +129,11 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
         });
       }, 10000);
     },
-    [sessionId, write, updateSession, setSessionActivityName, addToast],
+    [sessionId, write, setSessionStatus, setSessionActivityName, addToast],
   );
 
   const handleEnded = useCallback(() => {
-    updateSession(sessionId, { status: "dead" });
+    setSessionStatus("dead");
     updateSessionStatus(sessionId, "dead").catch((err) => {
       if (!statusToastSentRef.current.dead) {
         statusToastSentRef.current.dead = true;
@@ -129,7 +141,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
       }
     });
     write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n");
-  }, [sessionId, write, updateSession, addToast]);
+  }, [sessionId, write, setSessionStatus, addToast]);
 
   const ptyControls = usePty({
     sessionId,

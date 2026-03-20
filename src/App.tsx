@@ -13,7 +13,7 @@ import { ClaudeMdEditor } from "./components/ClaudeMdEditor";
 import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
-import { useSessionStore, MAX_TERMINALS_PER_WORKSPACE } from "./stores/sessionStore";
+import { useSessionStore } from "./stores/sessionStore";
 import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useAppStore } from "./stores/appStore";
@@ -90,12 +90,19 @@ export default function App() {
               const parsed = JSON.parse(active.layout_json);
               if (parsed && typeof parsed === "object" && Array.isArray(parsed.layouts)) {
                 setLayouts(sanitizeLayouts(parsed.layouts, dimensions.width, dimensions.height));
-                if (parsed.canvas) setCanvas(sanitizeCanvasState(parsed.canvas));
+                setCanvas(parsed.canvas ? sanitizeCanvasState(parsed.canvas) : sanitizeCanvasState(null));
               } else {
                 // Legacy format: just an array of layouts
                 setLayouts(sanitizeLayouts(parsed, dimensions.width, dimensions.height));
+                setCanvas(sanitizeCanvasState(null));
               }
-            } catch (e) { console.warn("Failed to parse layout JSON:", e); setLayouts([]); }
+            } catch (e) {
+              console.warn("Failed to parse layout JSON:", e);
+              setLayouts([]);
+              setCanvas(sanitizeCanvasState(null));
+            }
+          } else {
+            setCanvas(sanitizeCanvasState(null));
           }
 
           // Restore persisted sessions (as dead) for ALL workspaces so switching
@@ -203,10 +210,8 @@ export default function App() {
 
       const all = useSessionStore.getState().sessions;
       const target = all.find((s) => s.id === detail.sessionId);
-      const label = target
-        ? `[${target.pane_number}] ${target.manualName ?? target.activityName ?? target.working_dir.split("/").pop() ?? "Terminal"}`
-        : detail.sessionId.slice(0, 6);
-      addToast(`${label} needs attention: ${detail.reason}`, "warning", 7000);
+      const pane = target ? `[${target.pane_number}]` : `#${detail.sessionId.slice(0, 6)}`;
+      addToast(`${pane} ${detail.reason}`, "warning", 7000);
     };
 
     window.addEventListener("codegrid:session-attention", handler);
@@ -246,13 +251,6 @@ export default function App() {
   const handleCreateSession = useCallback(
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => {
       if (!activeWorkspaceId) return;
-
-      // Enforce max 9 terminals per workspace
-      const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
-      if (currentCount >= MAX_TERMINALS_PER_WORKSPACE) {
-        addToast("Maximum 9 terminals per workspace", "warning");
-        return;
-      }
 
       try {
         let session;

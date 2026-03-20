@@ -113,6 +113,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
 
   const handleSwitchWorkspace = useCallback(async (wsId: string) => {
     setActiveWorkspace(wsId);
+    const defaultCanvas = sanitizeCanvasState(null);
 
     const targetWs = workspaces.find((w) => w.id === wsId);
     if (targetWs?.layout_json) {
@@ -120,13 +121,18 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
         const parsed = JSON.parse(targetWs.layout_json);
         if (parsed && typeof parsed === "object" && Array.isArray(parsed.layouts)) {
           setLayouts(sanitizeLayouts(parsed.layouts));
-          if (parsed.canvas) setCanvas(sanitizeCanvasState(parsed.canvas));
+          setCanvas(parsed.canvas ? sanitizeCanvasState(parsed.canvas) : defaultCanvas);
         } else {
           setLayouts(sanitizeLayouts(parsed));
+          setCanvas(defaultCanvas);
         }
-      } catch { setLayouts([]); }
+      } catch {
+        setLayouts([]);
+        setCanvas(defaultCanvas);
+      }
     } else {
       setLayouts([]);
+      setCanvas(defaultCanvas);
     }
 
     try { await setActiveWorkspaceIpc(wsId); } catch (e) { console.warn("Failed to set active workspace:", e); }
@@ -444,7 +450,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             padding: "2px 8px", fontWeight: "bold",
           }}
         >
-          + {vibeMode ? "NEW CHAT" : "NEW"}
+          + NEW
         </button>
 
         {/* Command palette */}

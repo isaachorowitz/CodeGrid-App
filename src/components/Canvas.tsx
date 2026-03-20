@@ -4,7 +4,7 @@ import { MinimizedPaneBar } from "./MinimizedPaneBar";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
-import type { CanvasLayout } from "../stores/layoutStore";
+import { useShallow } from "zustand/react/shallow";
 
 interface CanvasProps {
   width: number;
@@ -18,12 +18,13 @@ const MONO = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
 //    Zustand is only written on mouseup (commit), so React never re-renders mid-gesture.
 
 export const Canvas = memo(function Canvas({ width, height, onCloseSession }: CanvasProps) {
-  const allSessions = useSessionStore((s) => s.sessions);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const sessions = useMemo(
-    () => allSessions.filter((s) => s.workspace_id === activeWorkspaceId),
-    [allSessions, activeWorkspaceId],
+  const sessionSelector = useCallback(
+    (s: ReturnType<typeof useSessionStore.getState>) =>
+      s.sessions.filter((session) => session.workspace_id === activeWorkspaceId),
+    [activeWorkspaceId],
   );
+  const sessions = useSessionStore(useShallow(sessionSelector));
   const layouts = useLayoutStore((s) => s.layouts);
   const maximizedPane = useLayoutStore((s) => s.maximizedPane);
   const minimizedPanes = useLayoutStore((s) => s.minimizedPanes);
@@ -63,6 +64,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     resizeOrigW: 0,
     resizeOrigH: 0,
     resizeEl: null as HTMLElement | null,
+    panePreview: {} as Record<string, { x: number; y: number; w: number; h: number }>,
     // space
     spaceHeld: false,
   });
@@ -89,9 +91,16 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
   }, [sessions, minimizedPanes]);
 
   const visibleLayouts = useMemo(() => {
-    if (maximizedPane) return layouts.filter((l) => l.i === maximizedPane);
+    if (maximizedPane) {
+      const maximizedLayout = layouts.find((l) => l.i === maximizedPane);
+      if (maximizedLayout) return [maximizedLayout];
+    }
     return layouts;
   }, [layouts, maximizedPane]);
+  const visibleLayoutMap = useMemo(
+    () => new Map(visibleLayouts.map((layout) => [layout.i, layout])),
+    [visibleLayouts],
+  );
 
   const visibleSessions = useMemo(() => {
     const layoutIds = new Set(visibleLayouts.map((l) => l.i));
@@ -142,6 +151,11 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     if (!vp) return;
     const handler = (e: WheelEvent) => {
       if (maximizedPane) return;
+      const target = e.target as HTMLElement | null;
+      const insideTerminal =
+        !!target && !!target.closest(".terminal-container, .xterm, .xterm-screen");
+      // Keep native terminal scrolling; zoom via Cmd/Ctrl+wheel or when not hovering terminal content.
+      if (insideTerminal && !e.metaKey && !e.ctrlKey) return;
       e.preventDefault();
       const rect = vp.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
@@ -219,6 +233,14 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         const dy = (e.clientY - L.startY) / L.zoom;
         const nx = L.dragOrigX + dx;
         const ny = L.dragOrigY + dy;
+        const existingPreview = L.panePreview[L.dragId];
+        const fallbackLayout = useLayoutStore.getState().layouts.find((l) => l.i === L.dragId);
+        L.panePreview[L.dragId] = {
+          x: nx,
+          y: ny,
+          w: existingPreview?.w ?? fallbackLayout?.w ?? 600,
+          h: existingPreview?.h ?? fallbackLayout?.h ?? 400,
+        };
         L.dragEl.style.left = `${nx}px`;
         L.dragEl.style.top = `${ny}px`;
         return;
@@ -233,6 +255,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         if (handle.includes("s")) h = Math.max(150, h + dy);
         if (handle.includes("w")) { const nw = Math.max(200, w - dx); x = x + (w - nw); w = nw; }
         if (handle.includes("n")) { const nh = Math.max(150, h - dy); y = y + (h - nh); h = nh; }
+        L.panePreview[L.resizeId] = { x, y, w, h };
         L.resizeEl.style.left = `${x}px`;
         L.resizeEl.style.top = `${y}px`;
         L.resizeEl.style.width = `${w}px`;
@@ -246,19 +269,21 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       if (L.mode === "pan") {
         commitCanvasState();
       } else if (L.mode === "drag" && L.dragEl) {
-        const x = parseFloat(L.dragEl.style.left);
-        const y = parseFloat(L.dragEl.style.top);
+        const preview = L.panePreview[L.dragId];
         // Use current layout w/h (drag doesn't change size)
         const layout = useLayoutStore.getState().layouts.find((l) => l.i === L.dragId);
-        if (layout) commitPaneLayout(L.dragId, x, y, layout.w, layout.h);
+        if (layout && preview) commitPaneLayout(L.dragId, preview.x, preview.y, layout.w, layout.h);
+        delete L.panePreview[L.dragId];
       } else if (L.mode === "resize" && L.resizeEl) {
-        const x = parseFloat(L.resizeEl.style.left);
-        const y = parseFloat(L.resizeEl.style.top);
-        const w = parseFloat(L.resizeEl.style.width);
-        const h = parseFloat(L.resizeEl.style.height);
-        commitPaneLayout(L.resizeId, x, y, w, h);
+        const preview = L.panePreview[L.resizeId];
+        if (preview) {
+          commitPaneLayout(L.resizeId, preview.x, preview.y, preview.w, preview.h);
+        }
+        delete L.panePreview[L.resizeId];
       }
       L.mode = "idle";
+      L.dragId = "";
+      L.resizeId = "";
       L.dragEl = null;
       L.resizeEl = null;
       document.body.style.cursor = "";
@@ -302,6 +327,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     L.dragId = id;
     L.dragOrigX = layout.x;
     L.dragOrigY = layout.y;
+    L.panePreview[id] = { x: layout.x, y: layout.y, w: layout.w, h: layout.h };
     L.dragEl = el;
     document.body.style.cursor = "move";
     document.body.style.userSelect = "none";
@@ -326,6 +352,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     L.resizeOrigY = layout.y;
     L.resizeOrigW = layout.w;
     L.resizeOrigH = layout.h;
+    L.panePreview[id] = { x: layout.x, y: layout.y, w: layout.w, h: layout.h };
     L.resizeEl = el;
     document.body.style.userSelect = "none";
   }, [maximizedPane]);
@@ -404,13 +431,20 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           }}
         >
           {visibleSessions.map((session) => {
-            const layout = visibleLayouts.find((l) => l.i === session.id);
+            const layout = visibleLayoutMap.get(session.id);
             if (!layout) return null;
+            const preview = live.current.panePreview[session.id];
 
             const isMaximized = maximizedPane === session.id;
             const paneStyle: React.CSSProperties = isMaximized
               ? { position: "absolute", left: 0, top: 0, width, height: canvasHeight, zIndex: 10 }
-              : { position: "absolute", left: layout.x, top: layout.y, width: layout.w, height: layout.h };
+              : {
+                  position: "absolute",
+                  left: preview?.x ?? layout.x,
+                  top: preview?.y ?? layout.y,
+                  width: preview?.w ?? layout.w,
+                  height: preview?.h ?? layout.h,
+                };
 
             return (
               <div

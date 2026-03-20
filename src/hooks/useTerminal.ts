@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
+import { CanvasAddon } from "@xterm/addon-canvas";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { CODEGRID_DARK } from "../lib/themes";
@@ -70,7 +70,8 @@ export function useTerminal(
       fontSize: options.fontSize ?? 13,
       fontFamily: options.fontFamily ?? "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
       cursorBlink: true,
-      cursorStyle: "block",
+      /* Bar reads more reliably than block when the renderer draws the cursor. */
+      cursorStyle: "bar",
       scrollback: 10000,
       allowProposedApi: true,
       convertEol: true,
@@ -89,30 +90,11 @@ export function useTerminal(
 
     terminal.open(container);
 
-    // Try WebGL renderer, fall back to canvas
+    // Canvas renderer: WebGL can omit or glitch the blinking cursor on some GPUs / embedders.
     try {
-      const webglAddon = new WebglAddon();
-      webglAddon.onContextLoss(() => {
-        webglAddon.dispose();
-        // Load canvas addon as fallback when WebGL context is lost
-        try {
-          import("@xterm/addon-canvas").then(({ CanvasAddon }) => {
-            if (!disposedRef.current) {
-              terminal.loadAddon(new CanvasAddon());
-            }
-          }).catch(() => {});
-        } catch {}
-      });
-      terminal.loadAddon(webglAddon);
+      terminal.loadAddon(new CanvasAddon());
     } catch {
-      // WebGL not available, try canvas addon as fallback
-      try {
-        import("@xterm/addon-canvas").then(({ CanvasAddon }) => {
-          if (!disposedRef.current) {
-            terminal.loadAddon(new CanvasAddon());
-          }
-        }).catch(() => {});
-      } catch {}
+      // Fall back to xterm's default DOM renderer if canvas fails
     }
 
     // Fit to container

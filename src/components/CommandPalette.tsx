@@ -10,11 +10,20 @@ interface CommandItem {
   id: string;
   label: string;
   category: string;
+  /** Extra text matched by search (label stays short in the list). */
+  matchText?: string;
   action: () => void;
 }
 
 export const CommandPalette = memo(function CommandPalette() {
-  const { commandPaletteOpen, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, setSettingsOpen } = useWorkspaceStore();
+  const {
+    commandPaletteOpen,
+    setCommandPaletteOpen,
+    setNewSessionDialogOpen,
+    toggleSidebar,
+    setSettingsOpen,
+    activeWorkspaceId,
+  } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const { setFocusedSession, toggleBroadcast, focusedSessionId } = useSessionStore();
   const { applyPreset, toggleMaximize } = useLayoutStore();
@@ -23,74 +32,78 @@ export const CommandPalette = memo(function CommandPalette() {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeSessions = useMemo(
+    () => sessions.filter((s) => s.workspace_id === activeWorkspaceId),
+    [sessions, activeWorkspaceId],
+  );
 
   const commands = useMemo<CommandItem[]>(() => {
     const items: CommandItem[] = [
       // Sessions
       {
         id: "new-session",
-        label: "New Session — Start coding with Claude",
+        label: "New session",
         category: "Sessions",
         action: () => { setCommandPaletteOpen(false); setNewSessionDialogOpen(true); },
       },
       // View
       {
         id: "toggle-sidebar",
-        label: "Toggle Sidebar",
+        label: "Sidebar",
         category: "View",
         action: () => { setCommandPaletteOpen(false); toggleSidebar(); },
       },
       {
         id: "toggle-broadcast",
-        label: "Toggle Broadcast Mode — type to all panes",
+        label: "Broadcast",
         category: "View",
         action: () => { setCommandPaletteOpen(false); toggleBroadcast(); },
       },
       // Tools
       {
         id: "open-hub",
-        label: "Open Hub — Browse & clone repos",
+        label: "Hub",
         category: "Tools",
         action: () => { setCommandPaletteOpen(false); setHubBrowserOpen(true); },
       },
       {
         id: "open-skills",
-        label: "Open Skills Panel — Claude Code slash commands",
+        label: "Skills",
         category: "Tools",
         action: () => { setCommandPaletteOpen(false); setSkillsPanelOpen(true); },
       },
       {
         id: "settings",
-        label: "Open Settings",
+        label: "Settings",
         category: "App",
         action: () => { setCommandPaletteOpen(false); setSettingsOpen(true); },
       },
       {
         id: "open-git",
-        label: "Open Git Manager — push, pull, commit, branch",
+        label: "Git",
         category: "Tools",
         action: () => {
-          const focused = sessions.find((s) => s.id === focusedSessionId);
+          const focused = activeSessions.find((s) => s.id === focusedSessionId);
           setCommandPaletteOpen(false);
           setGitManagerOpen(true, focused?.working_dir);
         },
       },
       {
         id: "open-mcp",
-        label: "Open MCP Manager — manage MCP servers",
+        label: "MCP",
         category: "Tools",
         action: () => {
-          const focused = sessions.find((s) => s.id === focusedSessionId);
+          const focused = activeSessions.find((s) => s.id === focusedSessionId);
           setCommandPaletteOpen(false);
           setMcpManagerOpen(true, focused?.working_dir);
         },
       },
       {
         id: "open-claude-md",
-        label: "Edit CLAUDE.md — project instructions for Claude",
+        label: "CLAUDE.md",
         category: "Tools",
         action: () => {
-          const focused = sessions.find((s) => s.id === focusedSessionId);
+          const focused = activeSessions.find((s) => s.id === focusedSessionId);
           setCommandPaletteOpen(false);
           if (focused?.working_dir) {
             useAppStore.getState().setClaudeMdEditorOpen(true, focused.working_dir);
@@ -101,20 +114,20 @@ export const CommandPalette = memo(function CommandPalette() {
 
     // Layout presets
     const presets: { label: string; value: PresetLayout }[] = [
-      { label: "1x1 — Single Pane", value: "1x1" },
-      { label: "2x2 — Four Quadrants", value: "2x2" },
-      { label: "3x3 — Nine Panes", value: "3x3" },
-      { label: "1+2 — One Large + Two Small", value: "1+2" },
-      { label: "1+3 — One Large + Three Small", value: "1+3" },
+      { label: "1×1", value: "1x1" },
+      { label: "2×2", value: "2x2" },
+      { label: "3×3", value: "3x3" },
+      { label: "1+2", value: "1+2" },
+      { label: "1+3", value: "1+3" },
     ];
 
     for (const p of presets) {
       items.push({
         id: `layout-${p.value}`,
-        label: `Layout: ${p.label}`,
+        label: `Layout ${p.label}`,
         category: "Layouts",
         action: () => {
-          applyPreset(p.value, sessions.map((s) => s.id));
+          applyPreset(p.value, activeSessions.map((s) => s.id));
           setCommandPaletteOpen(false);
         },
       });
@@ -125,7 +138,8 @@ export const CommandPalette = memo(function CommandPalette() {
       for (const skill of skills.slice(0, 10)) {
         items.push({
           id: `skill-${skill.name}`,
-          label: `Send ${skill.name} — ${skill.description}`,
+          label: skill.name,
+          matchText: `${skill.name} ${skill.description}`,
           category: "Skills",
           action: async () => {
             try {
@@ -138,10 +152,10 @@ export const CommandPalette = memo(function CommandPalette() {
     }
 
     // Session commands
-    for (const session of sessions) {
+    for (const session of activeSessions) {
       items.push({
         id: `focus-${session.id}`,
-        label: `Focus Pane ${session.pane_number}: ${session.working_dir.split("/").pop()}`,
+        label: `Focus [${session.pane_number}] ${session.working_dir.split("/").pop() ?? ""}`,
         category: "Sessions",
         action: () => {
           setFocusedSession(session.id);
@@ -151,18 +165,18 @@ export const CommandPalette = memo(function CommandPalette() {
       });
       items.push({
         id: `maximize-${session.id}`,
-        label: `Maximize Pane ${session.pane_number}`,
+        label: `Max [${session.pane_number}]`,
         category: "Sessions",
         action: () => { toggleMaximize(session.id); setCommandPaletteOpen(false); },
       });
     }
 
     // Kill idle
-    const idleSessions = sessions.filter((s) => s.status === "idle" || s.status === "dead");
+    const idleSessions = activeSessions.filter((s) => s.status === "idle" || s.status === "dead");
     if (idleSessions.length > 0) {
       items.push({
         id: "kill-idle",
-        label: `Kill All Idle/Dead Sessions (${idleSessions.length})`,
+        label: `Close idle (${idleSessions.length})`,
         category: "Sessions",
         action: () => {
           for (const s of idleSessions) {
@@ -174,14 +188,15 @@ export const CommandPalette = memo(function CommandPalette() {
     }
 
     return items;
-  }, [sessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setFocusedSession, applyPreset, toggleMaximize, addToast]);
+  }, [activeSessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setFocusedSession, applyPreset, toggleMaximize, addToast]);
 
   const filtered = useMemo(() => {
     if (!query) return commands;
     const lower = query.toLowerCase();
-    return commands.filter(
-      (c) => c.label.toLowerCase().includes(lower) || c.category.toLowerCase().includes(lower),
-    );
+    return commands.filter((c) => {
+      const hay = (c.matchText ?? c.label).toLowerCase();
+      return hay.includes(lower) || c.category.toLowerCase().includes(lower);
+    });
   }, [commands, query]);
 
   useEffect(() => {
@@ -229,7 +244,7 @@ export const CommandPalette = memo(function CommandPalette() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a command... (skills, layouts, sessions)"
+            placeholder="Command…"
             style={{
               width: "100%", background: "transparent", border: "none", color: "#e0e0e0",
               fontSize: "13px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "12px 16px", outline: "none",
@@ -248,16 +263,19 @@ export const CommandPalette = memo(function CommandPalette() {
                 onClick={() => item.action()}
                 onMouseEnter={() => setSelectedIndex(index)}
                 style={{
-                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px",
                   padding: "8px 16px", cursor: "pointer",
                   background: index === selectedIndex ? "#1e1e1e" : "transparent",
                   borderLeft: index === selectedIndex ? "2px solid #ff8c00" : "2px solid transparent",
                 }}
               >
-                <span style={{ color: index === selectedIndex ? "#e0e0e0" : "#888888", fontSize: "12px" }}>
+                <span style={{
+                  color: index === selectedIndex ? "#e0e0e0" : "#888888", fontSize: "12px",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1,
+                }}>
                   {item.label}
                 </span>
-                <span style={{ color: "#555555", fontSize: "10px" }}>
+                <span style={{ color: "#555555", fontSize: "10px", flexShrink: 0 }}>
                   {item.category}
                 </span>
               </div>

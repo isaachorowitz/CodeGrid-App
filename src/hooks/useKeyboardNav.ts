@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from "react";
 import { matchKeybinding } from "../lib/keybindings";
 import { useSessionStore } from "../stores/sessionStore";
-import { sanitizeLayouts, useLayoutStore } from "../stores/layoutStore";
+import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
 
@@ -12,7 +12,7 @@ export function useKeyboardNav() {
     setFocusedSession,
     toggleBroadcast,
   } = useSessionStore();
-  const { layouts, toggleMaximize, swapPanes, setLayouts } = useLayoutStore();
+  const { layouts, toggleMaximize, swapPanes, setLayouts, setCanvas } = useLayoutStore();
   const {
     workspaces,
     activeWorkspaceId,
@@ -159,10 +159,24 @@ export function useKeyboardNav() {
             const targetWs = workspaces[next];
             setActiveWorkspace(targetWs.id);
             // Restore layout for the target workspace
+            const defaultCanvas = sanitizeCanvasState(null);
             if (targetWs.layout_json) {
-              try { setLayouts(sanitizeLayouts(JSON.parse(targetWs.layout_json))); } catch { setLayouts([]); }
+              try {
+                const parsed = JSON.parse(targetWs.layout_json);
+                if (parsed && typeof parsed === "object" && Array.isArray(parsed.layouts)) {
+                  setLayouts(sanitizeLayouts(parsed.layouts));
+                  setCanvas(parsed.canvas ? sanitizeCanvasState(parsed.canvas) : defaultCanvas);
+                } else {
+                  setLayouts(sanitizeLayouts(parsed));
+                  setCanvas(defaultCanvas);
+                }
+              } catch {
+                setLayouts([]);
+                setCanvas(defaultCanvas);
+              }
             } else {
               setLayouts([]);
+              setCanvas(defaultCanvas);
             }
             setActiveWorkspaceIpc(targetWs.id).catch(() => {});
           }
@@ -208,5 +222,6 @@ export function useKeyboardNav() {
     toggleMaximize,
     setActiveWorkspace,
     setLayouts,
+    setCanvas,
   ]);
 }

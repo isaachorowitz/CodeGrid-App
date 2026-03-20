@@ -32,6 +32,16 @@ interface SessionState {
 
 export const MAX_TERMINALS_PER_WORKSPACE = 9;
 
+function hasUpdates<T extends object>(current: T, updates: Partial<T>): boolean {
+  for (const key of Object.keys(updates) as (keyof T)[]) {
+    const nextValue = updates[key];
+    if (nextValue !== undefined && current[key] !== nextValue) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   focusedSessionId: null,
@@ -64,11 +74,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     }),
 
   updateSession: (sessionId, updates) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, ...updates } : s,
-      ),
-    })),
+    set((state) => {
+      const index = state.sessions.findIndex((s) => s.id === sessionId);
+      if (index < 0) return state;
+
+      const current = state.sessions[index];
+      if (!hasUpdates(current, updates)) return state;
+
+      const nextSessions = [...state.sessions];
+      nextSessions[index] = { ...current, ...updates };
+      return { sessions: nextSessions };
+    }),
 
   setFocusedSession: (sessionId) => {
     set({ focusedSessionId: sessionId });
@@ -84,25 +100,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ sessions: sessions.map((s) => ({ ...s, lastUsedAt: Date.now() })) }),
 
   setSessionActivityName: (sessionId, name) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, activityName: name } : s,
-      ),
-    })),
+    get().updateSession(sessionId, { activityName: name }),
 
   setSessionManualName: (sessionId, name) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, manualName: name } : s,
-      ),
-    })),
+    get().updateSession(sessionId, { manualName: name }),
 
   setSessionModel: (sessionId, model) =>
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === sessionId ? { ...s, model } : s,
-      ),
-    })),
+    get().updateSession(sessionId, { model }),
 
   getSessionByPaneNumber: (paneNumber, workspaceId) =>
     get().sessions.find(
