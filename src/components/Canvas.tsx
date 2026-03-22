@@ -551,6 +551,36 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
+          {/* Layout presets */}
+          {([
+            { label: "1", value: "1x1" as const },
+            { label: "4", value: "2x2" as const },
+            { label: "9", value: "3x3" as const },
+            { label: "1+2", value: "1+2" as const },
+            { label: "1+3", value: "1+3" as const },
+          ]).map((p) => (
+            <button
+              key={p.value}
+              onClick={() => {
+                const ids = visibleSessions.map((s) => s.id);
+                useLayoutStore.getState().applyPreset(p.value, ids, width, canvasHeight);
+                setCanvas({ zoom: 1, panX: 0, panY: 0 });
+                live.current.zoom = 1; live.current.panX = 0; live.current.panY = 0;
+                applySurfaceTransform(); applyBgTransform(); updateZoomLabel();
+              }}
+              title={`Layout: ${p.value}`}
+              style={{
+                background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#555",
+                padding: "3px 6px", cursor: "pointer", fontFamily: MONO, fontSize: "10px",
+                minWidth: "22px", textAlign: "center",
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "#555"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+            >
+              {p.label}
+            </button>
+          ))}
+
           {/* Auto-grid: reset all panes to a clean tiled layout */}
           <button
             onClick={handleAutoGrid}

@@ -17,9 +17,11 @@ export const TrialBanner = memo(function TrialBanner() {
   return (
     <div
       style={{
-        height: "28px",
+        margin: "8px 12px 0 12px",
+        padding: "6px 14px",
         background: "#1a1a1a",
-        borderBottom: "1px solid #2a2a2a",
+        border: "1px solid #2a2a2a",
+        borderRadius: "6px",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

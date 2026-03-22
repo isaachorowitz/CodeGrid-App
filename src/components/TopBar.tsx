@@ -351,135 +351,57 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           </button>
         </div>
 
-        {/* Layout presets */}
-        <div style={{ display: "flex", gap: "1px", marginRight: "4px" }}>
-          {presets.map((p) => (
-            <button
-              key={p.value}
-              onClick={() => handlePreset(p.value)}
-              title={`Layout: ${p.value}`}
-              style={{
-                background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-                fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-                padding: "2px 5px", minWidth: "22px", textAlign: "center",
-              }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-            >
-              {p.label}
-            </button>
-          ))}
+        {/* Spacer to push buttons right */}
+        <div style={{ flex: 1 }} />
+
+        {/* === Three toolbar buttons — same size, right-aligned === */}
+        <div style={{ display: "flex", gap: "2px" }}>
+          <button
+            onClick={() => setCommandPaletteOpen(true)}
+            title="Command Palette (Cmd+K)"
+            style={{
+              background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+              padding: "3px 10px", fontWeight: "bold",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+          >
+            CMD+K
+          </button>
+          <button
+            onClick={() => {
+              const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+              const dir = ws?.repo_path ?? activeSessions[0]?.working_dir ?? "";
+              if (dir) {
+                window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "claude" } }));
+              } else {
+                setNewSessionDialogOpen(true);
+              }
+            }}
+            title="New session in this project (Cmd+N)"
+            style={{
+              background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+              padding: "3px 10px", fontWeight: "bold",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+          >
+            + SAME
+          </button>
+          <button
+            onClick={() => setNewSessionDialogOpen(true)}
+            title="New session (choose project)"
+            style={{
+              background: "#ff8c00", border: "1px solid #ff8c00", color: "#0a0a0a",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+              padding: "3px 10px", fontWeight: "bold",
+            }}
+          >
+            + NEW
+          </button>
         </div>
-
-        {/* Auto Layout button */}
-        <button
-          onClick={handleAutoLayout}
-          title="Auto Layout: automatically arrange all visible terminals in a clean grid"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 6px", marginRight: "2px", letterSpacing: "0.5px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          AUTO
-        </button>
-
-        {/* Lock toggle */}
-        <button
-          onClick={toggleLocked}
-          title={canvasState.locked ? "Unlock canvas (allow drag/resize)" : "Lock canvas (prevent drag/resize)"}
-          style={{
-            background: canvasState.locked ? "rgba(255, 140, 0, 0.2)" : "#1e1e1e",
-            border: `1px solid ${canvasState.locked ? "#ff8c00" : "#2a2a2a"}`,
-            color: canvasState.locked ? "#ff8c00" : "#555555",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 6px", marginRight: "2px",
-          }}
-        >
-          {canvasState.locked ? "LOCKED" : "UNLCK"}
-        </button>
-
-        {/* Zoom indicator */}
-        <div
-          style={{
-            background: "#1e1e1e",
-            border: "1px solid #2a2a2a",
-            color: "#666666",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-            padding: "2px 5px", marginRight: "2px",
-            minWidth: "30px", textAlign: "center",
-          }}
-        >
-          {Math.round(canvasState.zoom * 100)}%
-        </div>
-
-        {/* Fit All */}
-        <button
-          onClick={() => zoomToFit(window.innerWidth, window.innerHeight - 100)}
-          title="Zoom to fit all panes"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888888",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 6px", marginRight: "2px", letterSpacing: "0.5px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          FIT
-        </button>
-
-        {/* Quick new session in current project */}
-        <button
-          onClick={() => {
-            const ws = workspaces.find((w) => w.id === activeWorkspaceId);
-            const dir = ws?.repo_path ?? activeSessions[0]?.working_dir ?? "";
-            if (dir) {
-              window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "claude" } }));
-            } else {
-              setNewSessionDialogOpen(true);
-            }
-          }}
-          title={vibeMode ? "New Chat in this project (Cmd+N)" : "New Session in this project (Cmd+N)"}
-          style={{
-            background: "#ff8c00", border: "1px solid #ff8c00", color: "#0a0a0a",
-            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 8px", fontWeight: "bold",
-          }}
-        >
-          + NEW
-        </button>
-
-        {/* Open new session dialog (choose project/type) */}
-        <button
-          onClick={() => setNewSessionDialogOpen(true)}
-          title="New session (choose project)"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
-            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 6px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          + ...
-        </button>
-
-        {/* Command palette */}
-        <button
-          onClick={() => setCommandPaletteOpen(true)}
-          title="Command Palette (Cmd+K)"
-          style={{
-            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#555555",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 6px",
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-          onMouseLeave={(e) => { e.currentTarget.style.color = "#555555"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-        >
-          CMD+K
-        </button>
       </div>
 
       {/* Session tab bar */}

@@ -270,12 +270,7 @@ export default function App() {
         addSession(session);
         addPaneLayout(session.id);
         setFocusedSession(session.id);
-        // Zoom to fit so the new pane is visible at a comfortable size
         setTimeout(() => {
-          const { layouts } = useLayoutStore.getState();
-          if (layouts.length > 0) {
-            useLayoutStore.getState().zoomToFit(dimensions.width, dimensions.height);
-          }
           window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
         }, 200);
       } catch (e) {

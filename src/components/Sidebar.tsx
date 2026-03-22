@@ -18,8 +18,8 @@ import { vibeLabel, vibeDescription } from "../lib/vibeMode";
 // ---------------------------------------------------------------------------
 
 const ACTIVITY_ITEMS: { id: ActivityPanel; label: string; icon: string }[] = [
-  { id: "files",    label: "Files",    icon: "\u{1F4C1}" },
-  { id: "search",   label: "Search",   icon: "\uD83D\uDD0D" },
+  { id: "files",    label: "Files",    icon: "\u2630" },
+  { id: "search",   label: "Search",   icon: "\u2315" },
   { id: "git",      label: "Git",      icon: "\u2387" },
   { id: "settings", label: "Settings", icon: "\u2699" },
 ];

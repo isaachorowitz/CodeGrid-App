@@ -244,11 +244,15 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
 
   addPaneLayout: (sessionId) =>
     set((state) => {
-      // Cascade from last visible pane
+      // Place new pane to the right of the rightmost visible pane, never overlapping.
+      // First pane starts at top-left (0,0).
       const visible = state.layouts.filter((l) => !state.minimizedPanes[l.i]);
-      const last = visible[visible.length - 1];
-      const x = last ? last.x + CASCADE_OFFSET : 0;
-      const y = last ? last.y + CASCADE_OFFSET : 0;
+      let x = 0;
+      const y = 0;
+      if (visible.length > 0) {
+        const rightEdge = Math.max(...visible.map((l) => l.x + l.w));
+        x = rightEdge + 8; // 8px gap
+      }
       const newLayout = enforceMinSize({ i: sessionId, x, y, w: DEFAULT_W, h: DEFAULT_H });
       const nextLayouts = [...state.layouts, newLayout];
       if (state.maximizedPane) {
