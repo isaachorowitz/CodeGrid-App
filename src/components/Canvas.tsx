@@ -76,6 +76,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     // momentum
     velocitySamples: [] as { x: number; y: number; t: number }[],
     momentumRaf: 0,
+    lastBrowserSync: 0,
   });
 
   // Sync zustand → live ref when store changes (e.g. preset, autoLayout, external)
@@ -89,10 +90,8 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(canvas.zoom * 100)}%`;
   }, [canvas.zoom, canvas.panX, canvas.panY, canvas.locked]);
 
-  // Sync all browser pane positions when canvas state, layouts, or workspace changes.
-  // This handles: zoom/pan changes, workspace switching (hides off-workspace panes),
-  // and layout changes from presets/auto-layout.
-  useEffect(() => {
+  // Extracted browser sync logic so it can be called from multiple places
+  function syncAllBrowserPanes() {
     const allSess = useSessionStore.getState().sessions;
     const browserSessions = allSess.filter((s) => s.type === "browser");
     if (browserSessions.length === 0) return;
@@ -100,14 +99,25 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     const rect = viewportRef.current?.getBoundingClientRect();
     const offsetX = rect?.left ?? 0;
     const offsetY = rect?.top ?? 0;
+    const currentLayouts = useLayoutStore.getState().layouts;
+    const currentMaximized = useLayoutStore.getState().maximizedPane;
 
     for (const session of browserSessions) {
       const isActive = session.workspace_id === activeWorkspaceId;
-      const layout = layouts.find((l) => l.i === session.id);
+      const layout = currentLayouts.find((l) => l.i === session.id);
 
       if (!isActive || !layout) {
         // Hide: move off-screen
         updateBrowserPanePosition(session.id, -9999, -9999, 0, 0).catch(() => {});
+      } else if (currentMaximized === session.id) {
+        // Maximized: use viewport bounds directly (transform is "none")
+        const vpRect = viewportRef.current?.getBoundingClientRect();
+        if (vpRect) {
+          const hdrH = BROWSER_HEADER_HEIGHT;
+          updateBrowserPanePosition(
+            session.id, vpRect.left, vpRect.top + hdrH, vpRect.width, Math.max(0, vpRect.height - hdrH),
+          ).catch(() => {});
+        }
       } else {
         const win = canvasToWindow(
           layout.x, layout.y, layout.w, layout.h,
@@ -120,7 +130,23 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         ).catch(() => {});
       }
     }
-  }, [canvas.zoom, canvas.panX, canvas.panY, activeWorkspaceId, layouts]);
+  }
+
+  // Sync all browser pane positions when canvas state, layouts, or workspace changes.
+  useEffect(() => {
+    syncAllBrowserPanes();
+  }, [canvas.zoom, canvas.panX, canvas.panY, activeWorkspaceId, layouts, maximizedPane]);
+
+  // Resync browser pane positions when viewport resizes (sidebar toggle, window resize)
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    const observer = new ResizeObserver(() => {
+      syncAllBrowserPanes();
+    });
+    observer.observe(vp);
+    return () => observer.disconnect();
+  }, [activeWorkspaceId]);
 
   const dragOverlayRef = useRef<HTMLDivElement>(null);
   const hasMinimized = Object.keys(minimizedPanes).length > 0;
@@ -369,6 +395,25 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         };
         L.dragEl.style.left = `${nx}px`;
         L.dragEl.style.top = `${ny}px`;
+
+        // Throttled browser pane sync during drag (~30fps)
+        const dragSession = useSessionStore.getState().sessions.find((s) => s.id === L.dragId);
+        if (dragSession?.type === "browser") {
+          const now = performance.now();
+          if (now - L.lastBrowserSync > 33) {
+            L.lastBrowserSync = now;
+            const rect = viewportRef.current?.getBoundingClientRect();
+            if (rect) {
+              const preview = L.panePreview[L.dragId];
+              const layout = useLayoutStore.getState().layouts.find((l) => l.i === L.dragId);
+              const pw = preview?.w ?? layout?.w ?? 600;
+              const ph = preview?.h ?? layout?.h ?? 400;
+              const win = canvasToWindow(nx, ny, pw, ph, L.zoom, L.panX, L.panY, rect.left, rect.top);
+              const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
+              updateBrowserPanePosition(L.dragId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
+            }
+          }
+        }
         return;
       }
 
@@ -386,6 +431,21 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         L.resizeEl.style.top = `${y}px`;
         L.resizeEl.style.width = `${w}px`;
         L.resizeEl.style.height = `${h}px`;
+
+        // Throttled browser pane sync during resize (~30fps)
+        const resizeSession = useSessionStore.getState().sessions.find((s) => s.id === L.resizeId);
+        if (resizeSession?.type === "browser") {
+          const now = performance.now();
+          if (now - L.lastBrowserSync > 33) {
+            L.lastBrowserSync = now;
+            const rect = viewportRef.current?.getBoundingClientRect();
+            if (rect) {
+              const win = canvasToWindow(x, y, w, h, L.zoom, L.panX, L.panY, rect.left, rect.top);
+              const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
+              updateBrowserPanePosition(L.resizeId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
+            }
+          }
+        }
         return;
       }
     };
@@ -570,6 +630,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       {/* Canvas viewport */}
       <div
         ref={viewportRef}
+        data-canvas-viewport
         onMouseDown={handleCanvasMouseDown}
         style={{
           position: "relative",

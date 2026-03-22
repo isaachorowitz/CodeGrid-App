@@ -31,4 +31,4 @@ export function canvasToWindow(
 }
 
 /** Height of the BrowserPane header bar (URL bar) in CSS pixels */
-export const BROWSER_HEADER_HEIGHT = 28;
+export const BROWSER_HEADER_HEIGHT = 32;

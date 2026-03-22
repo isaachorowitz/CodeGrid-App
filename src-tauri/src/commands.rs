@@ -3685,6 +3685,20 @@ pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, Strin
 
 // === Browser Pane Webview Commands ===
 
+/// Parse and validate a URL for browser panes. Only http/https allowed.
+fn parse_browser_url(url: &str) -> Result<tauri::Url, String> {
+    let raw = if url.starts_with("http://") || url.starts_with("https://") {
+        url.to_string()
+    } else {
+        format!("https://{url}")
+    };
+    let parsed: tauri::Url = raw.parse().map_err(|e| format!("Invalid URL: {e}"))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err("Only http and https URLs are allowed".to_string());
+    }
+    Ok(parsed)
+}
+
 #[tauri::command]
 pub async fn create_browser_pane(
     app: AppHandle,
@@ -3701,13 +3715,13 @@ pub async fn create_browser_pane(
     let window = app.get_window("main")
         .ok_or("Main window not found")?;
 
-    let webview_url = if url.starts_with("http://") || url.starts_with("https://") {
-        tauri::WebviewUrl::External(url.parse().map_err(|e| format!("Invalid URL: {e}"))?)
-    } else {
-        tauri::WebviewUrl::External(format!("https://{url}").parse().map_err(|e| format!("Invalid URL: {e}"))?)
-    };
+    // Close existing pane with same ID if it exists (prevent duplicates)
+    if let Some(existing) = app.get_webview(&pane_id) {
+        let _ = existing.close();
+    }
 
-    let builder = WebviewBuilder::new(&pane_id, webview_url);
+    let parsed = parse_browser_url(&url)?;
+    let builder = WebviewBuilder::new(&pane_id, tauri::WebviewUrl::External(parsed));
 
     window.add_child(
         builder,
@@ -3729,6 +3743,7 @@ pub async fn update_browser_pane_position(
 ) -> Result<(), String> {
     use tauri::{Manager, LogicalPosition, LogicalSize};
 
+    // Silently skip if pane doesn't exist (may have been closed during drag)
     if let Some(webview) = app.get_webview(&pane_id) {
         webview.set_position(LogicalPosition::new(x, y))
             .map_err(|e| format!("Failed to set position: {e}"))?;
@@ -3746,15 +3761,10 @@ pub async fn navigate_browser_pane(
 ) -> Result<(), String> {
     use tauri::Manager;
 
-    let parsed_url = if url.starts_with("http://") || url.starts_with("https://") {
-        url.parse().map_err(|e| format!("Invalid URL: {e}"))?
-    } else {
-        format!("https://{url}").parse().map_err(|e| format!("Invalid URL: {e}"))?
-    };
-
-    if let Some(webview) = app.get_webview(&pane_id) {
-        webview.navigate(parsed_url).map_err(|e| format!("Failed to navigate: {e}"))?;
-    }
+    let parsed = parse_browser_url(&url)?;
+    let webview = app.get_webview(&pane_id)
+        .ok_or_else(|| format!("Browser pane '{}' not found", pane_id))?;
+    webview.navigate(parsed).map_err(|e| format!("Failed to navigate: {e}"))?;
     Ok(())
 }
 

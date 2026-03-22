@@ -124,6 +124,11 @@ export default function App() {
 
               for (const old of persisted) {
                 try {
+                  // Skip browser panes — they cannot be restored (no persistent state)
+                  if (old.command === "browser") {
+                    console.log(`[CodeGrid] Skipping browser session ${old.id} (not restorable)`);
+                    continue;
+                  }
                   const isShell = !old.command.includes("claude");
                   let restored;
                   try {
@@ -387,28 +392,33 @@ export default function App() {
       addPaneLayout(browserSessionId);
       setFocusedSession(browserSessionId);
 
-      // Wait a tick for layout to be committed, then read position and create native webview
+      // Double-rAF to ensure layout is fully committed before reading position
       requestAnimationFrame(() => {
-        const layout = useLayoutStore.getState().layouts.find((l) => l.i === browserSessionId);
-        if (layout) {
-          const canvasState = useLayoutStore.getState().canvas;
-          const rect = containerRef.current?.getBoundingClientRect();
-          const offsetX = rect?.left ?? 0;
-          const offsetY = rect?.top ?? 0;
-          const win = canvasToWindow(
-            layout.x, layout.y, layout.w, layout.h,
-            canvasState.zoom, canvasState.panX, canvasState.panY,
-            offsetX, offsetY,
-          );
-          // Offset for the BrowserPane header bar so the native webview sits below it
-          const headerH = Math.round(BROWSER_HEADER_HEIGHT * canvasState.zoom);
-          createBrowserPane(
-            browserSessionId, url,
-            win.x, win.y + headerH, win.w, Math.max(0, win.h - headerH),
-          ).catch((err) =>
-            console.warn("Failed to create browser pane:", err)
-          );
-        }
+        requestAnimationFrame(() => {
+          const layout = useLayoutStore.getState().layouts.find((l) => l.i === browserSessionId);
+          if (layout) {
+            const canvasState = useLayoutStore.getState().canvas;
+            // Read viewport position from Canvas's viewport element for accuracy
+            // (containerRef has a 1px border that shifts the offset)
+            const viewport = document.querySelector('[data-canvas-viewport]') as HTMLElement | null;
+            const rect = viewport?.getBoundingClientRect() ?? containerRef.current?.getBoundingClientRect();
+            const offsetX = rect?.left ?? 0;
+            const offsetY = rect?.top ?? 0;
+            const win = canvasToWindow(
+              layout.x, layout.y, layout.w, layout.h,
+              canvasState.zoom, canvasState.panX, canvasState.panY,
+              offsetX, offsetY,
+            );
+            // Offset for the BrowserPane header bar so the native webview sits below it
+            const headerH = Math.round(BROWSER_HEADER_HEIGHT * canvasState.zoom);
+            createBrowserPane(
+              browserSessionId, url,
+              win.x, win.y + headerH, win.w, Math.max(0, win.h - headerH),
+            ).catch((err) =>
+              console.warn("Failed to create browser pane:", err)
+            );
+          }
+        });
       });
     };
     window.addEventListener("codegrid:new-browser-pane", handler);

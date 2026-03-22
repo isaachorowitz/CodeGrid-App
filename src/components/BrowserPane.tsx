@@ -71,7 +71,9 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
           userSelect: "none",
           fontFamily: MONO,
           fontSize: "11px",
-          minHeight: "28px",
+          height: "32px",
+          boxSizing: "border-box",
+          overflow: "hidden",
         }}
       >
         {/* Pane type indicator */}

@@ -3,11 +3,14 @@
   "identifier": "default",
   "description": "Default capabilities for CodeGrid",
   "windows": ["main"],
+  "webviews": ["main", "browser-*"],
   "permissions": [
     "core:default",
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
+    "core:webview:default",
+    "core:webview:allow-create-webview",
     "dialog:allow-open",
     "shell:allow-open"
   ]
