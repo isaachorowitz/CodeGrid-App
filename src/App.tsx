@@ -108,20 +108,9 @@ export default function App() {
             setCanvas(sanitizeCanvasState(null));
           }
 
-          // Restore persisted sessions (as dead) for ALL workspaces so switching
-          // workspaces shows the correct pane titles and layout placeholders.
-          try {
-            for (const ws of existing) {
-              const saved = await getPersistedSessions(ws.id);
-              for (const s of saved) {
-                // Only add if not already in memory (avoid duplicates on hot-reload)
-                const { sessions: current } = useSessionStore.getState();
-                if (!current.some((c) => c.id === s.id)) {
-                  useSessionStore.getState().addSession(s);
-                }
-              }
-            }
-          } catch (e) { console.warn("Failed to restore sessions:", e); }
+          // Clear stale sessions from previous launches — dead sessions have no live PTY
+          // and just clutter the UI. Start fresh each launch.
+          // (Layouts are preserved via workspace layout_json, so pane positions survive.)
         } else {
           const ws = await createWorkspace("Default");
           addWorkspace(ws);
@@ -281,7 +270,12 @@ export default function App() {
         addSession(session);
         addPaneLayout(session.id);
         setFocusedSession(session.id);
+        // Zoom to fit so the new pane is visible at a comfortable size
         setTimeout(() => {
+          const { layouts } = useLayoutStore.getState();
+          if (layouts.length > 0) {
+            useLayoutStore.getState().zoomToFit(dimensions.width, dimensions.height);
+          }
           window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
         }, 200);
       } catch (e) {

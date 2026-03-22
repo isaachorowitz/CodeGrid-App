@@ -3,7 +3,7 @@ import type { WorkspaceInfo } from "../lib/ipc";
 import { useSessionStore } from "./sessionStore";
 import { useLayoutStore } from "./layoutStore";
 
-export type ActivityPanel = "files" | "git" | "search" | "hub" | "mcp" | "settings" | null;
+export type ActivityPanel = "files" | "git" | "search" | "settings" | null;
 
 interface WorkspaceState {
   workspaces: WorkspaceInfo[];

@@ -44,7 +44,7 @@ export const LicenseDialog = memo(function LicenseDialog() {
 
   return (
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", justifyContent: "center", paddingTop: "60px" }}
+      style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", justifyContent: "center", alignItems: "flex-start", paddingTop: "60px", paddingBottom: "40px", overflow: "auto" }}
       onClick={() => setLicenseDialogOpen(false)}
     >
       <div style={{ position: "absolute", inset: 0, background: "rgba(0, 0, 0, 0.6)" }} />
@@ -56,7 +56,7 @@ export const LicenseDialog = memo(function LicenseDialog() {
         style={{
           position: "relative", width: "460px", background: "#141414",
           border: "1px solid #2a2a2a", fontFamily: MONO, zIndex: 1,
-          display: "flex", flexDirection: "column",
+          display: "flex", flexDirection: "column", flexShrink: 0,
         }}
       >
         {/* Header */}

@@ -130,13 +130,46 @@ pub fn run() {
             commands::deactivate_license,
 
         ])
-        // Hide window on close (red X) instead of quitting so PTY sessions
-        // stay alive. Cmd+Q / File→Quit still exits normally.
-        // On macOS, clicking the dock icon fires RunEvent::Reopen to show it again.
+        // Intercept close (red X / Cmd+Q) → show confirmation if sessions are running.
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
-                let _ = window.hide();
+
+                let window = window.clone();
+                tauri::async_runtime::spawn(async move {
+                    // Check if any PTY sessions are alive
+                    let has_sessions = window
+                        .try_state::<Arc<AppState>>()
+                        .map(|state| state.pty_manager.session_count() > 0)
+                        .unwrap_or(false);
+
+                    if has_sessions {
+                        use tauri_plugin_dialog::DialogExt;
+                        let dialog = window.dialog().clone();
+                        let confirmed = tauri_plugin_dialog::MessageDialogBuilder::new(
+                            dialog,
+                            "Quit CodeGrid?",
+                            "Quitting will close all your terminal sessions.\nYou can minimize instead to keep them running.",
+                        )
+                        .kind(tauri_plugin_dialog::MessageDialogKind::Warning)
+                        .buttons(tauri_plugin_dialog::MessageDialogButtons::OkCancelCustom(
+                            "Quit".to_string(),
+                            "Minimize".to_string(),
+                        ))
+                        .blocking_show();
+
+                        if confirmed {
+                            // User chose Quit
+                            let _ = window.destroy();
+                        } else {
+                            // User chose Minimize
+                            let _ = window.hide();
+                        }
+                    } else {
+                        // No active sessions — just close
+                        let _ = window.destroy();
+                    }
+                });
             }
         })
         .build(tauri::generate_context!())

@@ -1,4 +1,5 @@
 import { memo, useCallback, useState, useMemo, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
 import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore, type PresetLayout } from "../stores/layoutStore";
@@ -429,25 +430,18 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           FIT
         </button>
 
-        {/* Broadcast */}
+        {/* Quick new session in current project */}
         <button
-          onClick={toggleBroadcast}
-          title={vibeMode ? "Type to All: type in one terminal, send to all terminals simultaneously (Cmd+B)" : "Broadcast: type in one terminal, send to all terminals simultaneously (Cmd+B)"}
-          style={{
-            background: broadcastMode ? "rgba(255, 140, 0, 0.2)" : "#1e1e1e",
-            border: `1px solid ${broadcastMode ? "#ff8c00" : "#2a2a2a"}`,
-            color: broadcastMode ? "#ff8c00" : "#555555",
-            fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
-            padding: "2px 6px", marginRight: "2px", letterSpacing: "0.5px",
+          onClick={() => {
+            const ws = workspaces.find((w) => w.id === activeWorkspaceId);
+            const dir = ws?.repo_path ?? activeSessions[0]?.working_dir ?? "";
+            if (dir) {
+              window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "claude" } }));
+            } else {
+              setNewSessionDialogOpen(true);
+            }
           }}
-        >
-          {vibeLabel("BCAST", vibeMode)}
-        </button>
-
-        {/* New session */}
-        <button
-          onClick={() => setNewSessionDialogOpen(true)}
-          title={vibeMode ? "New Chat (Cmd+N)" : "New Session (Cmd+N)"}
+          title={vibeMode ? "New Chat in this project (Cmd+N)" : "New Session in this project (Cmd+N)"}
           style={{
             background: "#ff8c00", border: "1px solid #ff8c00", color: "#0a0a0a",
             fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
@@ -455,6 +449,21 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           }}
         >
           + NEW
+        </button>
+
+        {/* Open new session dialog (choose project/type) */}
+        <button
+          onClick={() => setNewSessionDialogOpen(true)}
+          title="New session (choose project)"
+          style={{
+            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+            padding: "2px 6px",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          + ...
         </button>
 
         {/* Command palette */}
@@ -623,8 +632,8 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
         </div>
       )}
 
-      {/* Context menu */}
-      {ctxMenu && (
+      {/* Context menu — portaled to body to escape overflow:hidden */}
+      {ctxMenu && createPortal(
         <div
           ref={ctxRef}
           style={{
@@ -664,11 +673,12 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
               </button>
             </>
           )}
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Delete confirmation overlay */}
-      {confirmDeleteId && (
+      {/* Delete confirmation overlay — portaled to body */}
+      {confirmDeleteId && createPortal(
         <div
           style={{ position: "fixed", inset: 0, zIndex: 9998, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.5)" }}
           onClick={() => setConfirmDeleteId(null)}
@@ -696,7 +706,8 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

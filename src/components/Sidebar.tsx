@@ -18,12 +18,10 @@ import { vibeLabel, vibeDescription } from "../lib/vibeMode";
 // ---------------------------------------------------------------------------
 
 const ACTIVITY_ITEMS: { id: ActivityPanel; label: string; icon: string }[] = [
-  { id: "files",    label: "Files",    icon: "\u2630" },
-  { id: "search",   label: "Search",   icon: "\u2315" },
+  { id: "files",    label: "Files",    icon: "\u{1F4C1}" },
+  { id: "search",   label: "Search",   icon: "\uD83D\uDD0D" },
   { id: "git",      label: "Git",      icon: "\u2387" },
-  { id: "hub",      label: "Hub",      icon: "\u2302" },
-  { id: "mcp",      label: "MCP",      icon: "\u2699" },
-  { id: "settings", label: "Settings", icon: "\u2261" },
+  { id: "settings", label: "Settings", icon: "\u2699" },
 ];
 
 const ActivityBar = memo(function ActivityBar({
@@ -1073,23 +1071,33 @@ const McpPanel = memo(function McpPanel() {
 // Panel: Settings
 // ---------------------------------------------------------------------------
 const SettingsPanel = memo(function SettingsPanel() {
-  const { setSettingsOpen } = useWorkspaceStore();
-  const { setSkillsPanelOpen, setClaudeMdEditorOpen, setGitSetupWizardOpen } = useAppStore();
+  const { setSettingsOpen, setLicenseDialogOpen } = useWorkspaceStore();
+  const { setSkillsPanelOpen, setClaudeMdEditorOpen, setGitSetupWizardOpen, setMcpManagerOpen, setHubBrowserOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
   const { workspaces, activeWorkspaceId } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
+  const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
   const activeSessions = sessions.filter((s) => s.workspace_id === activeWorkspaceId);
 
   const buttons = [
     { label: "SETTINGS", onClick: () => setSettingsOpen(true), color: "#ff8c00" },
+    { label: "MCP SERVERS", onClick: () => {
+      const focused = sessions.find((s) => s.id === focusedSessionId);
+      setMcpManagerOpen(true, focused?.working_dir ?? activeWorkspace?.repo_path ?? undefined);
+    }, color: "#d500f9" },
     { label: "SKILLS", onClick: () => setSkillsPanelOpen(true), color: "#4a9eff" },
     { label: "CLAUDE.md", onClick: () => {
       const dir = activeWorkspace?.repo_path ?? activeSessions[0]?.working_dir;
       if (dir) setClaudeMdEditorOpen(true, dir);
       else addToast("No project directory -- open a session first", "warning");
     }, color: "#ffab00" },
+    { label: "GITHUB HUB", onClick: () => setHubBrowserOpen(true), color: "#00c853" },
     { label: "GIT SETUP", onClick: () => setGitSetupWizardOpen(true), color: "#ff8c00" },
+    { label: "LICENSE", onClick: () => setLicenseDialogOpen(true), color: "#ff8c00" },
+    { label: "CHECK FOR UPDATES", onClick: () => {
+      window.open("https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/latest", "_blank");
+    }, color: "#888" },
   ];
 
   return (
@@ -1124,8 +1132,6 @@ const SettingsPanel = memo(function SettingsPanel() {
 const PANEL_WIDTHS: Record<string, number> = {
   files: 220,
   git: 240,
-  hub: 220,
-  mcp: 220,
   settings: 220,
 };
 
@@ -1242,9 +1248,7 @@ export const Sidebar = memo(function Sidebar() {
               {activePanel === "files" ? "FILES" :
                activePanel === "search" ? "SEARCH" :
                activePanel === "git" ? vibeLabel("SOURCE CONTROL", vibeMode) :
-               activePanel === "hub" ? "GITHUB HUB" :
-               activePanel === "mcp" ? `${vibeLabel("MCP", vibeMode)} SERVERS` :
-               activePanel === "settings" ? "SETTINGS" : ""}
+               activePanel === "settings" ? "SETTINGS & TOOLS" : ""}
             </span>
             <span style={{ color: "#555555", fontSize: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100px" }}>
               {activeWorkspace?.name ?? ""}
@@ -1272,8 +1276,6 @@ export const Sidebar = memo(function Sidebar() {
             onRefreshGit={refreshGitStatus}
           />
         )}
-        {showPanel && activePanel === "hub" && <HubPanel />}
-        {showPanel && activePanel === "mcp" && <McpPanel />}
         {showPanel && activePanel === "settings" && <SettingsPanel />}
       </div>
     </div>

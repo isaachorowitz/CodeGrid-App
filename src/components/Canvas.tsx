@@ -1,4 +1,4 @@
-import { useCallback, useMemo, memo, useRef, useEffect } from "react";
+import { useCallback, useMemo, memo, useRef, useEffect, useState } from "react";
 import { Pane } from "./Pane";
 import { MinimizedPaneBar } from "./MinimizedPaneBar";
 import { useSessionStore } from "../stores/sessionStore";
@@ -81,6 +81,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(canvas.zoom * 100)}%`;
   }, [canvas.zoom, canvas.panX, canvas.panY, canvas.locked]);
 
+  const dragOverlayRef = useRef<HTMLDivElement>(null);
   const hasMinimized = Object.keys(minimizedPanes).length > 0;
   const canvasHeight = height;
 
@@ -231,10 +232,12 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       const layout = next.layouts.find((l) => l.i === sessionId);
       if (!layout) return;
 
-      const padding = 24;
+      // Use generous padding so the pane doesn't fill the entire viewport
+      const padding = 120;
       const zoomX = (width - padding * 2) / layout.w;
       const zoomY = (canvasHeight - padding * 2) / layout.h;
-      const zoom = Math.max(0.1, Math.min(2.0, Math.min(zoomX, zoomY)));
+      // Cap zoom at 1.0 so we never zoom in beyond 100% — just center the pane
+      const zoom = Math.max(0.1, Math.min(1.0, Math.min(zoomX, zoomY)));
       const centerX = layout.x + layout.w / 2;
       const centerY = layout.y + layout.h / 2;
       const panX = width / (2 * zoom) - centerX;
@@ -324,11 +327,13 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         }
         delete L.panePreview[L.resizeId];
       }
+      if (L.dragEl) L.dragEl.style.zIndex = "";
       L.mode = "idle";
       L.dragId = "";
       L.resizeId = "";
       L.dragEl = null;
       L.resizeEl = null;
+      if (dragOverlayRef.current) dragOverlayRef.current.style.display = "none";
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
@@ -372,6 +377,8 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     L.dragOrigY = layout.y;
     L.panePreview[id] = { x: layout.x, y: layout.y, w: layout.w, h: layout.h };
     L.dragEl = el;
+    el.style.zIndex = "999";
+    if (dragOverlayRef.current) dragOverlayRef.current.style.display = "block";
     document.body.style.cursor = "move";
     document.body.style.userSelect = "none";
   }, [maximizedPane]);
@@ -397,6 +404,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     L.resizeOrigH = layout.h;
     L.panePreview[id] = { x: layout.x, y: layout.y, w: layout.w, h: layout.h };
     L.resizeEl = el;
+    if (dragOverlayRef.current) dragOverlayRef.current.style.display = "block";
     document.body.style.userSelect = "none";
   }, [maximizedPane]);
 
@@ -443,6 +451,19 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           cursor: "grab",
         }}
       >
+        {/* Transparent overlay during drag/resize — prevents pane internals (xterm, etc.)
+            from stealing mouse events when dragging over overlapping panes */}
+        <div
+          ref={dragOverlayRef}
+          style={{
+            display: "none",
+            position: "absolute",
+            inset: 0,
+            zIndex: 900,
+            cursor: "move",
+          }}
+        />
+
         {/* Dot grid background */}
         <div
           ref={bgRef}
