@@ -474,8 +474,8 @@ export interface DeviceFlowStart {
   expires_in: number;
 }
 
-export async function startGithubDeviceFlow(clientId: string): Promise<DeviceFlowStart> {
-  return invoke("start_github_device_flow", { clientId });
+export async function startGithubDeviceFlow(): Promise<DeviceFlowStart> {
+  return invoke("start_github_device_flow");
 }
 
 export interface TokenPollResult {
@@ -484,8 +484,8 @@ export interface TokenPollResult {
   error: string | null;
 }
 
-export async function pollGithubToken(clientId: string, deviceCode: string): Promise<TokenPollResult> {
-  return invoke("poll_github_token", { clientId, deviceCode });
+export async function pollGithubToken(deviceCode: string): Promise<TokenPollResult> {
+  return invoke("poll_github_token", { deviceCode });
 }
 
 export async function saveGithubToken(token: string): Promise<void> {

@@ -158,7 +158,7 @@ export const LicenseDialog = memo(function LicenseDialog() {
                     <input
                       value={key}
                       onChange={(e) => setKey(e.target.value)}
-                      placeholder="CG-XXXXX-XXXXX-XXXXX-XXXXX"
+                      placeholder="CG-XXXXX-XXXXX-XXXXX.signature"
                       onKeyDown={(e) => { if (e.key === "Enter") handleActivate(); }}
                       style={{
                         width: "100%", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0",

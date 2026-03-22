@@ -128,7 +128,7 @@ pub fn run() {
             commands::get_license_status,
             commands::activate_license,
             commands::deactivate_license,
-            commands::generate_license_key_cmd,
+
         ])
         // Hide window on close (red X) instead of quitting so PTY sessions
         // stay alive. Cmd+Q / File→Quit still exits normally.

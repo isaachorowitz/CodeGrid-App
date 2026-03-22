@@ -102,7 +102,6 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
   const [ghAuthRunning, setGhAuthRunning] = useState(false);
 
   // OAuth Device Flow state
-  const [oauthClientId, setOauthClientId] = useState("Ov23li0vGUgzi9YIZF3U");
   const [deviceFlow, setDeviceFlow] = useState<{ device_code: string; user_code: string; verification_uri: string; interval: number } | null>(null);
   const [oauthPolling, setOauthPolling] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -188,10 +187,9 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
 
   // OAuth Device Flow
   const startDeviceFlow = useCallback(async () => {
-    if (!oauthClientId.trim()) { setError("OAuth Client ID missing"); return; }
     setError(null); setLoading(true);
     try {
-      const flow = await startGithubDeviceFlow(oauthClientId.trim());
+      const flow = await startGithubDeviceFlow();
       setDeviceFlow(flow);
       setOauthPolling(true);
       // Open verification URL in browser
@@ -209,7 +207,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
       }, Math.max(60, flow.expires_in) * 1000);
       pollRef.current = setInterval(async () => {
         try {
-          const result = await pollGithubToken(oauthClientId.trim(), flow.device_code);
+          const result = await pollGithubToken(flow.device_code);
           if (result.token) {
             clearInterval(pollRef.current!); pollRef.current = null;
             if (pollStopRef.current) { clearTimeout(pollStopRef.current); pollStopRef.current = null; }
@@ -235,7 +233,7 @@ export const GitSetupWizard = memo(function GitSetupWizard() {
       }, interval);
     } catch (e) { setError(String(e)); }
     setLoading(false);
-  }, [oauthClientId, addToast, refresh]);
+  }, [addToast, refresh]);
 
   const cancelDeviceFlow = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }

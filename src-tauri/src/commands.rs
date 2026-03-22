@@ -119,6 +119,31 @@ pub async fn create_session(
     let session_id = Uuid::new_v4().to_string();
     let pane_number = 1;
 
+    // Enforce license pane limit server-side (defense in depth — frontend also checks)
+    {
+        let license_status = crate::license::get_license_status(&state.db);
+        let sessions = state.sessions.lock().await;
+        let workspace_count = sessions
+            .iter()
+            .filter(|s| s.workspace_id == workspace_id)
+            .count() as u32;
+        drop(sessions);
+        if workspace_count >= license_status.max_panes {
+            return Err(format!(
+                "Pane limit reached ({}/{}). {}",
+                workspace_count,
+                license_status.max_panes,
+                if license_status.is_trial {
+                    "Upgrade to unlock more panes."
+                } else if license_status.is_licensed {
+                    "License maximum reached."
+                } else {
+                    "Trial expired. Purchase a license to continue."
+                }
+            ));
+        }
+    }
+
     // Determine actual working directory (possibly a worktree)
     let (actual_dir, worktree_path, git_branch) = if use_worktree
         && WorktreeManager::is_git_repo(&working_dir)
@@ -561,6 +586,17 @@ pub async fn set_setting(
     key: String,
     value: String,
 ) -> Result<(), String> {
+    // Block writes to security-sensitive keys — these are managed by
+    // activate_license / deactivate_license and the trial system only.
+    const BLOCKED_KEYS: &[&str] = &[
+        "license_key",
+        "first_launch_date",
+        "trial_integrity",
+        "machine_id",
+    ];
+    if BLOCKED_KEYS.contains(&key.as_str()) {
+        return Err(format!("Cannot modify protected setting: {key}"));
+    }
     state.db.set_setting(&key, &value)
 }
 
@@ -2851,13 +2887,9 @@ pub struct DeviceFlowStart {
 }
 
 #[tauri::command]
-pub async fn start_github_device_flow(client_id: String) -> Result<DeviceFlowStart, String> {
-    if client_id.is_empty() || client_id.len() > 100 {
-        return Err("Invalid client_id".to_string());
-    }
-    if !client_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        return Err("Invalid client_id: must be alphanumeric".to_string());
-    }
+pub async fn start_github_device_flow() -> Result<DeviceFlowStart, String> {
+    // Hardcoded server-side to prevent frontend substitution with a malicious OAuth app
+    let client_id = "Ov23li0vGUgzi9YIZF3U";
     let body_arg = format!("client_id={}&scope=repo", client_id);
     let output = std::process::Command::new("curl")
         .args(["-s", "-X", "POST",
@@ -2892,10 +2924,8 @@ pub struct TokenPollResult {
 }
 
 #[tauri::command]
-pub async fn poll_github_token(client_id: String, device_code: String) -> Result<TokenPollResult, String> {
-    if !client_id.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
-        return Err("Invalid client_id".to_string());
-    }
+pub async fn poll_github_token(device_code: String) -> Result<TokenPollResult, String> {
+    let client_id = "Ov23li0vGUgzi9YIZF3U";
     if !device_code.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
         return Err("Invalid device_code".to_string());
     }
@@ -3067,12 +3097,27 @@ pub async fn write_file_contents(file_path: String, content: String) -> Result<(
     }
 
     let target = Path::new(&file_path);
-    let allowed = is_path_or_parent_within_allowed_roots(target);
-    if !allowed {
+
+    // Canonicalize to resolve symlinks before checking allowed roots.
+    // For new files, canonicalize the parent and append the filename.
+    let canonical = if target.exists() {
+        target.canonicalize()
+            .map_err(|e| format!("Failed to resolve path: {e}"))?
+    } else {
+        let parent = target.parent()
+            .ok_or_else(|| "Invalid file path".to_string())?;
+        let canon_parent = parent.canonicalize()
+            .map_err(|e| format!("Failed to resolve parent directory: {e}"))?;
+        canon_parent.join(
+            target.file_name().ok_or_else(|| "Invalid file name".to_string())?
+        )
+    };
+
+    if !is_path_within_allowed_roots(&canonical) {
         return Err("File must be under home directory or /tmp".to_string());
     }
 
-    std::fs::write(target, content.as_bytes())
+    std::fs::write(&canonical, content.as_bytes())
         .map_err(|e| format!("Failed to write file: {e}"))?;
     Ok(())
 }
@@ -3494,7 +3539,3 @@ pub async fn deactivate_license(
     Ok(crate::license::get_license_status(&state.db))
 }
 
-#[tauri::command]
-pub async fn generate_license_key_cmd() -> Result<String, String> {
-    Ok(crate::license::generate_license_key())
-}
