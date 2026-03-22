@@ -14,7 +14,6 @@ interface WorkspaceState {
   commandPaletteOpen: boolean;
   newSessionDialogOpen: boolean;
   deleteConfirmId: string | null;
-  vibeMode: boolean;
   licenseDialogOpen: boolean;
 
   setWorkspaces: (workspaces: WorkspaceInfo[]) => void;
@@ -30,7 +29,6 @@ interface WorkspaceState {
   setCommandPaletteOpen: (open: boolean) => void;
   setNewSessionDialogOpen: (open: boolean) => void;
   setDeleteConfirmId: (id: string | null) => void;
-  setVibeMode: (enabled: boolean) => void;
   setLicenseDialogOpen: (open: boolean) => void;
 }
 
@@ -43,7 +41,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   commandPaletteOpen: false,
   newSessionDialogOpen: false,
   deleteConfirmId: null,
-  vibeMode: false,
   licenseDialogOpen: false,
 
   setWorkspaces: (workspaces) => set({ workspaces }),
@@ -105,6 +102,5 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setNewSessionDialogOpen: (open) => set({ newSessionDialogOpen: open }),
   setDeleteConfirmId: (id) => set({ deleteConfirmId: id }),
-  setVibeMode: (enabled) => set({ vibeMode: enabled }),
   setLicenseDialogOpen: (open) => set({ licenseDialogOpen: open }),
 }));

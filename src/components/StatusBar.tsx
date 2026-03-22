@@ -1,8 +1,6 @@
 import { memo, useState, useEffect } from "react";
 import { useAppStore } from "../stores/appStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
 import type { SessionWithModel } from "../stores/sessionStore";
-import { vibeLabel } from "../lib/vibeMode";
 
 interface StatusBarProps {
   session: SessionWithModel;
@@ -50,7 +48,6 @@ const STATUS_LABELS: Record<string, string> = {
 export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
   const [uptime, setUptime] = useState(formatUptime(session.created_at));
   const setGitManagerOpen = useAppStore((s) => s.setGitManagerOpen);
-  const vibeMode = useWorkspaceStore((s) => s.vibeMode);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -61,7 +58,7 @@ export const StatusBar = memo(function StatusBar({ session }: StatusBarProps) {
 
   const statusColor = STATUS_COLORS[session.status] ?? "#555555";
   const rawLabel = STATUS_LABELS[session.status] ?? "UNKNOWN";
-  const statusLabel = vibeLabel(rawLabel, vibeMode);
+  const statusLabel = rawLabel;
 
   return (
     <div

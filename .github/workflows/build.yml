@@ -6,14 +6,7 @@ on:
 
 jobs:
   build-mac:
-    strategy:
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            runner: macos-latest
-          - target: x86_64-apple-darwin
-            runner: macos-latest
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +17,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: aarch64-apple-darwin
 
       - name: Install dependencies
         run: npm install
@@ -38,7 +31,7 @@ jobs:
           releaseName: "Code Grid ${{ github.ref_name }}"
           releaseBody: "See CHANGELOG.md for details."
           releaseDraft: true
-          args: --target ${{ matrix.target }}
+          args: --target aarch64-apple-darwin
 
   # Uncomment when ready for Windows support
   # build-windows:

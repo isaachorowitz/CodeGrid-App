@@ -35,8 +35,6 @@ import {
   detectClaudeSkills,
   getAvailableModels,
   checkGitSetup,
-  createProjectDir,
-  sendToSession,
   getSetting,
   getPersistedSessions,
 } from "./lib/ipc";
@@ -59,7 +57,6 @@ export default function App() {
     sidebarOpen,
     activePanel,
     setNewSessionDialogOpen,
-    setVibeMode,
   } = useWorkspaceStore();
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
@@ -68,7 +65,7 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
 
-  // Filter sessions to only those belonging to the active workspace
+  // Sessions for the active workspace (used by broadcast routing, etc.)
   const sessions = useMemo(
     () => allSessions.filter((s) => s.workspace_id === activeWorkspaceId),
     [allSessions, activeWorkspaceId],
@@ -133,9 +130,6 @@ export default function App() {
 
       // Load recent dirs
       try { const dirs = await listRecentDirs(); setRecentDirs(dirs); } catch (e) { console.warn("Failed to load recent dirs:", e); }
-
-      // Load vibe mode setting
-      try { const vm = await getSetting("vibeMode"); if (vm === "true") setVibeMode(true); } catch (e) { console.warn("Failed to load vibe mode:", e); }
 
       // Load license status
       try { await useLicenseStore.getState().fetchStatus(); } catch (e) { console.warn("Failed to load license status:", e); }
@@ -410,13 +404,16 @@ export default function App() {
             boxShadow: "0 14px 36px rgba(0, 0, 0, 0.4)",
           }}
         >
-          {sessions.length === 0 ? (
+          {sessions.length === 0 && (
             <EmptyState
               onNewSession={() => setNewSessionDialogOpen(true)}
               onCreateSession={handleCreateSession}
             />
-          ) : (
-            <Canvas width={gridWidth} height={gridHeight} onCloseSession={handleCloseSession} />
+          )}
+          {allSessions.length > 0 && (
+            <div style={{ position: "absolute", inset: 0, visibility: sessions.length > 0 ? "visible" : "hidden" }}>
+              <Canvas width={gridWidth} height={gridHeight} onCloseSession={handleCloseSession} />
+            </div>
           )}
         </div>
       </div>
@@ -438,22 +435,6 @@ export default function App() {
   );
 }
 
-const VIBE_QUICK_CARDS = [
-  { label: "Web App", icon: "\u{1F310}", prompt: "Build me a modern web application with a clean UI. Include routing, a navigation bar, and a responsive layout. Use React with TypeScript." },
-  { label: "Mobile App", icon: "\u{1F4F1}", prompt: "Build me a mobile app using React Native with Expo. Include navigation, a home screen, and a settings page." },
-  { label: "API", icon: "\u{26A1}", prompt: "Build me a REST API with Node.js and Express. Include authentication, CRUD endpoints, and a database connection." },
-  { label: "Landing Page", icon: "\u{1F3AF}", prompt: "Build me a beautiful landing page with a hero section, features grid, testimonials, and a call-to-action. Make it responsive and modern." },
-  { label: "Chrome Extension", icon: "\u{1F9E9}", prompt: "Build me a Chrome extension with a popup UI, background script, and content script. Include a manifest.json for Manifest V3." },
-];
-
-const GLOW_KEYFRAMES = `
-@keyframes inputGlow {
-  0% { box-shadow: 0 0 5px rgba(255, 140, 0, 0.1), inset 0 0 5px rgba(255, 140, 0, 0.05); }
-  50% { box-shadow: 0 0 15px rgba(255, 140, 0, 0.25), inset 0 0 8px rgba(255, 140, 0, 0.1); }
-  100% { box-shadow: 0 0 5px rgba(255, 140, 0, 0.1), inset 0 0 5px rgba(255, 140, 0, 0.05); }
-}
-`;
-
 interface EmptyStateProps {
   onNewSession: () => void;
   onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => Promise<void>;
@@ -461,15 +442,7 @@ interface EmptyStateProps {
 
 function EmptyState({ onNewSession, onCreateSession }: EmptyStateProps) {
   const { setHubBrowserOpen, setSkillsPanelOpen, recentDirs } = useAppStore();
-  const { vibeMode, activeWorkspaceId } = useWorkspaceStore();
   const addToast = useToastStore((s) => s.addToast);
-  const addSession = useSessionStore((s) => s.addSession);
-  const addPaneLayout = useLayoutStore((s) => s.addPaneLayout);
-  const setFocusedSession = useSessionStore((s) => s.setFocusedSession);
-
-  const [ideaText, setIdeaText] = useState("");
-  const [isCreating, setIsCreating] = useState(false);
-  const ideaInputRef = useRef<HTMLTextAreaElement>(null);
 
   const handleQuickOpen = (dir: string) => {
     window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "claude" } }));
@@ -492,277 +465,9 @@ function EmptyState({ onNewSession, onCreateSession }: EmptyStateProps) {
     }
   };
 
-  const handleStartBuilding = async () => {
-    const text = ideaText.trim();
-    if (!text || !activeWorkspaceId) return;
-
-    setIsCreating(true);
-    try {
-      // 1. Create the project directory
-      const projectPath = await createProjectDir(text);
-
-      // 2. Create a workspace for the project
-      const projectName = projectPath.split("/").pop() ?? "project";
-      const ws = await createWorkspaceWithRepo(projectName, projectPath);
-      useWorkspaceStore.getState().addWorkspace(ws);
-
-      // 3. Create a Claude Code session in that directory
-      const session = await createSession(projectPath, ws.id, false, false);
-      addSession(session);
-      addPaneLayout(session.id);
-      setFocusedSession(session.id);
-
-      // 4. Send the user's description as the first prompt after a short delay
-      setTimeout(async () => {
-        try {
-          await sendToSession(session.id, text);
-        } catch (e) {
-          console.warn("Failed to send initial prompt:", e);
-        }
-        window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
-      }, 1500);
-    } catch (e) {
-      addToast(`Failed to create project: ${e}`, "error");
-    } finally {
-      setIsCreating(false);
-    }
-  };
-
-  const handleCardClick = (prompt: string) => {
-    setIdeaText(prompt);
-    setTimeout(() => ideaInputRef.current?.focus(), 50);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && ideaText.trim()) {
-      e.preventDefault();
-      handleStartBuilding();
-    }
-  };
-
   const MONO = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
 
-  // === VIBE MODE EMPTY STATE ===
-  if (vibeMode) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100%",
-          fontFamily: MONO,
-          color: "#e0e0e0",
-          padding: "40px 24px",
-          overflowY: "auto",
-        }}
-      >
-        <style>{GLOW_KEYFRAMES}</style>
-
-        {/* Heading */}
-        <div style={{ fontSize: "28px", fontWeight: "bold", color: "#e0e0e0", letterSpacing: "1px", marginBottom: "4px" }}>
-          What do you want to build?
-        </div>
-        <div style={{ fontSize: "13px", color: "#666666", marginBottom: "28px" }}>
-          Describe your idea and let AI handle the rest
-        </div>
-
-        {/* Main input */}
-        <div style={{ width: "100%", maxWidth: "560px", marginBottom: "12px" }}>
-          <textarea
-            ref={ideaInputRef}
-            value={ideaText}
-            onChange={(e) => setIdeaText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Describe your idea..."
-            rows={3}
-            style={{
-              width: "100%",
-              background: "#111111",
-              border: "1px solid #333333",
-              borderRadius: "8px",
-              color: "#e0e0e0",
-              fontSize: "15px",
-              fontFamily: MONO,
-              padding: "16px 18px",
-              resize: "none",
-              outline: "none",
-              animation: "inputGlow 3s ease-in-out infinite",
-              transition: "border-color 0.2s",
-              boxSizing: "border-box",
-            }}
-            onFocus={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; }}
-            onBlur={(e) => { e.currentTarget.style.borderColor = "#333333"; }}
-          />
-        </div>
-
-        {/* Start Building button */}
-        <button
-          onClick={handleStartBuilding}
-          disabled={!ideaText.trim() || isCreating}
-          style={{
-            background: ideaText.trim() ? "#ff8c00" : "#2a2a2a",
-            border: "none",
-            borderRadius: "6px",
-            color: ideaText.trim() ? "#0a0a0a" : "#555555",
-            fontSize: "14px",
-            fontFamily: MONO,
-            fontWeight: "bold",
-            letterSpacing: "1px",
-            padding: "12px 32px",
-            cursor: ideaText.trim() && !isCreating ? "pointer" : "default",
-            transition: "all 0.2s",
-            marginBottom: "24px",
-            opacity: isCreating ? 0.7 : 1,
-          }}
-          onMouseEnter={(e) => { if (ideaText.trim() && !isCreating) e.currentTarget.style.background = "#ffa040"; }}
-          onMouseLeave={(e) => { if (ideaText.trim()) e.currentTarget.style.background = "#ff8c00"; }}
-        >
-          {isCreating ? "CREATING..." : "START BUILDING \u2192"}
-        </button>
-
-        {/* Divider */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%", maxWidth: "560px", marginBottom: "20px" }}>
-          <div style={{ flex: 1, height: "1px", background: "#2a2a2a" }} />
-          <span style={{ fontSize: "11px", color: "#555555" }}>or</span>
-          <div style={{ flex: 1, height: "1px", background: "#2a2a2a" }} />
-        </div>
-
-        {/* Open Project / From GitHub buttons */}
-        <div style={{ display: "flex", gap: "10px", marginBottom: "28px" }}>
-          <button
-            onClick={handleOpenFolder}
-            style={{
-              background: "#141414",
-              border: "1px solid #2a2a2a",
-              borderRadius: "6px",
-              color: "#e0e0e0",
-              fontSize: "12px",
-              fontFamily: MONO,
-              padding: "10px 20px",
-              cursor: "pointer",
-              transition: "all 0.2s",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; e.currentTarget.style.background = "#1e1e1e"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; e.currentTarget.style.background = "#141414"; }}
-          >
-            <span style={{ fontSize: "14px" }}>{"\uD83D\uDCC2"}</span> Open Project
-          </button>
-          <button
-            onClick={() => setHubBrowserOpen(true)}
-            style={{
-              background: "#141414",
-              border: "1px solid #2a2a2a",
-              borderRadius: "6px",
-              color: "#e0e0e0",
-              fontSize: "12px",
-              fontFamily: MONO,
-              padding: "10px 20px",
-              cursor: "pointer",
-              transition: "all 0.2s",
-              display: "flex",
-              alignItems: "center",
-              gap: "8px",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; e.currentTarget.style.background = "#1e1e1e"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; e.currentTarget.style.background = "#141414"; }}
-          >
-            <span style={{ fontSize: "14px" }}>{"\uD83D\uDD17"}</span> From GitHub
-          </button>
-        </div>
-
-        {/* Quick-start cards */}
-        <div style={{ width: "100%", maxWidth: "560px", marginBottom: "24px" }}>
-          <div style={{ fontSize: "10px", color: "#555555", letterSpacing: "1px", marginBottom: "8px", fontWeight: "bold" }}>
-            QUICK START
-          </div>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            {VIBE_QUICK_CARDS.map((card) => (
-              <button
-                key={card.label}
-                onClick={() => handleCardClick(card.prompt)}
-                style={{
-                  background: "#111111",
-                  border: "1px solid #2a2a2a",
-                  borderRadius: "6px",
-                  color: "#c0c0c0",
-                  fontSize: "11px",
-                  fontFamily: MONO,
-                  padding: "8px 14px",
-                  cursor: "pointer",
-                  transition: "all 0.2s",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "#ff8c00";
-                  e.currentTarget.style.background = "#1a1a1a";
-                  e.currentTarget.style.color = "#ff8c00";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "#2a2a2a";
-                  e.currentTarget.style.background = "#111111";
-                  e.currentTarget.style.color = "#c0c0c0";
-                }}
-              >
-                <span style={{ fontSize: "13px" }}>{card.icon}</span>
-                {card.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Recent projects */}
-        {recentDirs.length > 0 && (
-          <div style={{ width: "100%", maxWidth: "560px" }}>
-            <div style={{ fontSize: "10px", color: "#555555", letterSpacing: "1px", marginBottom: "8px", fontWeight: "bold" }}>
-              RECENT
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-              {recentDirs.slice(0, 5).map((dir) => (
-                <button
-                  key={dir}
-                  onClick={() => handleQuickOpen(dir)}
-                  style={{
-                    background: "transparent",
-                    border: "1px solid transparent",
-                    borderRadius: "4px",
-                    color: "#999999",
-                    fontSize: "12px",
-                    fontFamily: MONO,
-                    padding: "6px 10px",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    transition: "all 0.15s",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "10px",
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.background = "#141414"; e.currentTarget.style.color = "#e0e0e0"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#999999"; e.currentTarget.style.borderColor = "transparent"; }}
-                >
-                  <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "12px", width: "18px", textAlign: "center" }}>
-                    {(dir.split("/").pop() || "?")[0]?.toUpperCase()}
-                  </span>
-                  <span style={{ fontWeight: "bold", color: "inherit" }}>{dir.split("/").pop()}</span>
-                  <span style={{ color: "#444444", fontSize: "10px", marginLeft: "auto" }}>
-                    {dir.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~")}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // === STANDARD EMPTY STATE (vibeMode OFF) ===
+  // === EMPTY STATE ===
   return (
     <div
       style={{

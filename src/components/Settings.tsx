@@ -5,11 +5,10 @@ import { getSetting, setSetting, getClaudePath, getEnvAllowStatus, toggleEnvAllo
 import { useLicenseStore } from "../stores/licenseStore";
 
 export const Settings = memo(function Settings() {
-  const { settingsOpen, setSettingsOpen, vibeMode, setVibeMode } = useWorkspaceStore();
+  const { settingsOpen, setSettingsOpen } = useWorkspaceStore();
   const addToast = useToastStore((s) => s.addToast);
   const [claudePath, setClaudePath] = useState("");
   const [maxSessions, setMaxSessions] = useState("20");
-  const [autoWorktree, setAutoWorktree] = useState("true");
   const [tab, setTab] = useState<"general" | "terminal" | "shortcuts" | "license">("general");
   const [envAllow, setEnvAllow] = useState(false);
   const [licenseKey, setLicenseKey] = useState("");
@@ -25,10 +24,6 @@ export const Settings = memo(function Settings() {
       try {
         const ms = await getSetting("maxSessions");
         if (ms) setMaxSessions(ms);
-        const aw = await getSetting("autoWorktree");
-        if (aw) setAutoWorktree(aw);
-        const vm = await getSetting("vibeMode");
-        if (vm) setVibeMode(vm === "true");
         const cp = await getClaudePath();
         setClaudePath(cp);
         // Load env allow status
@@ -43,17 +38,6 @@ export const Settings = memo(function Settings() {
     };
     load();
   }, [settingsOpen]);
-
-  const handleVibeToggle = useCallback(async () => {
-    const newVal = !vibeMode;
-    setVibeMode(newVal);
-    try {
-      await setSetting("vibeMode", newVal ? "true" : "false");
-    } catch {
-      // revert on failure
-      setVibeMode(!newVal);
-    }
-  }, [vibeMode, setVibeMode]);
 
   const handleEnvAllowToggle = useCallback(async () => {
     const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === useWorkspaceStore.getState().activeWorkspaceId);
@@ -70,13 +54,11 @@ export const Settings = memo(function Settings() {
   const handleSave = useCallback(async () => {
     try {
       await setSetting("maxSessions", maxSessions);
-      await setSetting("autoWorktree", autoWorktree);
-      await setSetting("vibeMode", vibeMode ? "true" : "false");
       addToast("Settings saved", "success");
     } catch {
       addToast("Failed to save settings", "error");
     }
-  }, [maxSessions, autoWorktree, vibeMode, addToast]);
+  }, [maxSessions, addToast]);
 
   if (!settingsOpen) return null;
 
@@ -127,57 +109,6 @@ export const Settings = memo(function Settings() {
         <div style={{ flex: 1, overflow: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
           {tab === "general" && (
             <>
-              {/* Vibe Mode Toggle */}
-              <div
-                onClick={handleVibeToggle}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "12px 14px",
-                  background: vibeMode ? "rgba(255, 140, 0, 0.1)" : "#0a0a0a",
-                  border: vibeMode ? "1px solid #ff8c00" : "1px solid #2a2a2a",
-                  cursor: "pointer",
-                  transition: "all 0.2s ease",
-                }}
-              >
-                <div>
-                  <div style={{
-                    color: vibeMode ? "#ff8c00" : "#e0e0e0",
-                    fontSize: "13px",
-                    fontWeight: "bold",
-                    letterSpacing: "2px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                  }}>
-                    VIBE MODE
-                  </div>
-                  <div style={{ color: "#888888", fontSize: "10px", marginTop: "4px", lineHeight: "1.4" }}>
-                    Simplified interface for AI-assisted coding. Hides technical details and uses friendly language.
-                  </div>
-                </div>
-                <div style={{
-                  width: "40px",
-                  height: "20px",
-                  borderRadius: "10px",
-                  background: vibeMode ? "#ff8c00" : "#333333",
-                  position: "relative",
-                  flexShrink: 0,
-                  marginLeft: "12px",
-                  transition: "background 0.2s ease",
-                }}>
-                  <div style={{
-                    width: "16px",
-                    height: "16px",
-                    borderRadius: "50%",
-                    background: vibeMode ? "#0a0a0a" : "#888888",
-                    position: "absolute",
-                    top: "2px",
-                    left: vibeMode ? "22px" : "2px",
-                    transition: "left 0.2s ease, background 0.2s ease",
-                  }} />
-                </div>
-              </div>
-
               {/* .env Editing Toggle */}
               {(() => {
                 const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === useWorkspaceStore.getState().activeWorkspaceId);
@@ -242,13 +173,6 @@ export const Settings = memo(function Settings() {
                 <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>MAX SESSIONS</div>
                 <input value={maxSessions} onChange={(e) => setMaxSessions(e.target.value)} type="number" min="1" max="50"
                   style={{ width: "80px", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "12px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", padding: "6px 8px", outline: "none" }} />
-              </div>
-              <div>
-                <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>ISOLATED SESSIONS</div>
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#888888", fontSize: "11px", cursor: "pointer" }}>
-                  <input type="checkbox" checked={autoWorktree === "true"} onChange={(e) => setAutoWorktree(e.target.checked ? "true" : "false")} style={{ accentColor: "#ff8c00" }} />
-                  Give each terminal its own isolated copy of your project so they can work on different things without conflicting
-                </label>
               </div>
               <div>
                 <div style={{ color: "#888888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.5px" }}>CLAUDE BINARY</div>

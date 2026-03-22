@@ -4,7 +4,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { useAppStore } from "../stores/appStore";
 import { useToastStore } from "../stores/toastStore";
-import { sendToSession } from "../lib/ipc";
+import { sendToSession, setActiveWorkspace as ipcSetActiveWorkspace, createWorkspace, createSession } from "../lib/ipc";
 
 interface CommandItem {
   id: string;
@@ -37,16 +37,76 @@ export const CommandPalette = memo(function CommandPalette() {
     [sessions, activeWorkspaceId],
   );
 
+  const workspaces = useWorkspaceStore((s) => s.workspaces);
+  const { setActiveWorkspace: setActiveWorkspaceLocal } = useWorkspaceStore();
+  const { addSession } = useSessionStore();
+
   const commands = useMemo<CommandItem[]>(() => {
-    const items: CommandItem[] = [
-      // Sessions
-      {
-        id: "new-session",
-        label: "New session",
-        category: "Sessions",
-        action: () => { setCommandPaletteOpen(false); setNewSessionDialogOpen(true); },
+    const items: CommandItem[] = [];
+
+    // --- Workspaces (highest priority) ---
+    for (const ws of workspaces) {
+      if (ws.id === activeWorkspaceId) continue;
+      items.push({
+        id: `switch-workspace-${ws.id}`,
+        label: `Switch to ${ws.name}`,
+        category: "Workspaces",
+        action: async () => {
+          setCommandPaletteOpen(false);
+          setActiveWorkspaceLocal(ws.id);
+          try { await ipcSetActiveWorkspace(ws.id); } catch (_) {}
+        },
+      });
+    }
+    items.push({
+      id: "new-workspace",
+      label: "New workspace",
+      category: "Workspaces",
+      action: async () => {
+        setCommandPaletteOpen(false);
+        try {
+          const ws = await createWorkspace(`Workspace ${workspaces.length + 1}`);
+          setActiveWorkspaceLocal(ws.id);
+          await ipcSetActiveWorkspace(ws.id);
+          useWorkspaceStore.getState().addWorkspace(ws);
+        } catch (e) { addToast(`Failed to create workspace: ${e}`, "error"); }
       },
-      // View
+    });
+
+    // --- Projects ---
+    items.push({
+      id: "open-folder",
+      label: "Open folder...",
+      category: "Projects",
+      action: async () => {
+        setCommandPaletteOpen(false);
+        try {
+          const { open } = await import("@tauri-apps/plugin-dialog");
+          const selected = await open({ directory: true, multiple: false, title: "Open Folder" });
+          if (selected && activeWorkspaceId) {
+            const session = await createSession(selected as string, activeWorkspaceId);
+            addSession(session);
+          }
+        } catch (e) { addToast(`Failed to open folder: ${e}`, "error"); }
+      },
+    });
+    items.push({
+      id: "new-project",
+      label: "New project",
+      category: "Projects",
+      action: () => { setCommandPaletteOpen(false); setNewSessionDialogOpen(true); },
+    });
+
+    // --- Sessions ---
+    items.push({
+      id: "new-session",
+      label: "New session",
+      category: "Sessions",
+      action: () => { setCommandPaletteOpen(false); setNewSessionDialogOpen(true); },
+    });
+
+    // --- View ---
+    items.push(
       {
         id: "toggle-sidebar",
         label: "Sidebar",
@@ -59,7 +119,10 @@ export const CommandPalette = memo(function CommandPalette() {
         category: "View",
         action: () => { setCommandPaletteOpen(false); toggleBroadcast(); },
       },
-      // Tools
+    );
+
+    // --- Tools ---
+    items.push(
       {
         id: "open-hub",
         label: "Hub",
@@ -110,7 +173,7 @@ export const CommandPalette = memo(function CommandPalette() {
           }
         },
       },
-    ];
+    );
 
     // Layout presets
     const presets: { label: string; value: PresetLayout }[] = [
@@ -188,7 +251,7 @@ export const CommandPalette = memo(function CommandPalette() {
     }
 
     return items;
-  }, [activeSessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setFocusedSession, applyPreset, toggleMaximize, addToast]);
+  }, [activeSessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setFocusedSession, applyPreset, toggleMaximize, addToast, workspaces, activeWorkspaceId, setActiveWorkspaceLocal, addSession]);
 
   const filtered = useMemo(() => {
     if (!query) return commands;

@@ -1,5 +1,5 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, type FileEntry } from "../lib/ipc";
+import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, writeFileContents, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 
 // File extension to color mapping for visual hints
@@ -64,7 +64,7 @@ interface ContextMenuProps {
 }
 
 const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, onRefresh }: ContextMenuProps) {
-  const [action, setAction] = useState<"rename" | "move" | "copy" | "delete" | null>(null);
+  const [action, setAction] = useState<"rename" | "move" | "copy" | "delete" | "new-file" | "new-folder" | null>(null);
   const [inputValue, setInputValue] = useState(entry.name);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -87,13 +87,15 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
       setInputValue(entry.name);
       setTimeout(() => {
         inputRef.current?.focus();
-        // Select name without extension
         const dotIdx = entry.name.lastIndexOf(".");
         inputRef.current?.setSelectionRange(0, dotIdx > 0 && !entry.is_dir ? dotIdx : entry.name.length);
       }, 50);
     } else if (action === "move" || action === "copy") {
       const parent = entry.path.substring(0, entry.path.lastIndexOf("/"));
       setInputValue(parent);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    } else if (action === "new-file" || action === "new-folder") {
+      setInputValue("");
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [action, entry]);
@@ -151,6 +153,33 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     try {
       const parent = entry.path.substring(0, entry.path.lastIndexOf("/"));
       await copyFile(entry.path, parent);
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const handleNewFile = async () => {
+    if (!inputValue.trim()) { onClose(); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const parentDir = entry.is_dir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf("/"));
+      const filePath = `${parentDir}/${inputValue.trim()}`;
+      await writeFileContents(filePath, "");
+      onRefresh();
+      onClose();
+    } catch (e) { setError(String(e)); }
+    setLoading(false);
+  };
+
+  const handleNewFolder = async () => {
+    if (!inputValue.trim()) { onClose(); return; }
+    setLoading(true);
+    setError(null);
+    try {
+      const parentDir = entry.is_dir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf("/"));
+      await createFolder(parentDir, inputValue.trim());
       onRefresh();
       onClose();
     } catch (e) { setError(String(e)); }
@@ -230,28 +259,67 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     );
   }
 
+  if (action === "new-file" || action === "new-folder") {
+    const isFile = action === "new-file";
+    const handler = isFile ? handleNewFile : handleNewFolder;
+    return (
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "200px" }}>
+        <div style={{ fontSize: "9px", color: "#ff8c00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>
+          {isFile ? "NEW FILE" : "NEW FOLDER"}
+        </div>
+        <input ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") handler(); if (e.key === "Escape") onClose(); }}
+          placeholder={isFile ? "filename.ts" : "folder-name"}
+          style={{ width: "100%", boxSizing: "border-box", background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", padding: "4px 6px", fontFamily: MONO, outline: "none" }}
+        />
+        {error && <div style={{ color: "#ff3d00", fontSize: "9px", marginTop: "4px" }}>{error}</div>}
+        <div style={{ display: "flex", gap: "4px", marginTop: "6px", justifyContent: "flex-end" }}>
+          <button onClick={onClose} style={{ background: "none", border: "1px solid #2a2a2a", color: "#888", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO }}>Cancel</button>
+          <button onClick={handler} disabled={loading} style={{ background: "#ff8c00", border: "none", color: "#0a0a0a", fontSize: "9px", padding: "2px 8px", cursor: "pointer", fontFamily: MONO, fontWeight: "bold" }}>
+            {loading ? "..." : "Create"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Default: show menu items
   return (
     <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #2a2a2a", minWidth: "140px", padding: "4px 0" }}>
-      {[
-        { label: "Rename", action: "rename" as const },
-        { label: "Delete", action: "delete" as const },
-        { label: "Move to...", action: "move" as const },
-        { label: "Copy to...", action: "copy" as const },
-      ].map((item) => {
-        const [hovered, setHovered] = useState(false);
-        return (
-          <div
-            key={item.label}
-            onClick={() => setAction(item.action)}
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
-            style={menuItemStyle(hovered)}
-          >
-            {item.label}
-          </div>
-        );
-      })}
+      <ContextMenuItem label="New File" onClick={() => setAction("new-file")} />
+      <ContextMenuItem label="New Folder" onClick={() => setAction("new-folder")} />
+      <div style={{ height: "1px", background: "#2a2a2a", margin: "4px 0" }} />
+      <ContextMenuItem label="Rename" onClick={() => setAction("rename")} />
+      <ContextMenuItem label="Duplicate" onClick={handleDuplicate} />
+      <ContextMenuItem label="Delete" onClick={() => setAction("delete")} />
+      <div style={{ height: "1px", background: "#2a2a2a", margin: "4px 0" }} />
+      <ContextMenuItem label="Move to..." onClick={() => setAction("move")} />
+      <ContextMenuItem label="Copy to..." onClick={() => setAction("copy")} />
+    </div>
+  );
+});
+
+// Extracted to avoid hooks-in-map violation
+const ContextMenuItem = memo(function ContextMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        padding: "5px 12px",
+        fontSize: "11px",
+        color: hovered ? "#ff8c00" : "#e0e0e0",
+        background: hovered ? "#1e1e1e" : "transparent",
+        cursor: "pointer",
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+        border: "none",
+        width: "100%",
+        textAlign: "left",
+      }}
+    >
+      {label}
     </div>
   );
 });
@@ -264,6 +332,7 @@ interface FileTreeNodeProps {
   onFileClick: (path: string) => void;
   selectedPath: string | null;
   onContextMenu: (entry: FileEntry, x: number, y: number) => void;
+  onMoveFile: (srcPath: string, destDir: string) => void;
 }
 
 const FileTreeNode = memo(function FileTreeNode({
@@ -274,6 +343,7 @@ const FileTreeNode = memo(function FileTreeNode({
   onFileClick,
   selectedPath,
   onContextMenu,
+  onMoveFile,
 }: FileTreeNodeProps) {
   const [expanded, setExpanded] = useState(depth < 1);
   const [children, setChildren] = useState<FileEntry[] | null>(
@@ -281,6 +351,7 @@ const FileTreeNode = memo(function FileTreeNode({
   );
   const [loading, setLoading] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   const isSelected = selectedPath === entry.path;
 
@@ -334,6 +405,7 @@ const FileTreeNode = memo(function FileTreeNode({
   return (
     <div>
       <div
+        draggable
         onClick={handleToggle}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -342,6 +414,26 @@ const FileTreeNode = memo(function FileTreeNode({
         }}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        onDragStart={(e) => {
+          e.dataTransfer.setData("text/plain", entry.path);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        onDragOver={(e) => {
+          if (!entry.is_dir) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (!entry.is_dir) return;
+          const srcPath = e.dataTransfer.getData("text/plain");
+          if (srcPath && srcPath !== entry.path && !entry.path.startsWith(srcPath + "/")) {
+            onMoveFile(srcPath, entry.path);
+          }
+        }}
         style={{
           display: "flex",
           alignItems: "center",
@@ -349,12 +441,14 @@ const FileTreeNode = memo(function FileTreeNode({
           paddingLeft: `${depth * 14 + 8}px`,
           paddingRight: "8px",
           cursor: "pointer",
-          background: isSelected
-            ? "#1e1e1e"
-            : hovered
-              ? "#1a1a1a"
-              : "transparent",
-          boxShadow: isSelected ? "inset 2px 0 0 #ff8c00" : "none",
+          background: dragOver
+            ? "rgba(255, 140, 0, 0.15)"
+            : isSelected
+              ? "#1e1e1e"
+              : hovered
+                ? "#1a1a1a"
+                : "transparent",
+          boxShadow: isSelected ? "inset 2px 0 0 #ff8c00" : dragOver ? "inset 2px 0 0 #ff8c00" : "none",
           minHeight: "20px",
           userSelect: "none",
         }}
@@ -421,6 +515,7 @@ const FileTreeNode = memo(function FileTreeNode({
               onFileClick={onFileClick}
               selectedPath={selectedPath}
               onContextMenu={onContextMenu}
+              onMoveFile={onMoveFile}
             />
           ))}
           {children.length === 0 && (
@@ -511,6 +606,15 @@ export const FileTree = memo(function FileTree({
 
   const handleRefresh = useCallback(() => {
     loadTree();
+  }, [loadTree]);
+
+  const handleMoveFile = useCallback(async (srcPath: string, destDir: string) => {
+    try {
+      await moveFile(srcPath, destDir);
+      loadTree();
+    } catch (e) {
+      console.error("Move failed:", e);
+    }
   }, [loadTree]);
 
   const handleCreateFolder = useCallback(async () => {
@@ -678,6 +782,7 @@ export const FileTree = memo(function FileTree({
             onFileClick={handleFileClick}
             selectedPath={selectedPath}
             onContextMenu={(entry: FileEntry, x: number, y: number) => setContextMenu({ x, y, entry })}
+            onMoveFile={handleMoveFile}
           />
         ))}
         {entries.length === 0 && !loading && (

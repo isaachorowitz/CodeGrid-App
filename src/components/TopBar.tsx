@@ -6,7 +6,6 @@ import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore, type PresetLayout
 import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
 import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc, deleteWorkspace as deleteWorkspaceIpc } from "../lib/ipc";
-import { vibeLabel } from "../lib/vibeMode";
 
 const STATUS_COLORS: Record<string, string> = {
   idle: "#4a9eff",
@@ -32,7 +31,6 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     setCommandPaletteOpen,
     toggleSidebar,
     sidebarOpen,
-    vibeMode,
   } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
@@ -137,6 +135,9 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     }
 
     try { await setActiveWorkspaceIpc(wsId); } catch (e) { console.warn("Failed to set active workspace:", e); }
+
+    // Notify terminals so they can re-fit when becoming visible again
+    window.dispatchEvent(new CustomEvent("codegrid:workspace-changed", { detail: { workspaceId: wsId } }));
   }, [setActiveWorkspace, workspaces, setLayouts, setCanvas]);
 
   const handlePreset = useCallback(
@@ -268,25 +269,6 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
         >
           CODEGRID
         </div>
-
-        {/* Vibe Mode badge */}
-        {vibeMode && (
-          <div
-            style={{
-              background: "linear-gradient(135deg, #ff8c00, #ff6600)",
-              color: "#0a0a0a",
-              fontSize: "9px",
-              fontWeight: "bold",
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-              padding: "1px 6px",
-              letterSpacing: "1px",
-              marginRight: "4px",
-            }}
-            title="Vibe Mode is active — simplified interface for AI-assisted coding"
-          >
-            VIBE
-          </div>
-        )}
 
         {/* Workspace tabs */}
         <div style={{ display: "flex", gap: "1px", flex: 1, overflow: "hidden" }}>

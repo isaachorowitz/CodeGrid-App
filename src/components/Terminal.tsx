@@ -189,6 +189,20 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     return () => clearTimeout(timer);
   }, [fit]);
 
+  // Re-fit when workspace switches back to this terminal's workspace
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ workspaceId?: string }>).detail;
+      const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
+      if (session && detail?.workspaceId === session.workspace_id) {
+        // Small delay to let CSS visibility change take effect before fitting
+        setTimeout(fit, 50);
+      }
+    };
+    window.addEventListener("codegrid:workspace-changed", handler);
+    return () => window.removeEventListener("codegrid:workspace-changed", handler);
+  }, [sessionId, fit]);
+
   const handleSearchNext = useCallback(() => {
     if (searchAddon.current && searchTerm) {
       searchAddon.current.findNext(searchTerm);

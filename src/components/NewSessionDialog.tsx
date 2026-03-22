@@ -4,7 +4,6 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useAppStore } from "../stores/appStore";
 import { useToastStore } from "../stores/toastStore";
 import type { GitHubRepo, RepoQuickStatus } from "../lib/ipc";
-import { vibeLabel } from "../lib/vibeMode";
 
 interface NewSessionDialogProps {
   onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => void;

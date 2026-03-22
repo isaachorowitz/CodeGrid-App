@@ -1,4 +1,4 @@
-import { useCallback, useMemo, memo, useRef, useEffect, useState } from "react";
+import { useCallback, useMemo, memo, useRef, useEffect } from "react";
 import { Pane } from "./Pane";
 import { MinimizedPaneBar } from "./MinimizedPaneBar";
 import { useSessionStore } from "../stores/sessionStore";
@@ -20,12 +20,18 @@ const ZOOMED_OUT_LABEL_THRESHOLD = 0.35;
 
 export const Canvas = memo(function Canvas({ width, height, onCloseSession }: CanvasProps) {
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
-  const sessionSelector = useCallback(
-    (s: ReturnType<typeof useSessionStore.getState>) =>
-      s.sessions.filter((session) => session.workspace_id === activeWorkspaceId),
-    [activeWorkspaceId],
+  // Render ALL sessions across all workspaces to keep xterm instances alive.
+  // Non-active workspace sessions are hidden with CSS (display:none) to preserve
+  // terminal buffer content when switching workspaces.
+  const allSessions = useSessionStore(useShallow((s) => s.sessions));
+  const sessions = useMemo(
+    () => allSessions.filter((session) => session.workspace_id === activeWorkspaceId),
+    [allSessions, activeWorkspaceId],
   );
-  const sessions = useSessionStore(useShallow(sessionSelector));
+  const hiddenSessions = useMemo(
+    () => allSessions.filter((session) => session.workspace_id !== activeWorkspaceId),
+    [allSessions, activeWorkspaceId],
+  );
   const layouts = useLayoutStore((s) => s.layouts);
   const maximizedPane = useLayoutStore((s) => s.maximizedPane);
   const minimizedPanes = useLayoutStore((s) => s.minimizedPanes);
@@ -535,6 +541,28 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
               </div>
             );
           })}
+
+          {/* Hidden sessions from other workspaces — kept mounted to preserve xterm buffer */}
+          {hiddenSessions.map((session) => (
+            <div
+              key={session.id}
+              data-pane-id={session.id}
+              style={{
+                position: "absolute",
+                left: -9999,
+                top: -9999,
+                width: 600,
+                height: 400,
+                visibility: "hidden",
+                pointerEvents: "none",
+              }}
+            >
+              <Pane
+                session={session}
+                onClose={onCloseSession}
+              />
+            </div>
+          ))}
         </div>
 
         {/* Canvas controls overlay */}

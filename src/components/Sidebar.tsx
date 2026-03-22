@@ -7,11 +7,11 @@ import {
   gitStatus, gitPush, gitPull, gitStageFile, gitUnstageFile, gitCommit,
   gitDiffStat, quickPublish, quickSave,
   gitListBranches, gitLog, gitCreateBranch, gitSwitchBranch, gitShowCommit,
+  gitFetch, gitStash, gitStageAll, gitDiscardFile,
   type GitStatusInfo, type GitBranchInfo, type GitLogEntry,
 } from "../lib/ipc";
 import { FileTree } from "./FileTree";
 import { ProjectSearch } from "./ProjectSearch";
-import { vibeLabel, vibeDescription } from "../lib/vibeMode";
 
 // ---------------------------------------------------------------------------
 // Activity Bar (far-left icon rail)
@@ -151,7 +151,6 @@ const GitPanel = memo(function GitPanel({
 }) {
   const { setGitSetupWizardOpen, setCodeViewerOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
-  const vibeMode = useWorkspaceStore((s) => s.vibeMode);
   const [pushLoading, setPushLoading] = useState(false);
   const [pullLoading, setPullLoading] = useState(false);
   const [commitFormOpen, setCommitFormOpen] = useState(false);
@@ -165,7 +164,7 @@ const GitPanel = memo(function GitPanel({
   const [branchSearch, setBranchSearch] = useState("");
   const [newBranchName, setNewBranchName] = useState("");
   const [branchSwitching, setBranchSwitching] = useState(false);
-  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [historyExpanded, setHistoryExpanded] = useState(true);
   const [selectedCommitHash, setSelectedCommitHash] = useState<string | null>(null);
   const [selectedCommitDetail, setSelectedCommitDetail] = useState<string | null>(null);
   const branchDropdownRef = useRef<HTMLDivElement>(null);
@@ -232,7 +231,7 @@ const GitPanel = memo(function GitPanel({
   const handleQuickPush = useCallback(async () => {
     if (!dir || pushLoading) return;
     if (!workspaceGitStatus?.has_remote) {
-      addToast(vibeDescription("no_remote", vibeMode), "warning", 5000);
+      addToast("No remote. Add: git remote add origin <url>", "warning", 5000);
       return;
     }
     setPushLoading(true);
@@ -350,12 +349,10 @@ const GitPanel = memo(function GitPanel({
     try {
       const result = await quickPublish(dir);
       if (result.files_changed === 0) {
-        addToast(vibeMode ? "Everything is already saved!" : "No changes to commit and push.", "info", 3000);
+        addToast("No changes to commit and push.", "info", 3000);
       } else {
         addToast(
-          vibeMode
-            ? `Published! ${result.files_changed} file${result.files_changed === 1 ? "" : "s"} saved to GitHub`
-            : `Committed & pushed ${result.files_changed} file${result.files_changed === 1 ? "" : "s"} (${result.commit_hash})`,
+          `Committed & pushed ${result.files_changed} file${result.files_changed === 1 ? "" : "s"} (${result.commit_hash})`,
           "success", 4000
         );
       }
@@ -367,12 +364,12 @@ const GitPanel = memo(function GitPanel({
       if (needsPull) {
         addToast("Push rejected — remote has changes you don't have locally. Pull first, then push.", "warning", 10000);
       } else {
-        addToast(`${vibeMode ? "Publish" : "Commit & push"} failed: ${msg}`, "error", 6000);
+        addToast(`Commit & push failed: ${msg}`, "error", 6000);
       }
     } finally {
       setPublishLoading(false);
     }
-  }, [dir, publishLoading, workspaceGitStatus, addToast, vibeMode, onRefreshGit, setGitSetupWizardOpen]);
+  }, [dir, publishLoading, workspaceGitStatus, addToast, onRefreshGit, setGitSetupWizardOpen]);
 
   const handleSave = useCallback(async () => {
     if (!dir || saveLoading) return;
@@ -380,22 +377,20 @@ const GitPanel = memo(function GitPanel({
     try {
       const result = await quickSave(dir);
       if (result.files_changed === 0) {
-        addToast(vibeMode ? "Nothing new to save!" : "No changes to commit.", "info", 3000);
+        addToast("No changes to commit.", "info", 3000);
       } else {
         addToast(
-          vibeMode
-            ? `Saved! ${result.files_changed} file${result.files_changed === 1 ? "" : "s"} checkpointed`
-            : `Committed ${result.files_changed} file${result.files_changed === 1 ? "" : "s"} (${result.commit_hash})`,
+          `Committed ${result.files_changed} file${result.files_changed === 1 ? "" : "s"} (${result.commit_hash})`,
           "success", 4000
         );
       }
       onRefreshGit();
     } catch (e) {
-      addToast(`${vibeMode ? "Save" : "Commit"} failed: ${String(e).replace(/^Error:\s*/, "")}`, "error", 6000);
+      addToast(`Commit failed: ${String(e).replace(/^Error:\s*/, "")}`, "error", 6000);
     } finally {
       setSaveLoading(false);
     }
-  }, [dir, saveLoading, addToast, vibeMode, onRefreshGit]);
+  }, [dir, saveLoading, addToast, onRefreshGit]);
 
   const totalChanges = (workspaceGitStatus?.staged.length ?? 0)
     + (workspaceGitStatus?.unstaged.length ?? 0)
@@ -434,7 +429,7 @@ const GitPanel = memo(function GitPanel({
             onMouseEnter={(e) => { e.currentTarget.style.background = "#ffa333"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "#ff8c00"; }}
           >
-            {vibeMode ? "\u2191 CONNECT TO GITHUB" : "\u2191 CONNECT REMOTE"}
+            {"\u2191 CONNECT REMOTE"}
           </button>
         ) : noChanges ? (
           <button
@@ -452,7 +447,7 @@ const GitPanel = memo(function GitPanel({
               letterSpacing: "0.5px",
             }}
           >
-            {vibeMode ? "\u2713 ALL SAVED" : "\u2713 NO CHANGES"}
+            {"\u2713 NO CHANGES"}
           </button>
         ) : (
           <button
@@ -475,9 +470,7 @@ const GitPanel = memo(function GitPanel({
           >
             {publishLoading
               ? "\u2191 PUBLISHING..."
-              : vibeMode
-                ? `\u2191 PUBLISH (${totalChanges})`
-                : `\u2191 COMMIT & PUSH (${totalChanges})`
+              : `\u2191 COMMIT & PUSH (${totalChanges})`
             }
           </button>
         )}
@@ -502,9 +495,7 @@ const GitPanel = memo(function GitPanel({
           >
             {saveLoading
               ? "SAVING..."
-              : vibeMode
-                ? "SAVE CHECKPOINT"
-                : "COMMIT ONLY"
+              : "COMMIT ONLY"
             }
           </button>
         )}
@@ -529,9 +520,7 @@ const GitPanel = memo(function GitPanel({
           >
             {saveLoading
               ? "SAVING..."
-              : vibeMode
-                ? `SAVE CHECKPOINT (${totalChanges})`
-                : `COMMIT ALL (${totalChanges})`
+              : `COMMIT ALL (${totalChanges})`
             }
           </button>
         )}
@@ -559,6 +548,59 @@ const GitPanel = memo(function GitPanel({
             REVIEW CHANGES
           </button>
         )}
+
+        {/* Quick git actions row */}
+        <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+          <button
+            onClick={async () => {
+              if (!dir) return;
+              try { await gitFetch(dir); addToast("Fetched", "success"); onRefreshGit(); } catch (e) { addToast(`Fetch failed: ${e}`, "error"); }
+            }}
+            style={{ flex: 1, padding: "4px 6px", background: "transparent", border: "1px solid #333333", color: "#888888", fontSize: "9px", fontWeight: "bold", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", letterSpacing: "0.5px" }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; e.currentTarget.style.color = "#e0e0e0"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#333333"; e.currentTarget.style.color = "#888888"; }}
+          >FETCH</button>
+          <button
+            onClick={async () => {
+              if (!dir) return;
+              try { await gitStash(dir); addToast("Stashed", "success"); onRefreshGit(); } catch (e) { addToast(`Stash failed: ${e}`, "error"); }
+            }}
+            style={{ flex: 1, padding: "4px 6px", background: "transparent", border: "1px solid #333333", color: "#888888", fontSize: "9px", fontWeight: "bold", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", letterSpacing: "0.5px" }}
+            onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#ff8c00"; e.currentTarget.style.color = "#e0e0e0"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#333333"; e.currentTarget.style.color = "#888888"; }}
+          >STASH</button>
+          {totalChanges > 0 && (
+            <>
+              <button
+                onClick={async () => {
+                  if (!dir) return;
+                  try { await gitStageAll(dir); addToast("All staged", "success"); onRefreshGit(); } catch (e) { addToast(`Stage all failed: ${e}`, "error"); }
+                }}
+                style={{ flex: 1, padding: "4px 6px", background: "transparent", border: "1px solid #00c85366", color: "#00c853", fontSize: "9px", fontWeight: "bold", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", letterSpacing: "0.5px" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#00c85322"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >STAGE ALL</button>
+              <button
+                onClick={async () => {
+                  if (!dir) return;
+                  if (!window.confirm("Discard ALL changes? This cannot be undone.")) return;
+                  try {
+                    const allFiles = [
+                      ...workspaceGitStatus!.unstaged.map((c) => c.path),
+                      ...workspaceGitStatus!.untracked,
+                    ];
+                    for (const f of allFiles) { await gitDiscardFile(dir, f); }
+                    addToast("All changes discarded", "success");
+                    onRefreshGit();
+                  } catch (e) { addToast(`Discard failed: ${e}`, "error"); }
+                }}
+                style={{ flex: 1, padding: "4px 6px", background: "transparent", border: "1px solid #ff3d0066", color: "#ff3d00", fontSize: "9px", fontWeight: "bold", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", letterSpacing: "0.5px" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#ff3d0022"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+              >DISCARD ALL</button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Branch switcher */}
@@ -676,7 +718,7 @@ const GitPanel = memo(function GitPanel({
             }}
             onMouseEnter={(e) => { if (!pullLoading) e.currentTarget.style.borderColor = workspaceGitStatus.has_remote ? "#4a9eff" : "#444444"; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-          >{pullLoading ? "..." : `${vibeLabel("PULL", vibeMode)} ↓`}</button>
+          >{pullLoading ? "..." : `PULL ↓`}</button>
           <button
             onClick={() => {
               if (!workspaceGitStatus.has_remote) { addToast("No remote configured.", "warning", 5000); return; }
@@ -691,7 +733,7 @@ const GitPanel = memo(function GitPanel({
             }}
             onMouseEnter={(e) => { if (!pushLoading) e.currentTarget.style.borderColor = workspaceGitStatus.has_remote ? "#00c853" : "#444444"; }}
             onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-          >{pushLoading ? "..." : `${vibeLabel("PUSH", vibeMode)} ↑${workspaceGitStatus.ahead > 0 ? ` (${workspaceGitStatus.ahead})` : ""}`}</button>
+          >{pushLoading ? "..." : `PUSH ↑${workspaceGitStatus.ahead > 0 ? ` (${workspaceGitStatus.ahead})` : ""}`}</button>
         </div>
       </div>
 
@@ -734,7 +776,7 @@ const GitPanel = memo(function GitPanel({
                 </span>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleStageToggle(f.path, true); }}
-                  title={vibeDescription("unstage_file", vibeMode)}
+                  title="Unstage file"
                   style={{
                     background: "#00c85322", border: "1px solid #00c85366", color: "#00c853",
                     fontSize: "8px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
@@ -771,7 +813,7 @@ const GitPanel = memo(function GitPanel({
                 </span>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleStageToggle(f.path, false); }}
-                  title={vibeDescription("stage_file", vibeMode)}
+                  title="Stage file"
                   style={{
                     background: "transparent", border: "1px solid #333333", color: "#555555",
                     fontSize: "8px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
@@ -806,7 +848,7 @@ const GitPanel = memo(function GitPanel({
                 </span>
                 <button
                   onClick={(e) => { e.stopPropagation(); handleStageToggle(filePath, false); }}
-                  title={vibeDescription("stage_file", vibeMode)}
+                  title="Stage file"
                   style={{
                     background: "transparent", border: "1px solid #333333", color: "#555555",
                     fontSize: "8px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
@@ -863,7 +905,7 @@ const GitPanel = memo(function GitPanel({
                       fontSize: "9px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: commitMessage.trim() ? "pointer" : "default",
                       padding: "3px", fontWeight: "bold",
                     }}
-                  >{vibeLabel("COMMIT", vibeMode)}</button>
+                  >COMMIT</button>
                   <button
                     onClick={() => setCommitFormOpen(false)}
                     style={{
@@ -888,7 +930,7 @@ const GitPanel = memo(function GitPanel({
                   }}
                   onMouseEnter={(e) => { if (workspaceGitStatus.staged.length > 0) e.currentTarget.style.borderColor = "#ff8c00"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-                >{vibeLabel("COMMIT", vibeMode)}</button>
+                >COMMIT</button>
                 <button
                   onClick={() => {
                     if (!workspaceGitStatus.has_remote) {
@@ -907,7 +949,7 @@ const GitPanel = memo(function GitPanel({
                   }}
                   onMouseEnter={(e) => { if (!pushLoading) e.currentTarget.style.borderColor = workspaceGitStatus.has_remote ? "#00c853" : "#444444"; }}
                   onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; }}
-                >{workspaceGitStatus.has_remote ? `${vibeLabel("PUSH", vibeMode)} \u2191` : vibeLabel("PUSH", vibeMode)}</button>
+                >{workspaceGitStatus.has_remote ? "PUSH \u2191" : "PUSH"}</button>
               </div>
             )}
           </div>
@@ -1036,13 +1078,12 @@ const McpPanel = memo(function McpPanel() {
   const sessions = useSessionStore((s) => s.sessions);
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const { workspaces, activeWorkspaceId } = useWorkspaceStore();
-  const vibeMode = useWorkspaceStore((s) => s.vibeMode);
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
 
   return (
     <div style={{ padding: "12px", display: "flex", flexDirection: "column", gap: "8px" }}>
       <div style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "10px", letterSpacing: "1px" }}>
-        {vibeLabel("MCP", vibeMode)} SERVERS
+        MCP SERVERS
       </div>
       <div style={{ color: "#888888", fontSize: "10px" }}>
         Manage Model Context Protocol servers for your workspace.
@@ -1142,7 +1183,7 @@ const PANEL_WIDTHS: Record<string, number> = {
 export const ACTIVITY_BAR_WIDTH = 40;
 
 export const Sidebar = memo(function Sidebar() {
-  const { workspaces, activeWorkspaceId, sidebarOpen, activePanel, togglePanel, vibeMode } = useWorkspaceStore();
+  const { workspaces, activeWorkspaceId, sidebarOpen, activePanel, togglePanel } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const [workspaceGitStatus, setWorkspaceGitStatus] = useState<GitStatusInfo | null>(null);
 
@@ -1247,7 +1288,7 @@ export const Sidebar = memo(function Sidebar() {
             <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "10px", letterSpacing: "1px" }}>
               {activePanel === "files" ? "FILES" :
                activePanel === "search" ? "SEARCH" :
-               activePanel === "git" ? vibeLabel("SOURCE CONTROL", vibeMode) :
+               activePanel === "git" ? "SOURCE CONTROL" :
                activePanel === "settings" ? "SETTINGS & TOOLS" : ""}
             </span>
             <span style={{ color: "#555555", fontSize: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "100px" }}>

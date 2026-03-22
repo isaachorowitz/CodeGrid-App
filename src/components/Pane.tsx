@@ -2,10 +2,8 @@ import { memo, useCallback, useState, useRef, useEffect } from "react";
 import { TerminalView } from "./Terminal";
 import { StatusBar } from "./StatusBar";
 import { useSessionStore } from "../stores/sessionStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import type { SessionWithModel } from "../stores/sessionStore";
-import { vibeLabel } from "../lib/vibeMode";
 
 interface PaneProps {
   session: SessionWithModel;
@@ -21,17 +19,13 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
   const toggleMaximize = useLayoutStore((s) => s.toggleMaximize);
   const minimizePane = useLayoutStore((s) => s.minimizePane);
   const maximizedPane = useLayoutStore((s) => s.maximizedPane);
-  const vibeMode = useWorkspaceStore((s) => s.vibeMode);
   const isFocused = focusedSessionId === session.id;
   const isMaximized = maximizedPane === session.id;
 
   // Display name: manual name > activity name > fallback
-  const rawName = session.manualName
+  const displayName = session.manualName
     ?? session.activityName
     ?? (session.command?.includes("claude") ? "claude" : "shell");
-  const displayName = vibeMode
-    ? (rawName === "claude" ? "AI" : rawName === "shell" ? "terminal" : rawName)
-    : rawName;
 
   const handleFocus = useCallback(() => {
     setFocusedSession(session.id);
@@ -321,7 +315,7 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
             }}
           >
             <div style={{ color: "#555555", fontSize: "11px", letterSpacing: "1px" }}>
-              {vibeMode ? "SESSION ENDED" : "DEAD"}
+              DEAD
             </div>
             <div style={{ color: "#888888", fontSize: "10px", maxWidth: "200px", textAlign: "center", lineHeight: "1.5" }}>
               {session.working_dir.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~")}
@@ -344,7 +338,7 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
               onMouseEnter={(e) => { if (!restarting) e.currentTarget.style.background = "#ffa040"; }}
               onMouseLeave={(e) => { if (!restarting) e.currentTarget.style.background = "#ff8c00"; }}
             >
-              {restarting ? "STARTING..." : (vibeMode ? "▶ RESTART" : "▶ RESTART SESSION")}
+              {restarting ? "STARTING..." : "▶ RESTART SESSION"}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); onClose(session.id); }}
@@ -376,7 +370,7 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
             padding: "1px 4px", letterSpacing: "1px",
           }}
         >
-          {vibeMode ? "TYPE TO ALL" : "BROADCAST"}
+          BROADCAST
         </div>
       )}
     </div>
