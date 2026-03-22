@@ -517,7 +517,6 @@ export const CodeViewer = memo(function CodeViewer() {
   const [content, setContent] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<"code" | "diff">("code");
   const [diffContent, setDiffContent] = useState<string>("");
   const [diffLoading, setDiffLoading] = useState(false);
@@ -526,7 +525,6 @@ export const CodeViewer = memo(function CodeViewer() {
   const [panelHeight, setPanelHeight] = useState(Math.floor(window.innerHeight * 0.7));
   const [isResizing, setIsResizing] = useState(false);
   const [scrollState, setScrollState] = useState({ top: 0, clientH: 0, scrollH: 0 });
-  const [editorLocked, setEditorLocked] = useState(true);
   const [editBuffer, setEditBuffer] = useState("");
   const [saving, setSaving] = useState(false);
   const [stagingHunk, setStagingHunk] = useState<string | null>(null);
@@ -612,7 +610,6 @@ export const CodeViewer = memo(function CodeViewer() {
   useEffect(() => {
     if (codeViewerOpen && codeViewerFile) {
       fetchContent();
-      setEditorLocked(true);
       if (contentRef.current) contentRef.current.scrollTop = 0;
     }
   }, [codeViewerOpen, codeViewerFile, fetchContent]);
@@ -651,7 +648,7 @@ export const CodeViewer = memo(function CodeViewer() {
   const hasPendingChanges = viewMode === "code" && editBuffer !== content;
 
   const handleApply = useCallback(async () => {
-    if (!codeViewerFile || editorLocked || !hasPendingChanges || saving) return;
+    if (!codeViewerFile || !hasPendingChanges || saving) return;
     setSaving(true);
     try {
       await writeFileContents(codeViewerFile, editBuffer);
@@ -661,10 +658,10 @@ export const CodeViewer = memo(function CodeViewer() {
     } finally {
       setSaving(false);
     }
-  }, [codeViewerFile, editorLocked, hasPendingChanges, saving, editBuffer]);
+  }, [codeViewerFile, hasPendingChanges, saving, editBuffer]);
 
   useEffect(() => {
-    if (!codeViewerOpen || viewMode !== "code" || editorLocked) return;
+    if (!codeViewerOpen || viewMode !== "code") return;
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
@@ -673,7 +670,7 @@ export const CodeViewer = memo(function CodeViewer() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [codeViewerOpen, viewMode, editorLocked, handleApply]);
+  }, [codeViewerOpen, viewMode, handleApply]);
 
   // Resize handling (vertical, drag top edge)
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -699,18 +696,6 @@ export const CodeViewer = memo(function CodeViewer() {
     document.addEventListener("mouseup", handleUp);
   }, [panelHeight]);
 
-  // Tokenize all lines with multi-line state tracking
-  const tokenizedLines = useMemo(() => {
-    if (viewMode === "diff") return [];
-    const lines = content.split("\n");
-    let state: TokenizerState = { inBlockComment: false, inTemplateLiteral: false };
-    return lines.map((line) => {
-      const result = tokenizeLine(line, state);
-      state = result.state;
-      return result.tokens;
-    });
-  }, [content, viewMode]);
-
   // Parse diff
   const diffHunks = useMemo(() => {
     if (viewMode !== "diff") return [];
@@ -719,8 +704,6 @@ export const CodeViewer = memo(function CodeViewer() {
 
   if (!codeViewerOpen || !codeViewerFile) return null;
 
-  const lines = content.split("\n");
-  const lineNumWidth = Math.max(String(lines.length).length * 8 + 16, 40);
   const fileName = codeViewerFile.split("/").pop() ?? codeViewerFile;
   const shortPath = codeViewerFile.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~");
   const language = detectLanguage(fileName);
@@ -883,40 +866,42 @@ export const CodeViewer = memo(function CodeViewer() {
               WRAP
             </button>
           )}
-          {viewMode === "code" && (
-            <button
-              onClick={() => setEditorLocked((v) => !v)}
-              title={editorLocked ? "Unlock editor for manual edits" : "Lock editor (read-only)"}
-              style={{
-                background: editorLocked ? "transparent" : "#1e1e1e",
-                border: editorLocked ? "1px solid #2a2a2a" : "1px solid #ff8c00",
-                color: editorLocked ? "#555555" : "#ff8c00",
-                fontSize: "9px",
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                padding: "2px 6px",
-                cursor: "pointer",
-              }}
-            >
-              {editorLocked ? "UNLOCK" : "LOCK"}
-            </button>
-          )}
-          {viewMode === "code" && !editorLocked && (
-            <button
-              onClick={handleApply}
-              disabled={!hasPendingChanges || saving}
-              style={{
-                background: hasPendingChanges ? "#ff8c00" : "#1e1e1e",
-                border: "1px solid #2a2a2a",
-                color: hasPendingChanges ? "#0a0a0a" : "#555555",
-                fontSize: "9px",
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                padding: "2px 6px",
-                cursor: hasPendingChanges ? "pointer" : "default",
-                fontWeight: "bold",
-              }}
-            >
-              {saving ? "APPLYING..." : "APPLY"}
-            </button>
+          {viewMode === "code" && hasPendingChanges && (
+            <>
+              <button
+                onClick={() => setEditBuffer(content)}
+                title="Discard changes"
+                style={{
+                  background: "transparent",
+                  border: "1px solid #ff3d0066",
+                  color: "#ff3d00",
+                  fontSize: "9px",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  padding: "2px 6px",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                }}
+              >
+                DISCARD
+              </button>
+              <button
+                onClick={handleApply}
+                disabled={saving}
+                title="Save changes"
+                style={{
+                  background: "#ff8c00",
+                  border: "1px solid #ff8c00",
+                  color: "#0a0a0a",
+                  fontSize: "9px",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  padding: "2px 6px",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                }}
+              >
+                {saving ? "SAVING..." : "SAVE"}
+              </button>
+            </>
           )}
           <button
             onClick={() => setCodeViewerOpen(false)}
@@ -957,92 +942,31 @@ export const CodeViewer = memo(function CodeViewer() {
               </div>
             )}
             {!loading && !error && (
-              !editorLocked ? (
-                <div style={{ padding: "10px 12px" }}>
-                  <textarea
-                    value={editBuffer}
-                    onChange={(e) => setEditBuffer(e.target.value)}
-                    spellCheck={false}
-                    style={{
-                      width: "100%",
-                      minHeight: "100%",
-                      height: "calc(100vh - 180px)",
-                      resize: "vertical",
-                      boxSizing: "border-box",
-                      background: "#0a0a0a",
-                      border: "1px solid #2a2a2a",
-                      color: "#e0e0e0",
-                      padding: "12px",
-                          fontSize: "15px",
-                      lineHeight: 1.6,
-                      fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace",
-                      outline: "none",
-                    }}
-                  />
-                </div>
-              ) : (
-                <div style={{ minWidth: wrapLines ? undefined : "fit-content", paddingRight: "68px" }}>
-                  {lines.map((_line, idx) => {
-                    const tokens = tokenizedLines[idx] ?? [];
-                    const isHovered = hoveredLine === idx;
-                    return (
-                      <div
-                        key={idx}
-                        style={{
-                          display: "flex",
-                          background: isHovered ? "#1e1e1e" : "transparent",
-                          fontSize: "15px",
-                          lineHeight: "1.6",
-                          minHeight: "22px",
-                        }}
-                        onMouseEnter={() => setHoveredLine(idx)}
-                        onMouseLeave={() => setHoveredLine(null)}
-                      >
-                        {/* Line number */}
-                        <span
-                          style={{
-                            width: `${lineNumWidth}px`,
-                            minWidth: `${lineNumWidth}px`,
-                            textAlign: "right",
-                            paddingRight: "12px",
-                            color: isHovered ? "#888888" : "#444444",
-                            fontSize: "11px",
-                            lineHeight: "1.6",
-                            fontWeight: 400,
-                            userSelect: "none",
-                            borderRight: "1px solid #2a2a2a",
-                            flexShrink: 0,
-                          }}
-                        >
-                          {idx + 1}
-                        </span>
-                        {/* Code content */}
-                        <span
-                          style={{
-                            flex: 1,
-                            whiteSpace: wrapLines ? "pre-wrap" : "pre",
-                            wordBreak: wrapLines ? "break-all" : undefined,
-                            paddingLeft: "12px",
-                            paddingRight: "16px",
-                            overflow: wrapLines ? undefined : "hidden",
-                            fontWeight: 400,
-                          }}
-                        >
-                          {tokens.map((token, ti) => (
-                            <span key={ti} style={{ color: token.color }}>
-                              {token.text}
-                            </span>
-                          ))}
-                          {tokens.length === 0 && "\u200B"}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              )
+              <div style={{ padding: "10px 12px" }}>
+                <textarea
+                  value={editBuffer}
+                  onChange={(e) => setEditBuffer(e.target.value)}
+                  spellCheck={false}
+                  style={{
+                    width: "100%",
+                    minHeight: "100%",
+                    height: "calc(100vh - 180px)",
+                    resize: "vertical",
+                    boxSizing: "border-box",
+                    background: "#0a0a0a",
+                    border: "1px solid #2a2a2a",
+                    color: "#e0e0e0",
+                    padding: "12px",
+                    fontSize: "15px",
+                    lineHeight: 1.6,
+                    fontFamily: "'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace",
+                    outline: "none",
+                  }}
+                />
+              </div>
             )}
             {/* Minimap */}
-            {!loading && !error && content.length > 0 && editorLocked && (
+            {!loading && !error && content.length > 0 && (
               <Minimap
                 content={content}
                 scrollTop={scrollState.top}
@@ -1185,7 +1109,7 @@ export const CodeViewer = memo(function CodeViewer() {
           }}
         >
           <span style={{ color: "#555555" }}>
-            {lines.length} lines
+            {content.split("\n").length} lines
           </span>
           <span style={{ color: "#555555" }}>
             {content.length.toLocaleString()} chars

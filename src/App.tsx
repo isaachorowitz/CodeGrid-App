@@ -264,6 +264,14 @@ export default function App() {
         addSession(session);
         addPaneLayout(session.id);
         setFocusedSession(session.id);
+
+        // Auto-name workspace after the repo/folder if it has a generic name
+        const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === activeWorkspaceId);
+        if (ws && /^(Default|Workspace \d+)$/i.test(ws.name)) {
+          const folderName = workingDir.split("/").pop() ?? workingDir;
+          useWorkspaceStore.getState().updateWorkspace(activeWorkspaceId, { name: folderName });
+          import("./lib/ipc").then(({ renameWorkspace }) => renameWorkspace(activeWorkspaceId, folderName).catch(() => {}));
+        }
         setTimeout(() => {
           window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
         }, 200);
@@ -490,7 +498,7 @@ function EmptyState({ onNewSession, onCreateSession }: EmptyStateProps) {
         Your AI-powered terminal workspace
       </div>
 
-      {/* Big action buttons */}
+      {/* Big action button */}
       <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
         <button
           onClick={onNewSession}
@@ -503,30 +511,6 @@ function EmptyState({ onNewSession, onCreateSession }: EmptyStateProps) {
           onMouseLeave={(e) => (e.currentTarget.style.background = "#ff8c00")}
         >
           START A NEW SESSION
-        </button>
-        <button
-          onClick={() => setHubBrowserOpen(true)}
-          style={{
-            background: "#1e1e1e", border: "1px solid #00c853", color: "#00c853",
-            fontSize: "13px", fontFamily: MONO, cursor: "pointer",
-            padding: "14px 28px", fontWeight: "bold", letterSpacing: "1px",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "#00c85322")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "#1e1e1e")}
-        >
-          CLONE A REPO
-        </button>
-        <button
-          onClick={() => setSkillsPanelOpen(true)}
-          style={{
-            background: "#1e1e1e", border: "1px solid #4a9eff", color: "#4a9eff",
-            fontSize: "13px", fontFamily: MONO, cursor: "pointer",
-            padding: "14px 28px", fontWeight: "bold", letterSpacing: "1px",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.background = "#4a9eff22")}
-          onMouseLeave={(e) => (e.currentTarget.style.background = "#1e1e1e")}
-        >
-          VIEW SKILLS
         </button>
       </div>
 

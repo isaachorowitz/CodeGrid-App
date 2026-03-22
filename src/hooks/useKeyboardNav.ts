@@ -179,6 +179,8 @@ export function useKeyboardNav() {
               setCanvas(defaultCanvas);
             }
             setActiveWorkspaceIpc(targetWs.id).catch(() => {});
+            // Notify terminals so they can re-fit when becoming visible again
+            window.dispatchEvent(new CustomEvent("codegrid:workspace-changed", { detail: { workspaceId: targetWs.id } }));
           }
           break;
         }

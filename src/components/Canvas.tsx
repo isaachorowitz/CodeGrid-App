@@ -28,10 +28,6 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     () => allSessions.filter((session) => session.workspace_id === activeWorkspaceId),
     [allSessions, activeWorkspaceId],
   );
-  const hiddenSessions = useMemo(
-    () => allSessions.filter((session) => session.workspace_id !== activeWorkspaceId),
-    [allSessions, activeWorkspaceId],
-  );
   const layouts = useLayoutStore((s) => s.layouts);
   const maximizedPane = useLayoutStore((s) => s.maximizedPane);
   const minimizedPanes = useLayoutStore((s) => s.minimizedPanes);
@@ -500,54 +496,20 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
             zIndex: 1,
           }}
         >
-          {visibleSessions.map((session) => {
+          {/* Render ALL sessions in a single list so React preserves DOM nodes
+              (and xterm instances) when sessions move between workspaces.
+              Hidden sessions are positioned off-screen with visibility:hidden. */}
+          {allSessions.map((session) => {
+            const isHidden = session.workspace_id !== activeWorkspaceId;
             const layout = visibleLayoutMap.get(session.id);
-            if (!layout) return null;
             const preview = live.current.panePreview[session.id];
 
-            const isMaximized = maximizedPane === session.id;
-            const paneStyle: React.CSSProperties = isMaximized
-              ? { position: "absolute", left: 0, top: 0, width, height: canvasHeight, zIndex: 10 }
-              : {
-                  position: "absolute",
-                  left: preview?.x ?? layout.x,
-                  top: preview?.y ?? layout.y,
-                  width: preview?.w ?? layout.w,
-                  height: preview?.h ?? layout.h,
-                };
+            const isMaximized = !isHidden && maximizedPane === session.id;
 
-            return (
-              <div
-                key={session.id}
-                data-pane-id={session.id}
-                onMouseDown={(e) => e.stopPropagation()}
-                style={{ ...paneStyle, overflow: "hidden", willChange: "left, top, width, height" }}
-              >
-                {/* Zoomed-out label overlay */}
-                {canvas.zoom < ZOOMED_OUT_LABEL_THRESHOLD && !maximizedPane && (
-                  <ZoomedOutLabel session={session} zoom={canvas.zoom} />
-                )}
-
-                <Pane
-                  session={session}
-                  onClose={onCloseSession}
-                  onDragStart={(e) => handlePaneDragStart(session.id, e)}
-                />
-
-                {/* Resize handles */}
-                {!canvas.locked && !maximizedPane && (
-                  <ResizeHandles sessionId={session.id} onResizeStart={handleResizeStart} />
-                )}
-              </div>
-            );
-          })}
-
-          {/* Hidden sessions from other workspaces — kept mounted to preserve xterm buffer */}
-          {hiddenSessions.map((session) => (
-            <div
-              key={session.id}
-              data-pane-id={session.id}
-              style={{
+            let paneStyle: React.CSSProperties;
+            if (isHidden || !layout) {
+              // Off-screen but mounted — keeps xterm alive
+              paneStyle = {
                 position: "absolute",
                 left: -9999,
                 top: -9999,
@@ -555,14 +517,46 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
                 height: 400,
                 visibility: "hidden",
                 pointerEvents: "none",
-              }}
-            >
-              <Pane
-                session={session}
-                onClose={onCloseSession}
-              />
-            </div>
-          ))}
+              };
+            } else if (isMaximized) {
+              paneStyle = { position: "absolute", left: 0, top: 0, width, height: canvasHeight, zIndex: 10 };
+            } else {
+              paneStyle = {
+                position: "absolute",
+                left: preview?.x ?? layout.x,
+                top: preview?.y ?? layout.y,
+                width: preview?.w ?? layout.w,
+                height: preview?.h ?? layout.h,
+              };
+            }
+
+            const isVisible = !isHidden && !!layout;
+
+            return (
+              <div
+                key={session.id}
+                data-pane-id={session.id}
+                onMouseDown={isVisible ? (e) => e.stopPropagation() : undefined}
+                style={{ ...paneStyle, overflow: "hidden", willChange: isVisible ? "left, top, width, height" : undefined }}
+              >
+                {/* Zoomed-out label overlay */}
+                {isVisible && canvas.zoom < ZOOMED_OUT_LABEL_THRESHOLD && !maximizedPane && (
+                  <ZoomedOutLabel session={session} zoom={canvas.zoom} />
+                )}
+
+                <Pane
+                  session={session}
+                  onClose={onCloseSession}
+                  onDragStart={isVisible ? (e) => handlePaneDragStart(session.id, e) : undefined}
+                />
+
+                {/* Resize handles */}
+                {isVisible && !canvas.locked && !maximizedPane && (
+                  <ResizeHandles sessionId={session.id} onResizeStart={handleResizeStart} />
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {/* Canvas controls overlay */}

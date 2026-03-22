@@ -72,7 +72,7 @@ const ActivityBar = memo(function ActivityBar({
               border: "none",
               borderLeft: isActive ? "2px solid #ff8c00" : "2px solid transparent",
               color: isActive ? "#ff8c00" : isHovered ? "#e0e0e0" : "#555555",
-              fontSize: "16px",
+              fontSize: "18px",
               cursor: "pointer",
               padding: 0,
               position: "relative",
@@ -1171,9 +1171,10 @@ const SettingsPanel = memo(function SettingsPanel() {
 // Panel widths per type
 // ---------------------------------------------------------------------------
 const PANEL_WIDTHS: Record<string, number> = {
-  files: 220,
-  git: 240,
-  settings: 220,
+  files: 286,
+  search: 286,
+  git: 312,
+  settings: 286,
 };
 
 
