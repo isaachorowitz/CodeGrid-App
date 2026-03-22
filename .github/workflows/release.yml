@@ -1,0 +1,95 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Import signing certificate
+        env:
+          CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm certificate.p12
+
+      - name: Build
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: Notarize
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          DMG=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_*.dmg
+          xcrun notarytool submit $DMG \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          xcrun stapler staple $DMG
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "dmg=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg" >> $GITHUB_OUTPUT
+
+      # On version tag: create a proper versioned release on the public repo
+      - name: Create versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          NOTES=$(awk "/^## \[${TAG#v}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          gh release create "$TAG" "${{ steps.version.outputs.dmg }}" \
+            --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
+            --title "CodeGrid $TAG" \
+            --notes "$NOTES"
+
+      # On every main push: update the rolling "latest" pre-release
+      - name: Update latest pre-release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          gh release delete latest \
+            --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
+            --yes 2>/dev/null || true
+          gh release create latest "${{ steps.version.outputs.dmg }}" \
+            --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
+            --title "CodeGrid (latest build)" \
+            --notes "Automatically built from the latest commit on \`main\`. Signed and notarized." \
+            --prerelease
