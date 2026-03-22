@@ -3683,3 +3683,91 @@ pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, Strin
     Ok(DepGraph { nodes, edges })
 }
 
+// === Browser Pane Webview Commands ===
+
+#[tauri::command]
+pub async fn create_browser_pane(
+    app: AppHandle,
+    pane_id: String,
+    url: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    use tauri::webview::WebviewBuilder;
+    use tauri::{Manager, LogicalPosition, LogicalSize};
+
+    let window = app.get_window("main")
+        .ok_or("Main window not found")?;
+
+    let webview_url = if url.starts_with("http://") || url.starts_with("https://") {
+        tauri::WebviewUrl::External(url.parse().map_err(|e| format!("Invalid URL: {e}"))?)
+    } else {
+        tauri::WebviewUrl::External(format!("https://{url}").parse().map_err(|e| format!("Invalid URL: {e}"))?)
+    };
+
+    let builder = WebviewBuilder::new(&pane_id, webview_url);
+
+    window.add_child(
+        builder,
+        LogicalPosition::new(x, y),
+        LogicalSize::new(width, height),
+    ).map_err(|e| format!("Failed to create browser pane: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn update_browser_pane_position(
+    app: AppHandle,
+    pane_id: String,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
+    use tauri::{Manager, LogicalPosition, LogicalSize};
+
+    if let Some(webview) = app.get_webview(&pane_id) {
+        webview.set_position(LogicalPosition::new(x, y))
+            .map_err(|e| format!("Failed to set position: {e}"))?;
+        webview.set_size(LogicalSize::new(width, height))
+            .map_err(|e| format!("Failed to set size: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn navigate_browser_pane(
+    app: AppHandle,
+    pane_id: String,
+    url: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    let parsed_url = if url.starts_with("http://") || url.starts_with("https://") {
+        url.parse().map_err(|e| format!("Invalid URL: {e}"))?
+    } else {
+        format!("https://{url}").parse().map_err(|e| format!("Invalid URL: {e}"))?
+    };
+
+    if let Some(webview) = app.get_webview(&pane_id) {
+        webview.navigate(parsed_url).map_err(|e| format!("Failed to navigate: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn close_browser_pane(
+    app: AppHandle,
+    pane_id: String,
+) -> Result<(), String> {
+    use tauri::Manager;
+
+    if let Some(webview) = app.get_webview(&pane_id) {
+        webview.close().map_err(|e| format!("Failed to close browser: {e}"))?;
+    }
+    Ok(())
+}
+

@@ -39,6 +39,9 @@ import {
   getSetting,
   getPersistedSessions,
   clearPersistedSessions,
+  createBrowserPane,
+  closeBrowserPane,
+  updateBrowserPanePosition,
 } from "./lib/ipc";
 
 export default function App() {
@@ -356,6 +359,47 @@ export default function App() {
     return () => window.removeEventListener("codegrid:quick-session", handler);
   }, [handleCreateSession]);
 
+  // New browser pane event
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (!activeWorkspaceId) return;
+      const url = detail?.url ?? "https://google.com";
+      const browserSessionId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      // Create a synthetic session entry for the browser pane
+      const syntheticSession = {
+        id: browserSessionId,
+        workspace_id: activeWorkspaceId,
+        working_dir: url,
+        command: "browser",
+        git_branch: null,
+        status: "running" as const,
+        created_at: new Date().toISOString(),
+        pane_number: allSessions.filter((s) => s.workspace_id === activeWorkspaceId).length + 1,
+        worktree_path: null,
+        name: null,
+      };
+
+      addSession(syntheticSession);
+      useSessionStore.getState().updateSession(browserSessionId, { type: "browser", browserUrl: url });
+      addPaneLayout(browserSessionId);
+      setFocusedSession(browserSessionId);
+
+      // Wait a tick for layout to be committed, then read position and create native webview
+      requestAnimationFrame(() => {
+        const layout = useLayoutStore.getState().layouts.find((l) => l.i === browserSessionId);
+        if (layout) {
+          createBrowserPane(browserSessionId, url, layout.x, layout.y, layout.w, layout.h).catch((err) =>
+            console.warn("Failed to create browser pane:", err)
+          );
+        }
+      });
+    };
+    window.addEventListener("codegrid:new-browser-pane", handler);
+    return () => window.removeEventListener("codegrid:new-browser-pane", handler);
+  }, [activeWorkspaceId, allSessions, addSession, addPaneLayout, setFocusedSession]);
+
   // Listen for JSON-RPC commands from Unix socket
   useEffect(() => {
     let unlisten1: (() => void) | undefined;
@@ -437,11 +481,17 @@ export default function App() {
 
   const handleCloseSession = useCallback(
     async (sessionId: string) => {
+      // Check if this is a browser pane
+      const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
       // Optimistically remove from UI first for instant feedback
       removeSession(sessionId);
       removePaneLayout(sessionId);
-      // Then kill the PTY in the background
-      try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
+      // Then kill the PTY or close the browser pane in the background
+      if (session?.type === "browser") {
+        try { await closeBrowserPane(sessionId); } catch (e) { console.warn("Failed to close browser pane:", e); }
+      } else {
+        try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
+      }
     },
     [removeSession, removePaneLayout],
   );

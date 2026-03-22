@@ -638,6 +638,24 @@ export async function analyzeDependencies(workingDir: string): Promise<DepGraph>
   return invoke("analyze_dependencies", { workingDir });
 }
 
+// === Browser Pane Commands ===
+
+export async function createBrowserPane(paneId: string, url: string, x: number, y: number, width: number, height: number): Promise<void> {
+  return invoke("create_browser_pane", { paneId, url, x, y, width, height });
+}
+
+export async function updateBrowserPanePosition(paneId: string, x: number, y: number, width: number, height: number): Promise<void> {
+  return invoke("update_browser_pane_position", { paneId, x, y, width, height });
+}
+
+export async function navigateBrowserPane(paneId: string, url: string): Promise<void> {
+  return invoke("navigate_browser_pane", { paneId, url });
+}
+
+export async function closeBrowserPane(paneId: string): Promise<void> {
+  return invoke("close_browser_pane", { paneId });
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,

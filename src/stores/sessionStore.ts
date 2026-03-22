@@ -8,6 +8,8 @@ export interface SessionWithModel extends SessionInfo {
   /** Whether the user has manually renamed this tab */
   manualName?: string;
   lastUsedAt: number;
+  type?: "terminal" | "browser";
+  browserUrl?: string;
 }
 
 interface SessionState {

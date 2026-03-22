@@ -1,9 +1,11 @@
 import { useCallback, useMemo, memo, useRef, useEffect } from "react";
 import { Pane } from "./Pane";
+import { BrowserPane } from "./BrowserPane";
 import { MinimizedPaneBar } from "./MinimizedPaneBar";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { updateBrowserPanePosition } from "../lib/ipc";
 import { useShallow } from "zustand/react/shallow";
 
 interface CanvasProps {
@@ -383,12 +385,24 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         const preview = L.panePreview[L.dragId];
         // Use current layout w/h (drag doesn't change size)
         const layout = useLayoutStore.getState().layouts.find((l) => l.i === L.dragId);
-        if (layout && preview) commitPaneLayout(L.dragId, preview.x, preview.y, layout.w, layout.h);
+        if (layout && preview) {
+          commitPaneLayout(L.dragId, preview.x, preview.y, layout.w, layout.h);
+          // Sync browser pane position with native webview
+          const session = useSessionStore.getState().sessions.find((s) => s.id === L.dragId);
+          if (session?.type === "browser") {
+            updateBrowserPanePosition(L.dragId, preview.x, preview.y, layout.w, layout.h).catch(() => {});
+          }
+        }
         delete L.panePreview[L.dragId];
       } else if (L.mode === "resize" && L.resizeEl) {
         const preview = L.panePreview[L.resizeId];
         if (preview) {
           commitPaneLayout(L.resizeId, preview.x, preview.y, preview.w, preview.h);
+          // Sync browser pane position with native webview
+          const session = useSessionStore.getState().sessions.find((s) => s.id === L.resizeId);
+          if (session?.type === "browser") {
+            updateBrowserPanePosition(L.resizeId, preview.x, preview.y, preview.w, preview.h).catch(() => {});
+          }
         }
         delete L.panePreview[L.resizeId];
       }
@@ -608,11 +622,20 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
                   <ZoomedOutLabel session={session} zoom={canvas.zoom} />
                 )}
 
-                <Pane
-                  session={session}
-                  onClose={onCloseSession}
-                  onDragStart={isVisible ? (e) => handlePaneDragStart(session.id, e) : undefined}
-                />
+                {session.type === "browser" ? (
+                  <BrowserPane
+                    sessionId={session.id}
+                    url={session.browserUrl ?? "https://google.com"}
+                    onClose={onCloseSession}
+                    onDragStart={isVisible ? (e) => handlePaneDragStart(session.id, e) : undefined}
+                  />
+                ) : (
+                  <Pane
+                    session={session}
+                    onClose={onCloseSession}
+                    onDragStart={isVisible ? (e) => handlePaneDragStart(session.id, e) : undefined}
+                  />
+                )}
 
                 {/* Resize handles */}
                 {isVisible && !canvas.locked && !maximizedPane && (

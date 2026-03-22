@@ -137,6 +137,11 @@ pub fn run() {
             commands::deactivate_license,
             // Dependency graph
             commands::analyze_dependencies,
+            // Browser pane webviews
+            commands::create_browser_pane,
+            commands::update_browser_pane_position,
+            commands::navigate_browser_pane,
+            commands::close_browser_pane,
 
         ])
         // Intercept close (red X / Cmd+Q) → show confirmation if sessions are running.
