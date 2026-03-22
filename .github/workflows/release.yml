@@ -33,11 +33,13 @@ jobs:
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
           echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
-          security create-keychain -p "" build.keychain
-          security default-keychain -s build.keychain
-          security unlock-keychain -p "" build.keychain
-          security import certificate.p12 -k build.keychain -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain-db
+          security set-keychain-settings -lut 21600 build.keychain-db
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain-db
+          security import certificate.p12 -k build.keychain-db -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain-db
+          security list-keychains -d user -s build.keychain-db login.keychain-db
           rm certificate.p12
 
       - name: Build
