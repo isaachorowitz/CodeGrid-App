@@ -6,6 +6,7 @@ import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { updateBrowserPanePosition } from "../lib/ipc";
+import { canvasToWindow, BROWSER_HEADER_HEIGHT } from "../lib/canvasToWindow";
 import { useShallow } from "zustand/react/shallow";
 
 interface CanvasProps {
@@ -87,6 +88,39 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     applyBgTransform();
     if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(canvas.zoom * 100)}%`;
   }, [canvas.zoom, canvas.panX, canvas.panY, canvas.locked]);
+
+  // Sync all browser pane positions when canvas state, layouts, or workspace changes.
+  // This handles: zoom/pan changes, workspace switching (hides off-workspace panes),
+  // and layout changes from presets/auto-layout.
+  useEffect(() => {
+    const allSess = useSessionStore.getState().sessions;
+    const browserSessions = allSess.filter((s) => s.type === "browser");
+    if (browserSessions.length === 0) return;
+
+    const rect = viewportRef.current?.getBoundingClientRect();
+    const offsetX = rect?.left ?? 0;
+    const offsetY = rect?.top ?? 0;
+
+    for (const session of browserSessions) {
+      const isActive = session.workspace_id === activeWorkspaceId;
+      const layout = layouts.find((l) => l.i === session.id);
+
+      if (!isActive || !layout) {
+        // Hide: move off-screen
+        updateBrowserPanePosition(session.id, -9999, -9999, 0, 0).catch(() => {});
+      } else {
+        const win = canvasToWindow(
+          layout.x, layout.y, layout.w, layout.h,
+          canvas.zoom, canvas.panX, canvas.panY,
+          offsetX, offsetY,
+        );
+        const hdrH = Math.round(BROWSER_HEADER_HEIGHT * canvas.zoom);
+        updateBrowserPanePosition(
+          session.id, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH),
+        ).catch(() => {});
+      }
+    }
+  }, [canvas.zoom, canvas.panX, canvas.panY, activeWorkspaceId, layouts]);
 
   const dragOverlayRef = useRef<HTMLDivElement>(null);
   const hasMinimized = Object.keys(minimizedPanes).length > 0;
@@ -390,7 +424,14 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           // Sync browser pane position with native webview
           const session = useSessionStore.getState().sessions.find((s) => s.id === L.dragId);
           if (session?.type === "browser") {
-            updateBrowserPanePosition(L.dragId, preview.x, preview.y, layout.w, layout.h).catch(() => {});
+            const rect = viewportRef.current?.getBoundingClientRect();
+            const win = canvasToWindow(
+              preview.x, preview.y, layout.w, layout.h,
+              L.zoom, L.panX, L.panY,
+              rect?.left ?? 0, rect?.top ?? 0,
+            );
+            const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
+            updateBrowserPanePosition(L.dragId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
           }
         }
         delete L.panePreview[L.dragId];
@@ -401,7 +442,14 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           // Sync browser pane position with native webview
           const session = useSessionStore.getState().sessions.find((s) => s.id === L.resizeId);
           if (session?.type === "browser") {
-            updateBrowserPanePosition(L.resizeId, preview.x, preview.y, preview.w, preview.h).catch(() => {});
+            const rect = viewportRef.current?.getBoundingClientRect();
+            const win = canvasToWindow(
+              preview.x, preview.y, preview.w, preview.h,
+              L.zoom, L.panX, L.panY,
+              rect?.left ?? 0, rect?.top ?? 0,
+            );
+            const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
+            updateBrowserPanePosition(L.resizeId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
           }
         }
         delete L.panePreview[L.resizeId];

@@ -43,6 +43,7 @@ import {
   closeBrowserPane,
   updateBrowserPanePosition,
 } from "./lib/ipc";
+import { canvasToWindow, BROWSER_HEADER_HEIGHT } from "./lib/canvasToWindow";
 
 export default function App() {
   const {
@@ -390,7 +391,21 @@ export default function App() {
       requestAnimationFrame(() => {
         const layout = useLayoutStore.getState().layouts.find((l) => l.i === browserSessionId);
         if (layout) {
-          createBrowserPane(browserSessionId, url, layout.x, layout.y, layout.w, layout.h).catch((err) =>
+          const canvasState = useLayoutStore.getState().canvas;
+          const rect = containerRef.current?.getBoundingClientRect();
+          const offsetX = rect?.left ?? 0;
+          const offsetY = rect?.top ?? 0;
+          const win = canvasToWindow(
+            layout.x, layout.y, layout.w, layout.h,
+            canvasState.zoom, canvasState.panX, canvasState.panY,
+            offsetX, offsetY,
+          );
+          // Offset for the BrowserPane header bar so the native webview sits below it
+          const headerH = Math.round(BROWSER_HEADER_HEIGHT * canvasState.zoom);
+          createBrowserPane(
+            browserSessionId, url,
+            win.x, win.y + headerH, win.w, Math.max(0, win.h - headerH),
+          ).catch((err) =>
             console.warn("Failed to create browser pane:", err)
           );
         }
