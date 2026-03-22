@@ -17,6 +17,7 @@ use tokio::sync::Mutex as TokioMutex;
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|_app| {
             let db = Database::new().expect("Failed to initialize database");
             let state = Arc::new(AppState {
