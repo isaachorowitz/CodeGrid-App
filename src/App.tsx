@@ -262,7 +262,7 @@ export default function App() {
       const maxPanes = licenseStatus?.max_panes ?? 2;
       const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
       if (currentCount >= maxPanes) {
-        if (licenseStatus?.license_type === "trial") {
+        if (licenseStatus?.is_trial) {
           addToast(`Trial limited to ${maxPanes} panes. Upgrade to unlock unlimited panes.`, "error");
         } else {
           addToast(`License limit reached (${maxPanes} panes). Please upgrade your license.`, "error");
