@@ -1,8 +1,8 @@
 # Apple Notarization — Status & Instructions
 
-## Current Status: PENDING
+## Current Status: COMPLETE
 
-The v0.1.0 .dmg is **signed** but **not yet notarized**. Users must right-click → Open on first launch.
+The v0.1.0 .dmg is **signed, notarized, and stapled**. Users can double-click to install with no Gatekeeper warnings.
 
 - **Submission ID**: `a5bf1e1c-96f9-4a05-8c17-b57ad1aa0064`
 - **Submitted**: 2026-03-20

@@ -84,13 +84,13 @@ export const GitManager = memo(function GitManager() {
 
   const refreshBranches = useCallback(async () => {
     if (!dir) return;
-    try { setBranches(await gitListBranches(dir)); } catch (e) { console.warn("Failed to list branches:", e); }
-  }, [dir]);
+    try { setBranches(await gitListBranches(dir)); } catch (e) { showError(String(e)); }
+  }, [dir, showError]);
 
   const refreshLog = useCallback(async () => {
     if (!dir) return;
-    try { setLogEntries(await gitLog(dir, 30)); } catch (e) { console.warn("Failed to load git log:", e); }
-  }, [dir]);
+    try { setLogEntries(await gitLog(dir, 30)); } catch (e) { showError(String(e)); }
+  }, [dir, showError]);
 
   // Refresh everything on open or dir change
   useEffect(() => {

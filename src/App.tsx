@@ -258,8 +258,18 @@ export default function App() {
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => {
       if (!activeWorkspaceId) return;
 
-      // TODO: Check useLicenseStore.getState().status?.max_panes against current session count
-      // and block session creation if the limit is reached (show toast or open license dialog).
+      const licenseStatus = useLicenseStore.getState().status;
+      const maxPanes = licenseStatus?.max_panes ?? 2;
+      const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
+      if (currentCount >= maxPanes) {
+        if (licenseStatus?.license_type === "trial") {
+          addToast(`Trial limited to ${maxPanes} panes. Upgrade to unlock unlimited panes.`, "error");
+        } else {
+          addToast(`License limit reached (${maxPanes} panes). Please upgrade your license.`, "error");
+        }
+        useWorkspaceStore.getState().setLicenseDialogOpen(true);
+        return;
+      }
 
       try {
         let session;
