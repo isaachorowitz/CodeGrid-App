@@ -185,6 +185,9 @@ export default function App() {
         setActiveWorkspace(mockWs.id);
       }
 
+      // Load license status FIRST so pane limits are correct before any session creation
+      try { await useLicenseStore.getState().fetchStatus(); } catch (e) { console.warn("Failed to load license status:", e); }
+
       // Load skills
       try { const skills = await detectClaudeSkills(); setSkills(skills); } catch (e) { console.warn("Failed to load skills:", e); }
 
@@ -193,9 +196,6 @@ export default function App() {
 
       // Load recent dirs
       try { const dirs = await listRecentDirs(); setRecentDirs(dirs); } catch (e) { console.warn("Failed to load recent dirs:", e); }
-
-      // Load license status
-      try { await useLicenseStore.getState().fetchStatus(); } catch (e) { console.warn("Failed to load license status:", e); }
 
       // Show Git Setup Wizard on first launch (no workspaces existed) OR if not fully configured
       try {
@@ -305,9 +305,10 @@ export default function App() {
       if (!activeWorkspaceId) return;
 
       const licenseStatus = useLicenseStore.getState().status;
-      const maxPanes = licenseStatus?.max_panes ?? 2;
+      // If license hasn't loaded yet, don't block session creation
+      const maxPanes = licenseStatus?.max_panes ?? 50;
       const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
-      if (currentCount >= maxPanes) {
+      if (licenseStatus && currentCount >= maxPanes) {
         if (licenseStatus?.is_trial) {
           addToast(`Trial limited to ${maxPanes} panes. Upgrade to unlock unlimited panes.`, "error");
         } else {
