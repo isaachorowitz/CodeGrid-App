@@ -82,6 +82,11 @@ export async function getPersistedSessions(workspaceId: string): Promise<Session
   return invoke("get_persisted_sessions", { workspaceId });
 }
 
+/** Delete old persisted sessions from DB after restoring them on startup. */
+export async function clearPersistedSessions(workspaceId: string, sessionIds: string[]): Promise<void> {
+  return invoke("clear_persisted_sessions", { workspaceId, sessionIds });
+}
+
 /** Persist a user-assigned name for a session tab (null to clear). */
 export async function renameSession(sessionId: string, name: string | null): Promise<void> {
   return invoke("rename_session", { sessionId, name });
@@ -621,6 +626,16 @@ export async function activateLicense(key: string): Promise<LicenseStatus> {
 
 export async function deactivateLicense(): Promise<LicenseStatus> {
   return invoke("deactivate_license");
+}
+
+// === Dependency Graph ===
+
+export interface DepNode { path: string; name: string; }
+export interface DepEdge { from: string; to: string; }
+export interface DepGraph { nodes: DepNode[]; edges: DepEdge[]; }
+
+export async function analyzeDependencies(workingDir: string): Promise<DepGraph> {
+  return invoke("analyze_dependencies", { workingDir });
 }
 
 // Event listeners

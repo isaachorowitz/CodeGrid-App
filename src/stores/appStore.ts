@@ -21,6 +21,8 @@ interface AppState {
   claudeMdDir: string | null;
   projectSearchOpen: boolean;
   projectSearchDir: string | null;
+  dependencyGraphOpen: boolean;
+  dependencyGraphDir: string | null;
 
   setSkills: (skills: SkillInfo[]) => void;
   setModels: (models: ModelInfo[]) => void;
@@ -34,6 +36,7 @@ interface AppState {
   setGitSetupWizardOpen: (open: boolean) => void;
   setCodeViewerOpen: (open: boolean, filePath?: string, opts?: { diffMode?: boolean; workingDir?: string }) => void;
   setProjectSearchOpen: (open: boolean, dir?: string) => void;
+  setDependencyGraphOpen: (open: boolean, dir?: string) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -56,6 +59,8 @@ export const useAppStore = create<AppState>((set) => ({
   claudeMdDir: null,
   projectSearchOpen: false,
   projectSearchDir: null,
+  dependencyGraphOpen: false,
+  dependencyGraphDir: null,
 
   setSkills: (skills) => set({ skills }),
   setModels: (models) => set({ models }),
@@ -68,6 +73,7 @@ export const useAppStore = create<AppState>((set) => ({
   setClaudeMdEditorOpen: (open, dir) => set({ claudeMdEditorOpen: open, claudeMdDir: dir ?? null }),
   setGitSetupWizardOpen: (open) => set({ gitSetupWizardOpen: open }),
   setProjectSearchOpen: (open, dir) => set({ projectSearchOpen: open, projectSearchDir: dir ?? null }),
+  setDependencyGraphOpen: (open, dir) => set({ dependencyGraphOpen: open, dependencyGraphDir: dir ?? null }),
   setCodeViewerOpen: (open, filePath, opts) => set({
     codeViewerOpen: open,
     codeViewerFile: filePath ?? null,

@@ -15,6 +15,7 @@ import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
 import { TrialBanner } from "./components/TrialBanner";
 import { LicenseDialog } from "./components/LicenseDialog";
+import { DependencyGraph } from "./components/DependencyGraph";
 import { useSessionStore } from "./stores/sessionStore";
 import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
@@ -37,6 +38,7 @@ import {
   checkGitSetup,
   getSetting,
   getPersistedSessions,
+  clearPersistedSessions,
 } from "./lib/ipc";
 
 export default function App() {
@@ -105,9 +107,62 @@ export default function App() {
             setCanvas(sanitizeCanvasState(null));
           }
 
-          // Clear stale sessions from previous launches — dead sessions have no live PTY
-          // and just clutter the UI. Start fresh each launch.
-          // (Layouts are preserved via workspace layout_json, so pane positions survive.)
+          // Restore persisted sessions from previous launch
+          try {
+            const persisted = await getPersistedSessions(active.id);
+            if (persisted.length > 0) {
+              console.log(`[CodeGrid] Restoring ${persisted.length} persisted session(s)`);
+              const currentLayouts = useLayoutStore.getState().layouts;
+              let updatedLayouts = [...currentLayouts];
+
+              for (const old of persisted) {
+                try {
+                  const isShell = !old.command.includes("claude");
+                  let restored;
+                  if (isShell) {
+                    restored = await spawnShellSession(old.working_dir, active.id);
+                  } else {
+                    restored = await createSession(old.working_dir, active.id, false, false);
+                  }
+
+                  // Carry over user-assigned name
+                  if (old.name) {
+                    restored.name = old.name;
+                    import("./lib/ipc").then(({ renameSession }) =>
+                      renameSession(restored.id, old.name).catch(() => {})
+                    );
+                  }
+
+                  addSession(restored);
+
+                  // Remap layout: swap old session ID for new one to preserve pane position
+                  const layoutIdx = updatedLayouts.findIndex((l) => l.i === old.id);
+                  if (layoutIdx >= 0) {
+                    updatedLayouts = updatedLayouts.map((l) =>
+                      l.i === old.id ? { ...l, i: restored.id } : l
+                    );
+                  } else {
+                    addPaneLayout(restored.id);
+                  }
+
+                  console.log(`[CodeGrid] Restored session ${old.id} → ${restored.id} (${old.working_dir})`);
+                } catch (e) {
+                  console.warn(`[CodeGrid] Failed to restore session ${old.id}:`, e);
+                }
+              }
+
+              // Apply remapped layouts
+              setLayouts(updatedLayouts);
+
+              // Clean up old DB entries so they don't restore again next launch
+              const oldIds = persisted.map((s) => s.id);
+              clearPersistedSessions(active.id, oldIds).catch((e) =>
+                console.warn("Failed to clear old persisted sessions:", e)
+              );
+            }
+          } catch (e) {
+            console.warn("Failed to restore persisted sessions:", e);
+          }
         } else {
           const ws = await createWorkspace("Default");
           addWorkspace(ws);
@@ -292,6 +347,30 @@ export default function App() {
     return () => window.removeEventListener("codegrid:quick-session", handler);
   }, [handleCreateSession]);
 
+  // Listen for JSON-RPC commands from Unix socket
+  useEffect(() => {
+    let unlisten1: (() => void) | undefined;
+    let unlisten2: (() => void) | undefined;
+    let cancelled = false;
+
+    (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      if (cancelled) return;
+      unlisten1 = await listen<string>("rpc:open-folder", (e) => {
+        handleCreateSession(e.payload, false, false, false);
+      });
+      unlisten2 = await listen<string>("rpc:new-session", (e) => {
+        handleCreateSession(e.payload, false, false, false);
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten1?.();
+      unlisten2?.();
+    };
+  }, [handleCreateSession]);
+
   // Restart a dead/restored session — replaces the dead entry with a live one
   useEffect(() => {
     const handler = async (e: Event) => {
@@ -438,6 +517,7 @@ export default function App() {
       <GitSetupWizard />
       <CodeViewer />
       <LicenseDialog />
+      <DependencyGraph />
       <ToastContainer />
     </div>
   );

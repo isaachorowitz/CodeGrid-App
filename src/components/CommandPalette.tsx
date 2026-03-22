@@ -27,7 +27,7 @@ export const CommandPalette = memo(function CommandPalette() {
   const sessions = useSessionStore((s) => s.sessions);
   const { setFocusedSession, toggleBroadcast, focusedSessionId } = useSessionStore();
   const { applyPreset, toggleMaximize } = useLayoutStore();
-  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, skills } = useAppStore();
+  const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, setDependencyGraphOpen, skills } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -152,6 +152,16 @@ export const CommandPalette = memo(function CommandPalette() {
         },
       },
       {
+        id: "open-dep-graph",
+        label: "Dependency Graph",
+        category: "Tools",
+        action: () => {
+          const focused = activeSessions.find((s) => s.id === focusedSessionId);
+          setCommandPaletteOpen(false);
+          setDependencyGraphOpen(true, focused?.working_dir);
+        },
+      },
+      {
         id: "open-mcp",
         label: "MCP",
         category: "Tools",
@@ -251,7 +261,7 @@ export const CommandPalette = memo(function CommandPalette() {
     }
 
     return items;
-  }, [activeSessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setFocusedSession, applyPreset, toggleMaximize, addToast, workspaces, activeWorkspaceId, setActiveWorkspaceLocal, addSession]);
+  }, [activeSessions, focusedSessionId, skills, setCommandPaletteOpen, setNewSessionDialogOpen, toggleSidebar, toggleBroadcast, setHubBrowserOpen, setSkillsPanelOpen, setSettingsOpen, setGitManagerOpen, setMcpManagerOpen, setDependencyGraphOpen, setFocusedSession, applyPreset, toggleMaximize, addToast, workspaces, activeWorkspaceId, setActiveWorkspaceLocal, addSession]);
 
   const filtered = useMemo(() => {
     if (!query) return commands;

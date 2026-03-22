@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod license;
 mod pty_manager;
+mod rpc_server;
 mod session;
 mod workspace;
 mod worktree;
@@ -27,6 +28,11 @@ pub fn run() {
                 connect_signals: TokioMutex::new(std::collections::HashMap::new()),
             });
             _app.manage(state);
+
+            // Start JSON-RPC Unix socket server
+            let handle = _app.handle().clone();
+            tauri::async_runtime::spawn(rpc_server::start_rpc_server(handle));
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,6 +42,7 @@ pub fn run() {
             commands::kill_session,
             commands::get_sessions,
             commands::get_persisted_sessions,
+            commands::clear_persisted_sessions,
             commands::rename_session,
             commands::update_session_status,
             commands::create_workspace,
@@ -128,6 +135,8 @@ pub fn run() {
             commands::get_license_status,
             commands::activate_license,
             commands::deactivate_license,
+            // Dependency graph
+            commands::analyze_dependencies,
 
         ])
         // Intercept close (red X / Cmd+Q) → show confirmation if sessions are running.
@@ -179,6 +188,7 @@ pub fn run() {
         match event {
             RunEvent::Exit => {
                 eprintln!("[CodeGrid] App exiting, cleaning up PTY sessions");
+                rpc_server::cleanup();
                 if let Some(state) = app_handle.try_state::<Arc<AppState>>() {
                     state.pty_manager.kill_all();
                 }

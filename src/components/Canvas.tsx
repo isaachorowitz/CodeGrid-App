@@ -70,6 +70,9 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     panePreview: {} as Record<string, { x: number; y: number; w: number; h: number }>,
     // space
     spaceHeld: false,
+    // momentum
+    velocitySamples: [] as { x: number; y: number; t: number }[],
+    momentumRaf: 0,
   });
 
   // Sync zustand → live ref when store changes (e.g. preset, autoLayout, external)
@@ -133,6 +136,39 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     }
   }
 
+  function cancelMomentum() {
+    if (live.current.momentumRaf) {
+      cancelAnimationFrame(live.current.momentumRaf);
+      live.current.momentumRaf = 0;
+    }
+  }
+
+  function startMomentum(vx: number, vy: number) {
+    const FRICTION = 0.92;
+    const MIN_VELOCITY = 0.1;
+    let velX = vx;
+    let velY = vy;
+
+    const tick = () => {
+      velX *= FRICTION;
+      velY *= FRICTION;
+
+      if (Math.abs(velX) + Math.abs(velY) < MIN_VELOCITY) {
+        live.current.momentumRaf = 0;
+        commitCanvasState();
+        return;
+      }
+
+      live.current.panX += velX;
+      live.current.panY += velY;
+      applySurfaceTransform();
+      applyBgTransform();
+      live.current.momentumRaf = requestAnimationFrame(tick);
+    };
+
+    live.current.momentumRaf = requestAnimationFrame(tick);
+  }
+
   /** Commit current live state to zustand (triggers one render) */
   function commitCanvasState() {
     const { zoom, panX, panY } = live.current;
@@ -159,6 +195,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       // Keep native terminal scrolling; zoom via Cmd/Ctrl+wheel or when not hovering terminal content.
       if (insideTerminal && !e.metaKey && !e.ctrlKey) return;
       e.preventDefault();
+      cancelMomentum();
       const rect = vp.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
@@ -273,6 +310,11 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         L.panY = L.origPanY + dy;
         applySurfaceTransform();
         applyBgTransform();
+        // Track velocity samples for momentum
+        const now = performance.now();
+        const samples = L.velocitySamples;
+        samples.push({ x: e.clientX, y: e.clientY, t: now });
+        if (samples.length > 5) samples.shift();
         return;
       }
 
@@ -315,7 +357,28 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     const onUp = () => {
       const L = live.current;
       if (L.mode === "pan") {
-        commitCanvasState();
+        // Calculate release velocity from samples
+        const samples = L.velocitySamples;
+        let vx = 0;
+        let vy = 0;
+        if (samples.length >= 2) {
+          const first = samples[0];
+          const last = samples[samples.length - 1];
+          const dt = last.t - first.t;
+          if (dt > 0 && dt < 200) {
+            vx = (last.x - first.x) / dt / L.zoom;
+            vy = (last.y - first.y) / dt / L.zoom;
+          }
+        }
+        L.velocitySamples = [];
+
+        const speed = Math.abs(vx) + Math.abs(vy);
+        if (speed > 0.5) {
+          // Convert px/ms to px/frame (~16ms)
+          startMomentum(vx * 16, vy * 16);
+        } else {
+          commitCanvasState();
+        }
       } else if (L.mode === "drag" && L.dragEl) {
         const preview = L.panePreview[L.dragId];
         // Use current layout w/h (drag doesn't change size)
@@ -342,7 +405,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
 
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); cancelMomentum(); };
   }, []);
 
   // ── Canvas mousedown → pan ──
@@ -350,6 +413,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     if (maximizedPane) return;
     if (e.button !== 0 && e.button !== 1) return;
     e.preventDefault();
+    cancelMomentum();
     const L = live.current;
     L.mode = "pan";
     L.startX = e.clientX;

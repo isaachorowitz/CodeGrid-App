@@ -346,6 +346,19 @@ pub async fn get_persisted_sessions(
     Ok(db_sessions.iter().map(SessionInfo::from).collect())
 }
 
+/// Delete persisted sessions from DB for a workspace (used after restoring them on startup).
+#[tauri::command]
+pub async fn clear_persisted_sessions(
+    state: State<'_, Arc<AppState>>,
+    _workspace_id: String,
+    session_ids: Vec<String>,
+) -> Result<(), String> {
+    for id in &session_ids {
+        let _ = state.db.delete_session(id);
+    }
+    Ok(())
+}
+
 /// Persist a user-assigned name for a session tab.
 #[tauri::command]
 pub async fn rename_session(
@@ -3553,5 +3566,105 @@ pub async fn deactivate_license(
     state.db.set_setting("license_key", "")
         .map_err(|e| format!("Failed to remove license: {e}"))?;
     Ok(crate::license::get_license_status(&state.db))
+}
+
+// === Dependency Graph Analysis ===
+
+#[derive(Serialize, Clone)]
+pub struct DepNode {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct DepEdge {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Serialize)]
+pub struct DepGraph {
+    pub nodes: Vec<DepNode>,
+    pub edges: Vec<DepEdge>,
+}
+
+#[tauri::command]
+pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, String> {
+    let dir = std::path::Path::new(&working_dir);
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut file_paths: Vec<String> = Vec::new();
+
+    fn walk(dir: &std::path::Path, files: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" || name == "build" {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, files);
+            } else {
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                if matches!(ext, "ts" | "tsx" | "js" | "jsx" | "py" | "rs") {
+                    if let Some(s) = path.to_str() {
+                        files.push(s.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    walk(dir, &mut file_paths);
+
+    let root = working_dir.clone();
+    for file_path in &file_paths {
+        let relative = file_path.strip_prefix(&root).unwrap_or(file_path).trim_start_matches('/');
+        let name = relative.split('/').last().unwrap_or(relative);
+        nodes.push(DepNode { path: relative.to_string(), name: name.to_string() });
+    }
+
+    let import_re = regex::Regex::new(r#"(?:import\s+.*?from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\)|from\s+(\S+)\s+import|use\s+(?:crate::)?(\S+?)(?:::\{|;))"#).unwrap();
+
+    for file_path in &file_paths {
+        let Ok(content) = std::fs::read_to_string(file_path) else { continue };
+        let relative_from = file_path.strip_prefix(&root).unwrap_or(file_path).trim_start_matches('/');
+
+        for cap in import_re.captures_iter(&content) {
+            let import_path = cap.get(1).or(cap.get(2)).or(cap.get(3)).or(cap.get(4));
+            if let Some(m) = import_path {
+                let raw = m.as_str();
+                if raw.starts_with('.') || raw.starts_with("crate") {
+                    let from_dir = std::path::Path::new(file_path).parent().unwrap_or(std::path::Path::new(""));
+                    let resolved = from_dir.join(raw.replace("crate::", "src/"));
+
+                    let candidates = [
+                        resolved.to_string_lossy().to_string(),
+                        format!("{}.ts", resolved.display()),
+                        format!("{}.tsx", resolved.display()),
+                        format!("{}.js", resolved.display()),
+                        format!("{}.rs", resolved.display()),
+                        format!("{}/index.ts", resolved.display()),
+                        format!("{}/index.tsx", resolved.display()),
+                        format!("{}/mod.rs", resolved.display()),
+                    ];
+
+                    for candidate in &candidates {
+                        let rel = candidate.strip_prefix(&root).unwrap_or(candidate).trim_start_matches('/');
+                        if file_paths.iter().any(|f| {
+                            let fr = f.strip_prefix(&root).unwrap_or(f).trim_start_matches('/');
+                            fr == rel
+                        }) {
+                            edges.push(DepEdge { from: relative_from.to_string(), to: rel.to_string() });
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(DepGraph { nodes, edges })
 }
 
