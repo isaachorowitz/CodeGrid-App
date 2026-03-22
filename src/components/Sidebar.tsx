@@ -1274,6 +1274,7 @@ export const Sidebar = memo(function Sidebar() {
           fontFamily: "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
           fontSize: "12px",
           flexShrink: 0,
+          contain: "content",
         }}
       >
         {/* Panel header */}

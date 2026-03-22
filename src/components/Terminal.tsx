@@ -22,6 +22,8 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingOutputRef = useRef("");
+  const outputBufferRef = useRef<Uint8Array[]>([]);
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const statusRef = useRef<SessionStatus | null>(null);
   const lastAttentionRef = useRef<{ reason: string; at: number } | null>(null);
   const statusToastSentRef = useRef<{ idle: boolean; dead: boolean }>({ idle: false, dead: false });
@@ -68,6 +70,20 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     onResize: handleResize,
   });
 
+  const flushOutput = useCallback(() => {
+    const chunks = outputBufferRef.current;
+    if (chunks.length === 0) return;
+    const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+    const merged = new Uint8Array(totalLen);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.length;
+    }
+    outputBufferRef.current = [];
+    write(merged);
+  }, [write]);
+
   const setSessionStatus = useCallback(
     (status: SessionStatus) => {
       if (statusRef.current === status) return;
@@ -79,7 +95,9 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
 
   const handleOutput = useCallback(
     (data: Uint8Array) => {
-      write(data);
+      outputBufferRef.current.push(data);
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = setTimeout(flushOutput, 5);
       setSessionStatus("running");
 
       // Accumulate output for activity detection (debounced to avoid excessive processing)
@@ -129,7 +147,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
         });
       }, 10000);
     },
-    [sessionId, write, setSessionStatus, setSessionActivityName, addToast],
+    [sessionId, write, flushOutput, setSessionStatus, setSessionActivityName, addToast],
   );
 
   const handleEnded = useCallback(() => {
@@ -157,6 +175,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
     return () => {
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
       if (activityTimerRef.current) clearTimeout(activityTimerRef.current);
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     };
   }, []);
 

@@ -3117,8 +3117,24 @@ pub async fn write_file_contents(file_path: String, content: String) -> Result<(
         return Err("File must be under home directory or /tmp".to_string());
     }
 
-    std::fs::write(&canonical, content.as_bytes())
-        .map_err(|e| format!("Failed to write file: {e}"))?;
+    // Atomic write: write to a temp file then rename to prevent corruption on crash
+    let tmp_path = canonical.with_extension(format!(
+        "tmp.{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::write(&tmp_path, content.as_bytes())
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to write temp file: {e}")
+        })?;
+    std::fs::rename(&tmp_path, &canonical)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&tmp_path);
+            format!("Failed to rename temp file: {e}")
+        })?;
     Ok(())
 }
 

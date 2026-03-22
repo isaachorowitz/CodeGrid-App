@@ -2,6 +2,25 @@ import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, writeFileContents, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 
+// Request deduplication: tracks in-flight directory loads
+const pendingLoads = new Set<string>();
+
+// Binary file detection
+const BINARY_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'svg', 'webp',
+  'mp3', 'mp4', 'wav', 'avi', 'mov', 'mkv',
+  'zip', 'tar', 'gz', 'rar', '7z',
+  'pdf', 'doc', 'docx', 'xls', 'xlsx',
+  'exe', 'dll', 'so', 'dylib',
+  'woff', 'woff2', 'ttf', 'eot',
+  'lock',
+]);
+
+function isBinaryFile(path: string): boolean {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  return BINARY_EXTENSIONS.has(ext);
+}
+
 // File extension to color mapping for visual hints
 const EXT_COLORS: Record<string, string> = {
   ts: "#3178c6",
@@ -61,9 +80,10 @@ interface ContextMenuProps {
   rootPath: string;
   onClose: () => void;
   onRefresh: () => void;
+  onRefreshDir: (dirPath: string) => void;
 }
 
-const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, onRefresh }: ContextMenuProps) {
+const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, onRefresh, onRefreshDir }: ContextMenuProps) {
   const [action, setAction] = useState<"rename" | "move" | "copy" | "delete" | "new-file" | "new-folder" | null>(null);
   const [inputValue, setInputValue] = useState(entry.name);
   const [error, setError] = useState<string | null>(null);
@@ -100,13 +120,15 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     }
   }, [action, entry]);
 
+  const parentDir = entry.path.substring(0, entry.path.lastIndexOf("/"));
+
   const handleRename = async () => {
     if (!inputValue.trim() || inputValue === entry.name) { onClose(); return; }
     setLoading(true);
     setError(null);
     try {
       await renameFile(entry.path, inputValue.trim());
-      onRefresh();
+      onRefreshDir(parentDir);
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -117,7 +139,7 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setError(null);
     try {
       await deleteFile(entry.path);
-      onRefresh();
+      onRefreshDir(parentDir);
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -129,7 +151,9 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setError(null);
     try {
       await moveFile(entry.path, inputValue.trim());
-      onRefresh();
+      // Refresh both source and destination directories
+      onRefreshDir(parentDir);
+      onRefreshDir(inputValue.trim());
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -141,7 +165,7 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setError(null);
     try {
       await copyFile(entry.path, inputValue.trim());
-      onRefresh();
+      onRefreshDir(inputValue.trim());
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -151,9 +175,8 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setLoading(true);
     setError(null);
     try {
-      const parent = entry.path.substring(0, entry.path.lastIndexOf("/"));
-      await copyFile(entry.path, parent);
-      onRefresh();
+      await copyFile(entry.path, parentDir);
+      onRefreshDir(parentDir);
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -164,10 +187,10 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setLoading(true);
     setError(null);
     try {
-      const parentDir = entry.is_dir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf("/"));
-      const filePath = `${parentDir}/${inputValue.trim()}`;
+      const targetDir = entry.is_dir ? entry.path : parentDir;
+      const filePath = `${targetDir}/${inputValue.trim()}`;
       await writeFileContents(filePath, "");
-      onRefresh();
+      onRefreshDir(targetDir);
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -178,9 +201,9 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setLoading(true);
     setError(null);
     try {
-      const parentDir = entry.is_dir ? entry.path : entry.path.substring(0, entry.path.lastIndexOf("/"));
-      await createFolder(parentDir, inputValue.trim());
-      onRefresh();
+      const targetDir = entry.is_dir ? entry.path : parentDir;
+      await createFolder(targetDir, inputValue.trim());
+      onRefreshDir(targetDir);
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -364,13 +387,17 @@ const FileTreeNode = memo(function FileTreeNode({
       }
 
       if (!expanded && children === null) {
-        // Lazy load children
+        // Lazy load children (with dedup)
+        if (pendingLoads.has(entry.path)) return;
+        pendingLoads.add(entry.path);
         setLoading(true);
         try {
           const result = await listDirectory(entry.path, 1);
           setChildren(result);
         } catch {
           setChildren([]);
+        } finally {
+          pendingLoads.delete(entry.path);
         }
         setLoading(false);
       }
@@ -565,15 +592,50 @@ export const FileTree = memo(function FileTree({
 
   const loadTree = useCallback(async () => {
     if (!rootPath) return;
+    if (pendingLoads.has(rootPath)) return;
+    pendingLoads.add(rootPath);
     setLoading(true);
     setError(null);
     try {
-      const result = await listDirectory(rootPath, 2);
+      const result = await listDirectory(rootPath, 1);
       setEntries(result);
     } catch (e) {
       setError(String(e));
+    } finally {
+      pendingLoads.delete(rootPath);
     }
     setLoading(false);
+  }, [rootPath]);
+
+  // Targeted refresh: only reload a specific directory's children in the tree
+  const refreshDir = useCallback(async (dirPath: string) => {
+    if (pendingLoads.has(dirPath)) return;
+    pendingLoads.add(dirPath);
+    try {
+      const result = await listDirectory(dirPath, 1);
+      if (dirPath === rootPath) {
+        setEntries(result);
+      } else {
+        // Update entries by replacing the matching directory's children
+        setEntries((prev) => {
+          const updateChildren = (items: FileEntry[]): FileEntry[] =>
+            items.map((item) => {
+              if (item.path === dirPath) {
+                return { ...item, children: result };
+              }
+              if (item.is_dir && item.children && dirPath.startsWith(item.path + "/")) {
+                return { ...item, children: updateChildren(item.children) };
+              }
+              return item;
+            });
+          return updateChildren(prev);
+        });
+      }
+    } catch (e) {
+      console.error("Failed to refresh directory:", e);
+    } finally {
+      pendingLoads.delete(dirPath);
+    }
   }, [rootPath]);
 
   useEffect(() => {
@@ -600,6 +662,10 @@ export const FileTree = memo(function FileTree({
     }
     // Auto-hide path after 3 seconds
     showPathTimerRef.current = setTimeout(() => setShowPath(false), 3000);
+    // Skip opening binary files in CodeViewer — just show path in status bar
+    if (isBinaryFile(path)) {
+      return;
+    }
     // Open CodeViewer for the selected file, passing workingDir so DIFF mode works
     setCodeViewerOpen(true, path, { workingDir: rootPath });
   }, [setCodeViewerOpen, rootPath]);
@@ -611,11 +677,13 @@ export const FileTree = memo(function FileTree({
   const handleMoveFile = useCallback(async (srcPath: string, destDir: string) => {
     try {
       await moveFile(srcPath, destDir);
-      loadTree();
+      const srcParent = srcPath.substring(0, srcPath.lastIndexOf("/"));
+      refreshDir(srcParent);
+      refreshDir(destDir);
     } catch (e) {
       console.error("Move failed:", e);
     }
-  }, [loadTree]);
+  }, [refreshDir]);
 
   const handleCreateFolder = useCallback(async () => {
     if (!rootPath || !newFolderName.trim() || creatingFolder) return;
@@ -624,13 +692,13 @@ export const FileTree = memo(function FileTree({
     try {
       await createFolder(rootPath, newFolderName.trim());
       setNewFolderName("");
-      await loadTree();
+      await refreshDir(rootPath);
     } catch (e) {
       setFolderError(String(e));
     } finally {
       setCreatingFolder(false);
     }
-  }, [rootPath, newFolderName, creatingFolder, loadTree]);
+  }, [rootPath, newFolderName, creatingFolder, refreshDir]);
 
   if (loading && entries.length === 0) {
     return (
@@ -828,6 +896,7 @@ export const FileTree = memo(function FileTree({
           rootPath={rootPath}
           onClose={() => setContextMenu(null)}
           onRefresh={loadTree}
+          onRefreshDir={refreshDir}
         />
       )}
     </div>

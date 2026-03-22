@@ -537,7 +537,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
                 key={session.id}
                 data-pane-id={session.id}
                 onMouseDown={isVisible ? (e) => e.stopPropagation() : undefined}
-                style={{ ...paneStyle, overflow: "hidden", willChange: isVisible ? "left, top, width, height" : undefined }}
+                style={{ ...paneStyle, overflow: "hidden", willChange: isVisible ? "left, top, width, height" : undefined, contain: isVisible ? "layout style" : undefined }}
               >
                 {/* Zoomed-out label overlay */}
                 {isVisible && canvas.zoom < ZOOMED_OUT_LABEL_THRESHOLD && !maximizedPane && (

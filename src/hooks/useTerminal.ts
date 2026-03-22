@@ -2,8 +2,10 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { CanvasAddon } from "@xterm/addon-canvas";
+import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { CODEGRID_DARK } from "../lib/themes";
 
 interface UseTerminalOptions {
@@ -72,7 +74,7 @@ export function useTerminal(
       cursorBlink: true,
       /* Bar reads more reliably than block when the renderer draws the cursor. */
       cursorStyle: "bar",
-      scrollback: 10000,
+      scrollback: 50000,
       allowProposedApi: true,
       convertEol: true,
       macOptionIsMeta: true,
@@ -90,12 +92,21 @@ export function useTerminal(
 
     terminal.open(container);
 
-    // Canvas renderer: WebGL can omit or glitch the blinking cursor on some GPUs / embedders.
+    // Renderer: prefer WebGL for performance, fall back to Canvas, then DOM.
     try {
-      terminal.loadAddon(new CanvasAddon());
+      terminal.loadAddon(new WebglAddon());
     } catch {
-      // Fall back to xterm's default DOM renderer if canvas fails
+      try {
+        terminal.loadAddon(new CanvasAddon());
+      } catch {
+        // Fall back to xterm's default DOM renderer
+      }
     }
+
+    // Unicode 11 support for wider character coverage
+    const unicode11Addon = new Unicode11Addon();
+    terminal.loadAddon(unicode11Addon);
+    terminal.unicode.activeVersion = "11";
 
     // Fit to container
     requestAnimationFrame(() => {
@@ -120,14 +131,16 @@ export function useTerminal(
     const observer = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        if (!disposedRef.current) {
-          try {
-            fitAddon.fit();
-            onResizeRef.current(terminal.cols, terminal.rows);
-          } catch {
-            // Ignore
+        requestAnimationFrame(() => {
+          if (!disposedRef.current) {
+            try {
+              fitAddon.fit();
+              onResizeRef.current(terminal.cols, terminal.rows);
+            } catch {
+              // Ignore
+            }
           }
-        }
+        });
       }, 50);
     });
     observer.observe(container);
