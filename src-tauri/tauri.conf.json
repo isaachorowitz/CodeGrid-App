@@ -31,20 +31,35 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/512x512.png",
-      "icons/1024x1024.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "../icons/32x32.png",
+      "../icons/128x128.png",
+      "../icons/128x128@2x.png",
+      "../icons/512x512.png",
+      "../icons/1024x1024.png",
+      "../icons/icon.icns",
+      "../icons/icon.ico"
     ],
     "macOS": {
       "minimumSystemVersion": "10.15",
       "frameworks": [],
       "exceptionDomain": "",
       "signingIdentity": "Developer ID Application: ZipLyne LLC (DHGG5BA7J7)",
-      "entitlements": "Entitlements.plist"
+      "entitlements": "Entitlements.plist",
+      "dmg": {
+        "background": "../icons/dmg-background.png",
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 200,
+          "y": 200
+        },
+        "applicationFolderPosition": {
+          "x": 460,
+          "y": 200
+        }
+      }
     },
     "category": "DeveloperTool",
     "shortDescription": "Code Grid — Terminal workspace manager for multi-session AI coding",
