@@ -170,14 +170,24 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   // Keep ref in sync
   ptyControlsRef.current = ptyControls;
 
-  // Clean up timers on unmount
+  // Clean up timers on unmount — flush remaining buffered output first
   useEffect(() => {
     return () => {
+      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      // Drain any buffered output before terminal disposes
+      const chunks = outputBufferRef.current;
+      if (chunks.length > 0) {
+        const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+        const merged = new Uint8Array(totalLen);
+        let offset = 0;
+        for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+        outputBufferRef.current = [];
+        write(merged);
+      }
       if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
       if (activityTimerRef.current) clearTimeout(activityTimerRef.current);
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     };
-  }, []);
+  }, [write]);
 
   // Listen for focus events
   useEffect(() => {

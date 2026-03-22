@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
+use tokio::sync::Semaphore;
 
 #[derive(Deserialize)]
 struct RpcRequest {
@@ -27,7 +29,7 @@ struct RpcError {
 }
 
 fn socket_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+    let home = std::env::var("HOME").expect("HOME environment variable must be set");
     PathBuf::from(format!("{home}/.codegrid/socket"))
 }
 
@@ -37,9 +39,11 @@ pub async fn start_rpc_server(app_handle: tauri::AppHandle) {
     // Remove stale socket
     let _ = std::fs::remove_file(&path);
 
-    // Ensure directory exists
+    // Ensure directory exists with restricted permissions
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
     }
 
     // Write socket path to a discoverable file
@@ -56,19 +60,26 @@ pub async fn start_rpc_server(app_handle: tauri::AppHandle) {
 
     println!("[rpc] Listening on {}", path.display());
 
+    let semaphore = Arc::new(Semaphore::new(10));
+
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
                 let handle = app_handle.clone();
+                let permit = match semaphore.clone().acquire_owned().await {
+                    Ok(p) => p,
+                    Err(_) => continue,
+                };
                 tokio::spawn(async move {
                     let (reader, mut writer) = stream.into_split();
-                    let mut lines = BufReader::new(reader).lines();
+                    let mut lines = BufReader::new(reader.take(1_048_576)).lines();
 
                     while let Ok(Some(line)) = lines.next_line().await {
                         let response = handle_request(&handle, &line).await;
                         let json = serde_json::to_string(&response).unwrap_or_default();
                         let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
                     }
+                    drop(permit);
                 });
             }
             Err(e) => eprintln!("[rpc] Accept error: {e}"),
@@ -98,25 +109,22 @@ async fn handle_request(app: &tauri::AppHandle, line: &str) -> RpcResponse {
     let result = match req.method.as_str() {
         "ping" => Ok(serde_json::json!("pong")),
 
-        "open_folder" => {
+        "open_folder" | "new_session" => {
             let path = params.get("path").and_then(|v| v.as_str());
             match path {
                 Some(p) => {
-                    use tauri::Emitter;
-                    let _ = app.emit("rpc:open-folder", p);
-                    Ok(serde_json::json!({"status": "ok", "path": p}))
-                }
-                None => Err("Missing 'path' parameter"),
-            }
-        }
-
-        "new_session" => {
-            let path = params.get("path").and_then(|v| v.as_str());
-            match path {
-                Some(p) => {
-                    use tauri::Emitter;
-                    let _ = app.emit("rpc:new-session", p);
-                    Ok(serde_json::json!({"status": "ok", "path": p}))
+                    let canonical = std::fs::canonicalize(p);
+                    match canonical {
+                        Ok(cp) if cp.is_dir() => {
+                            use tauri::Emitter;
+                            let safe_path = cp.to_string_lossy().to_string();
+                            let event = if req.method == "open_folder" { "rpc:open-folder" } else { "rpc:new-session" };
+                            let _ = app.emit(event, &safe_path);
+                            Ok(serde_json::json!({"status": "ok", "path": safe_path}))
+                        }
+                        Ok(_) => Err("Path is not a directory"),
+                        Err(_) => Err("Invalid or non-existent path"),
+                    }
                 }
                 None => Err("Missing 'path' parameter"),
             }

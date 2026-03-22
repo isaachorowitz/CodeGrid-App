@@ -3595,16 +3595,19 @@ pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, Strin
     let mut edges = Vec::new();
     let mut file_paths: Vec<String> = Vec::new();
 
-    fn walk(dir: &std::path::Path, files: &mut Vec<String>) {
+    fn walk(dir: &std::path::Path, files: &mut Vec<String>, depth: usize) {
+        if depth > 20 { return; }
         let Ok(entries) = std::fs::read_dir(dir) else { return };
         for entry in entries.flatten() {
+            let ft = entry.file_type();
+            if ft.is_err() || ft.as_ref().unwrap().is_symlink() { continue; }
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with('.') || name == "node_modules" || name == "target" || name == "dist" || name == "build" {
                 continue;
             }
             if path.is_dir() {
-                walk(&path, files);
+                walk(&path, files, depth + 1);
             } else {
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                 if matches!(ext, "ts" | "tsx" | "js" | "jsx" | "py" | "rs") {
@@ -3616,7 +3619,7 @@ pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, Strin
         }
     }
 
-    walk(dir, &mut file_paths);
+    walk(dir, &mut file_paths, 0);
 
     let root = working_dir.clone();
     for file_path in &file_paths {
@@ -3625,17 +3628,30 @@ pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, Strin
         nodes.push(DepNode { path: relative.to_string(), name: name.to_string() });
     }
 
-    let import_re = regex::Regex::new(r#"(?:import\s+.*?from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\)|from\s+(\S+)\s+import|use\s+(?:crate::)?(\S+?)(?:::\{|;))"#).unwrap();
+    use std::sync::LazyLock;
+    static IMPORT_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(?:import\s+.*?from\s+['"]([^'"]+)['"]|require\s*\(\s*['"]([^'"]+)['"]\s*\)|from\s+(\S+)\s+import|use\s+(?:crate::)?(\S+?)(?:::\{|;))"#).unwrap()
+    });
+
+    let relative_paths: std::collections::HashSet<String> = file_paths.iter()
+        .map(|f| f.strip_prefix(&root).unwrap_or(f).trim_start_matches('/').to_string())
+        .collect();
 
     for file_path in &file_paths {
         let Ok(content) = std::fs::read_to_string(file_path) else { continue };
         let relative_from = file_path.strip_prefix(&root).unwrap_or(file_path).trim_start_matches('/');
 
-        for cap in import_re.captures_iter(&content) {
+        for cap in IMPORT_RE.captures_iter(&content) {
             let import_path = cap.get(1).or(cap.get(2)).or(cap.get(3)).or(cap.get(4));
             if let Some(m) = import_path {
                 let raw = m.as_str();
-                if raw.starts_with('.') || raw.starts_with("crate") {
+                // JS/TS: relative imports start with '.'
+                // Rust: use crate::/self::/super:: (regex strips crate:: prefix, so check for module-like names)
+                let is_relative = raw.starts_with('.');
+                let is_rust_local = !raw.contains("std::") && !raw.contains("tokio::") && !raw.contains("serde");
+                let ext = std::path::Path::new(file_path).extension().and_then(|e| e.to_str()).unwrap_or("");
+                let is_rust_file = ext == "rs";
+                if is_relative || (is_rust_file && is_rust_local) {
                     let from_dir = std::path::Path::new(file_path).parent().unwrap_or(std::path::Path::new(""));
                     let resolved = from_dir.join(raw.replace("crate::", "src/"));
 
@@ -3645,17 +3661,16 @@ pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, Strin
                         format!("{}.tsx", resolved.display()),
                         format!("{}.js", resolved.display()),
                         format!("{}.rs", resolved.display()),
+                        format!("{}.py", resolved.display()),
                         format!("{}/index.ts", resolved.display()),
                         format!("{}/index.tsx", resolved.display()),
                         format!("{}/mod.rs", resolved.display()),
+                        format!("{}/__init__.py", resolved.display()),
                     ];
 
                     for candidate in &candidates {
                         let rel = candidate.strip_prefix(&root).unwrap_or(candidate).trim_start_matches('/');
-                        if file_paths.iter().any(|f| {
-                            let fr = f.strip_prefix(&root).unwrap_or(f).trim_start_matches('/');
-                            fr == rel
-                        }) {
+                        if relative_paths.contains(rel) {
                             edges.push(DepEdge { from: relative_from.to_string(), to: rel.to_string() });
                             break;
                         }

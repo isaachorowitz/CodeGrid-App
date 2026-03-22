@@ -7,13 +7,13 @@ const pendingLoads = new Set<string>();
 
 // Binary file detection
 const BINARY_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'svg', 'webp',
+  'png', 'jpg', 'jpeg', 'gif', 'bmp', 'ico', 'webp',
   'mp3', 'mp4', 'wav', 'avi', 'mov', 'mkv',
   'zip', 'tar', 'gz', 'rar', '7z',
   'pdf', 'doc', 'docx', 'xls', 'xlsx',
   'exe', 'dll', 'so', 'dylib',
   'woff', 'woff2', 'ttf', 'eot',
-  'lock',
+  'class', 'o', 'obj', 'pyc', 'wasm', 'sqlite', 'db', 'DS_Store',
 ]);
 
 function isBinaryFile(path: string): boolean {
@@ -308,7 +308,7 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
 
   // Default: show menu items
   return (
-    <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #2a2a2a", minWidth: "140px", padding: "4px 0" }}>
+    <div data-context-menu style={{ position: "fixed", left: Math.min(x, window.innerWidth - 160), top: Math.min(y, window.innerHeight - 200), zIndex: 9999, background: "#1a1a1a", border: "1px solid #2a2a2a", minWidth: "140px", padding: "4px 0" }}>
       <ContextMenuItem label="New File" onClick={() => setAction("new-file")} />
       <ContextMenuItem label="New Folder" onClick={() => setAction("new-folder")} />
       <div style={{ height: "1px", background: "#2a2a2a", margin: "4px 0" }} />

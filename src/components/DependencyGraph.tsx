@@ -38,6 +38,9 @@ function GraphCanvas({ graph }: { graph: DepGraph }) {
   });
   const selectedRef = useRef<number>(-1);
   const hoverRef = useRef<number>(-1);
+  const convergedRef = useRef(false);
+  const pathToIdxRef = useRef(new Map<string, number>());
+  const connectedCacheRef = useRef<{ sel: number; set: Set<number> }>({ sel: -2, set: new Set() });
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
 
   // Initialize nodes
@@ -54,19 +57,26 @@ function GraphCanvas({ graph }: { graph: DepGraph }) {
     }));
     edgesRef.current = graph.edges;
     selectedRef.current = -1;
+    convergedRef.current = false;
+    connectedCacheRef.current = { sel: -2, set: new Set() };
+    // Rebuild pathToIdx map
+    const m = new Map<string, number>();
+    nodesRef.current.forEach((n, i) => m.set(n.path, i));
+    pathToIdxRef.current = m;
   }, [graph]);
 
-  // Build adjacency lookup
+  // Build adjacency lookup (cached)
   const getConnected = useCallback((idx: number) => {
+    if (connectedCacheRef.current.sel === idx) return connectedCacheRef.current.set;
     const path = nodesRef.current[idx]?.path;
     if (!path) return new Set<number>();
     const connected = new Set<number>();
-    const pathToIdx = new Map<string, number>();
-    nodesRef.current.forEach((n, i) => pathToIdx.set(n.path, i));
+    const pathToIdx = pathToIdxRef.current;
     for (const e of edgesRef.current) {
       if (e.from === path) { const t = pathToIdx.get(e.to); if (t !== undefined) connected.add(t); }
       if (e.to === path) { const t = pathToIdx.get(e.from); if (t !== undefined) connected.add(t); }
     }
+    connectedCacheRef.current = { sel: idx, set: connected };
     return connected;
   }, []);
 
@@ -77,32 +87,46 @@ function GraphCanvas({ graph }: { graph: DepGraph }) {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const pathToIdx = new Map<string, number>();
-
     const tick = () => {
       const nodes = nodesRef.current;
       const edges = edgesRef.current;
       const w = canvas.width;
       const h = canvas.height;
+      const pathToIdx = pathToIdxRef.current;
 
-      // Rebuild path index
-      pathToIdx.clear();
-      nodes.forEach((n, i) => pathToIdx.set(n.path, i));
+      if (!convergedRef.current) {
+        // Force simulation step
+        const REPULSION = 3000;
+        const SPRING = 0.005;
+        const SPRING_LEN = 120;
+        const CENTER = 0.01;
+        const DAMPING = 0.85;
 
-      // Force simulation step
-      const REPULSION = 3000;
-      const SPRING = 0.005;
-      const SPRING_LEN = 120;
-      const CENTER = 0.01;
-      const DAMPING = 0.85;
+        // Repulsion (Coulomb)
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            let dx = nodes[i].x - nodes[j].x;
+            let dy = nodes[i].y - nodes[j].y;
+            let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            let force = REPULSION / (dist * dist);
+            let fx = (dx / dist) * force;
+            let fy = (dy / dist) * force;
+            nodes[i].vx += fx;
+            nodes[i].vy += fy;
+            nodes[j].vx -= fx;
+            nodes[j].vy -= fy;
+          }
+        }
 
-      // Repulsion (Coulomb)
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          let dx = nodes[i].x - nodes[j].x;
-          let dy = nodes[i].y - nodes[j].y;
+        // Spring (edges)
+        for (const e of edges) {
+          const i = pathToIdx.get(e.from);
+          const j = pathToIdx.get(e.to);
+          if (i === undefined || j === undefined) continue;
+          let dx = nodes[j].x - nodes[i].x;
+          let dy = nodes[j].y - nodes[i].y;
           let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          let force = REPULSION / (dist * dist);
+          let force = SPRING * (dist - SPRING_LEN);
           let fx = (dx / dist) * force;
           let fy = (dy / dist) * force;
           nodes[i].vx += fx;
@@ -110,39 +134,30 @@ function GraphCanvas({ graph }: { graph: DepGraph }) {
           nodes[j].vx -= fx;
           nodes[j].vy -= fy;
         }
-      }
 
-      // Spring (edges)
-      for (const e of edges) {
-        const i = pathToIdx.get(e.from);
-        const j = pathToIdx.get(e.to);
-        if (i === undefined || j === undefined) continue;
-        let dx = nodes[j].x - nodes[i].x;
-        let dy = nodes[j].y - nodes[i].y;
-        let dist = Math.sqrt(dx * dx + dy * dy) || 1;
-        let force = SPRING * (dist - SPRING_LEN);
-        let fx = (dx / dist) * force;
-        let fy = (dy / dist) * force;
-        nodes[i].vx += fx;
-        nodes[i].vy += fy;
-        nodes[j].vx -= fx;
-        nodes[j].vy -= fy;
-      }
+        // Centering
+        const cx = w / 2, cy = h / 2;
+        for (const n of nodes) {
+          n.vx += (cx - n.x) * CENTER;
+          n.vy += (cy - n.y) * CENTER;
+        }
 
-      // Centering
-      const cx = w / 2, cy = h / 2;
-      for (const n of nodes) {
-        n.vx += (cx - n.x) * CENTER;
-        n.vy += (cy - n.y) * CENTER;
-      }
+        // Integrate
+        let totalKE = 0;
+        for (let i = 0; i < nodes.length; i++) {
+          const n = nodes[i];
+          if (dragRef.current.dragging && i === dragRef.current.nodeIdx) continue;
+          n.vx *= DAMPING;
+          n.vy *= DAMPING;
+          n.x += n.vx;
+          n.y += n.vy;
+          totalKE += n.vx * n.vx + n.vy * n.vy;
+        }
 
-      // Integrate
-      for (const n of nodes) {
-        if (dragRef.current.dragging && nodes.indexOf(n) === dragRef.current.nodeIdx) continue;
-        n.vx *= DAMPING;
-        n.vy *= DAMPING;
-        n.x += n.vx;
-        n.y += n.vy;
+        // Convergence check
+        if (totalKE < 0.01 && !dragRef.current.dragging) {
+          convergedRef.current = true;
+        }
       }
 
       // Draw
@@ -226,6 +241,7 @@ function GraphCanvas({ graph }: { graph: DepGraph }) {
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     const idx = hitTest(mx, my);
+    convergedRef.current = false;
     if (idx >= 0) {
       dragRef.current = { dragging: true, nodeIdx: idx, lastMouse: { x: mx, y: my }, isPan: false };
       selectedRef.current = idx;
@@ -270,6 +286,7 @@ function GraphCanvas({ graph }: { graph: DepGraph }) {
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    convergedRef.current = false;
     const rect = canvasRef.current!.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;

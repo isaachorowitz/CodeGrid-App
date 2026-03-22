@@ -63,6 +63,7 @@ export default function App() {
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
   const attentionCooldownRef = useRef<Record<string, number>>({});
+  const initRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
@@ -77,6 +78,8 @@ export default function App() {
 
   // Initialize app: workspace, skills, models, recent dirs
   useEffect(() => {
+    if (initRef.current) return;
+    initRef.current = true;
     const init = async () => {
       // Load workspaces
       let isFirstLaunch = false;
@@ -119,10 +122,15 @@ export default function App() {
                 try {
                   const isShell = !old.command.includes("claude");
                   let restored;
-                  if (isShell) {
-                    restored = await spawnShellSession(old.working_dir, active.id);
-                  } else {
-                    restored = await createSession(old.working_dir, active.id, false, false);
+                  try {
+                    if (isShell) {
+                      restored = await spawnShellSession(old.working_dir, active.id);
+                    } else {
+                      restored = await createSession(old.working_dir, active.id, false, false);
+                    }
+                  } catch (sessionErr) {
+                    addToast(`Failed to restore session for ${old.working_dir} — directory may no longer exist`, "error");
+                    throw sessionErr;
                   }
 
                   // Carry over user-assigned name

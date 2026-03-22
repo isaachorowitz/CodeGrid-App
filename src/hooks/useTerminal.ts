@@ -94,7 +94,13 @@ export function useTerminal(
 
     // Renderer: prefer WebGL for performance, fall back to Canvas, then DOM.
     try {
-      terminal.loadAddon(new WebglAddon());
+      const webgl = new WebglAddon();
+      // If GPU context is lost at runtime, fall back to Canvas renderer
+      webgl.onContextLoss(() => {
+        webgl.dispose();
+        try { terminal.loadAddon(new CanvasAddon()); } catch { /* DOM fallback */ }
+      });
+      terminal.loadAddon(webgl);
     } catch {
       try {
         terminal.loadAddon(new CanvasAddon());
