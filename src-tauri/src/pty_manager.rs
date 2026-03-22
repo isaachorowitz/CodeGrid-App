@@ -64,9 +64,31 @@ impl PtyManager {
             if let Ok(home) = std::env::var("HOME") {
                 cmd.env("HOME", &home);
             }
-            if let Ok(path) = std::env::var("PATH") {
-                cmd.env("PATH", &path);
+            // Build a comprehensive PATH — macOS app bundles get a minimal PATH
+            // that won't include ~/.local/bin, /opt/homebrew/bin, fnm/nvm paths, etc.
+            let home = std::env::var("HOME").unwrap_or_default();
+            let mut path_dirs: Vec<String> = Vec::new();
+
+            // User-local binaries (claude, pipx, etc.)
+            path_dirs.push(format!("{home}/.local/bin"));
+            // Homebrew (Apple Silicon and Intel)
+            path_dirs.push("/opt/homebrew/bin".to_string());
+            path_dirs.push("/opt/homebrew/sbin".to_string());
+            path_dirs.push("/usr/local/bin".to_string());
+            // Common Node version managers
+            if let Ok(fnm) = std::env::var("FNM_MULTISHELL_PATH") {
+                path_dirs.push(format!("{fnm}/bin"));
             }
+            path_dirs.push(format!("{home}/.nvm/versions/node/default/bin"));
+            path_dirs.push(format!("{home}/.fnm/aliases/default/bin"));
+            // Cargo/Rust
+            path_dirs.push(format!("{home}/.cargo/bin"));
+            // System defaults
+            if let Ok(sys_path) = std::env::var("PATH") {
+                path_dirs.push(sys_path);
+            }
+
+            cmd.env("PATH", path_dirs.join(":"));
             if let Ok(shell) = std::env::var("SHELL") {
                 cmd.env("SHELL", &shell);
             }

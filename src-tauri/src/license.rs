@@ -6,8 +6,8 @@ type HmacSha256 = Hmac<Sha256>;
 // This secret is used for offline validation. In production you'd want this obfuscated.
 const LICENSE_SECRET: &[u8] = b"codegrid-license-key-secret-2026";
 
-/// Trial: 14 days from first launch. After trial, limited to 2 panes per workspace.
-/// Licensed: unlimited panes (up to 9).
+/// Trial: 14 days from first launch (9 panes). After trial, limited to 4 panes.
+/// Licensed: up to 50 panes per workspace.
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct LicenseStatus {
@@ -69,7 +69,7 @@ pub fn get_license_status(db: &crate::db::Database) -> LicenseStatus {
                 is_trial: false,
                 trial_days_remaining: 0,
                 license_key: Some(key),
-                max_panes: 9,
+                max_panes: 50,
             };
         }
     }
@@ -106,7 +106,7 @@ pub fn get_license_status(db: &crate::db::Database) -> LicenseStatus {
             is_trial: false,
             trial_days_remaining: 0,
             license_key: None,
-            max_panes: 2, // Limited after trial
+            max_panes: 4, // Limited after trial — enough to be useful
         }
     }
 }
