@@ -31,17 +31,21 @@ export interface WorkspaceInfo {
 }
 
 // Session commands
+export type AgentType = "claude" | "codex" | "gemini" | "cursor";
+
 export async function createSession(
   workingDir: string,
   workspaceId: string,
   useWorktree: boolean = false,
   resume: boolean = false,
+  sessionType: AgentType | "shell" = "claude",
 ): Promise<SessionInfo> {
   return invoke("create_session", {
     workingDir,
     workspaceId,
     useWorktree,
     resume,
+    sessionType,
   });
 }
 

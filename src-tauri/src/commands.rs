@@ -114,6 +114,7 @@ pub async fn create_session(
     workspace_id: String,
     use_worktree: bool,
     resume: bool,
+    session_type: Option<String>,
 ) -> Result<SessionInfo, String> {
     let working_dir = validate_dir(&working_dir)?;
     let session_id = Uuid::new_v4().to_string();
@@ -176,23 +177,47 @@ pub async fn create_session(
         (working_dir.clone(), None, branch)
     };
 
-    // Detect claude binary
-    let claude_path = which::which("claude")
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "claude".to_string());
-    eprintln!("[CodeGrid] Claude binary: {claude_path}");
+    // Resolve binary and args based on session type
+    let agent_type = session_type.as_deref().unwrap_or("claude");
+    let (command_path, mut args) = match agent_type {
+        "codex" => {
+            let path = which::which("codex")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "codex".to_string());
+            (path, Vec::new())
+        }
+        "gemini" => {
+            let path = which::which("gemini")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "gemini".to_string());
+            (path, Vec::new())
+        }
+        "cursor" => {
+            let path = which::which("agent")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "agent".to_string());
+            (path, Vec::new())
+        }
+        _ => {
+            // Default: Claude Code
+            let path = which::which("claude")
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "claude".to_string());
+            let mut a = Vec::new();
+            if resume {
+                a.push("--resume".to_string());
+            }
+            (path, a)
+        }
+    };
+    eprintln!("[CodeGrid] Agent: {agent_type} binary: {command_path}");
     eprintln!("[CodeGrid] Working dir: {actual_dir}");
-
-    let mut args: Vec<String> = Vec::new();
-    if resume {
-        args.push("--resume".to_string());
-    }
 
     // Spawn PTY
     let mut rx = state.pty_manager.spawn_session(
         &session_id,
         &actual_dir,
-        &claude_path,
+        &command_path,
         &args,
         120,
         30,
@@ -203,7 +228,7 @@ pub async fn create_session(
         session_id.clone(),
         workspace_id,
         actual_dir,
-        claude_path,
+        command_path,
         pane_number,
     );
     session.git_branch = git_branch;

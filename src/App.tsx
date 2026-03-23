@@ -13,7 +13,6 @@ import { ClaudeMdEditor } from "./components/ClaudeMdEditor";
 import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
-import { TrialBanner } from "./components/TrialBanner";
 import { LicenseDialog } from "./components/LicenseDialog";
 import { DependencyGraph } from "./components/DependencyGraph";
 import { useSessionStore } from "./stores/sessionStore";
@@ -39,11 +38,7 @@ import {
   getSetting,
   getPersistedSessions,
   clearPersistedSessions,
-  createBrowserPane,
-  closeBrowserPane,
 } from "./lib/ipc";
-import { canvasToWindow, BROWSER_HEADER_HEIGHT } from "./lib/canvasToWindow";
-import { getBrowserPaneWebviewBounds } from "./lib/browserPaneWebviewBounds";
 
 export default function App() {
   const {
@@ -67,7 +62,6 @@ export default function App() {
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
   const attentionCooldownRef = useRef<Record<string, number>>({});
-  const closingBrowserPaneIdsRef = useRef<Set<string>>(new Set());
   const initRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -125,10 +119,8 @@ export default function App() {
 
               for (const old of persisted) {
                 try {
-                  // Skip browser panes — they cannot be restored (no persistent state)
                   if (old.command === "browser") {
-                    console.log(`[CodeGrid] Skipping browser session ${old.id} (not restorable)`);
-                    continue;
+                    continue; // legacy browser panes are not restorable
                   }
                   const isShell = !old.command.includes("claude");
                   let restored;
@@ -311,11 +303,10 @@ export default function App() {
   }, [addWorkspace, addToast]);
 
   const handleCreateSession = useCallback(
-    async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => {
+    async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean, sessionType?: string) => {
       if (!activeWorkspaceId) return;
 
       const licenseStatus = useLicenseStore.getState().status;
-      // If license hasn't loaded yet, don't block session creation
       const maxPanes = licenseStatus?.max_panes ?? 50;
       const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
       if (licenseStatus && currentCount >= maxPanes) {
@@ -330,10 +321,10 @@ export default function App() {
 
       try {
         let session;
-        if (isShell) {
+        if (isShell && !sessionType) {
           session = await spawnShellSession(workingDir, activeWorkspaceId);
         } else {
-          session = await createSession(workingDir, activeWorkspaceId, useWorktree, resume);
+          session = await createSession(workingDir, activeWorkspaceId, useWorktree, resume, (sessionType ?? "claude") as any);
         }
         addSession(session);
         addPaneLayout(session.id);
@@ -366,101 +357,6 @@ export default function App() {
     return () => window.removeEventListener("codegrid:quick-session", handler);
   }, [handleCreateSession]);
 
-  // New browser pane event
-  useEffect(() => {
-    const handler = async (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (!activeWorkspaceId) return;
-      const url = detail?.url ?? "https://google.com";
-      const browserSessionId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      closingBrowserPaneIdsRef.current.delete(browserSessionId);
-
-      // Create a synthetic session entry for the browser pane
-      const syntheticSession = {
-        id: browserSessionId,
-        workspace_id: activeWorkspaceId,
-        working_dir: url,
-        command: "browser",
-        git_branch: null,
-        status: "running" as const,
-        created_at: new Date().toISOString(),
-        pane_number: allSessions.filter((s) => s.workspace_id === activeWorkspaceId).length + 1,
-        worktree_path: null,
-        name: null,
-      };
-
-      addSession(syntheticSession);
-      useSessionStore.getState().updateSession(browserSessionId, { type: "browser", browserUrl: url });
-      addPaneLayout(browserSessionId);
-      setFocusedSession(browserSessionId);
-
-      // Double-rAF to ensure layout is fully committed before reading position
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          const layout = useLayoutStore.getState().layouts.find((l) => l.i === browserSessionId);
-          if (layout) {
-            // Session may have been closed before the deferred create runs.
-            const stillInStore = useSessionStore
-              .getState()
-              .sessions
-              .some((s) => s.id === browserSessionId && s.type === "browser");
-            if (!stillInStore || closingBrowserPaneIdsRef.current.has(browserSessionId)) return;
-            const createNativePane = (attempt: number) => {
-              const measured = getBrowserPaneWebviewBounds(browserSessionId);
-              if (!measured && attempt < 6) {
-                requestAnimationFrame(() => createNativePane(attempt + 1));
-                return;
-              }
-
-              const canvasState = useLayoutStore.getState().canvas;
-              const fallback = (() => {
-                // Fallback if content node still isn't available.
-                const viewport = document.querySelector('[data-canvas-viewport]') as HTMLElement | null;
-                const rect = viewport?.getBoundingClientRect() ?? containerRef.current?.getBoundingClientRect();
-                const offsetX = rect?.left ?? 0;
-                const offsetY = rect?.top ?? 0;
-                const win = canvasToWindow(
-                  layout.x, layout.y, layout.w, layout.h,
-                  canvasState.zoom, canvasState.panX, canvasState.panY,
-                  offsetX, offsetY,
-                );
-                const headerH = Math.round(BROWSER_HEADER_HEIGHT * canvasState.zoom);
-                return { x: win.x, y: win.y + headerH, w: win.w, h: Math.max(0, win.h - headerH) };
-              })();
-
-              createBrowserPane(
-                browserSessionId,
-                url,
-                measured?.x ?? fallback.x,
-                measured?.y ?? fallback.y,
-                measured?.w ?? fallback.w,
-                measured?.h ?? fallback.h,
-              )
-                .then(async () => {
-                  const wasClosed = closingBrowserPaneIdsRef.current.has(browserSessionId);
-                  const stillExists = useSessionStore
-                    .getState()
-                    .sessions
-                    .some((s) => s.id === browserSessionId && s.type === "browser");
-                  if (wasClosed || !stillExists) {
-                    try { await closeBrowserPane(browserSessionId); } catch {}
-                  }
-                  closingBrowserPaneIdsRef.current.delete(browserSessionId);
-                })
-                .catch((err) => {
-                  closingBrowserPaneIdsRef.current.delete(browserSessionId);
-                  console.warn("Failed to create browser pane:", err);
-                });
-            };
-
-            createNativePane(0);
-          }
-        });
-      });
-    };
-    window.addEventListener("codegrid:new-browser-pane", handler);
-    return () => window.removeEventListener("codegrid:new-browser-pane", handler);
-  }, [activeWorkspaceId, allSessions, addSession, addPaneLayout, setFocusedSession]);
 
   // Listen for JSON-RPC commands from Unix socket
   useEffect(() => {
@@ -543,21 +439,9 @@ export default function App() {
 
   const handleCloseSession = useCallback(
     async (sessionId: string) => {
-      // Check if this is a browser pane
-      const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
-      if (session?.type === "browser") {
-        closingBrowserPaneIdsRef.current.add(sessionId);
-      }
-      // Optimistically remove from UI first for instant feedback
       removeSession(sessionId);
       removePaneLayout(sessionId);
-      // Then kill the PTY or close the browser pane in the background
-      if (session?.type === "browser") {
-        try { await closeBrowserPane(sessionId); } catch (e) { console.warn("Failed to close browser pane:", e); }
-        finally { closingBrowserPaneIdsRef.current.delete(sessionId); }
-      } else {
-        try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
-      }
+      try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
     },
     [removeSession, removePaneLayout],
   );
@@ -599,7 +483,6 @@ export default function App() {
         boxSizing: "border-box",
       }}
     >
-      <TrialBanner />
       <TopBar onFocusSession={handleFocusSession} onCloseSession={handleCloseSession} />
       <div style={{ display: "flex", flex: 1, overflow: "hidden", gap: "10px", minHeight: 0 }}>
         <Sidebar />

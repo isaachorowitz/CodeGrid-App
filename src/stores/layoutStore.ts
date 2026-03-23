@@ -277,11 +277,31 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       };
     }),
 
-  applyPreset: (preset, sessionIds, viewportW = 1200, viewportH = 800) =>
+  applyPreset: (preset, sessionIds, viewportW = 1200, viewportH = 800) => {
+    const presetLayouts = generatePresetLayout(preset, sessionIds, viewportW, viewportH);
+    const presetIds = new Set(presetLayouts.map((l) => l.i));
+
+    // Sessions not included in the preset keep their existing layouts.
+    // If they don't have one, stack them to the right of the preset grid.
+    const existing = get().layouts;
+    const overflowLayouts: CanvasLayout[] = [];
+    let overflowX = viewportW + 16;
+    for (const id of sessionIds) {
+      if (presetIds.has(id)) continue;
+      const prev = existing.find((l) => l.i === id);
+      if (prev) {
+        overflowLayouts.push(prev);
+      } else {
+        overflowLayouts.push({ i: id, x: overflowX, y: 0, w: DEFAULT_W, h: DEFAULT_H });
+        overflowX += DEFAULT_W + 8;
+      }
+    }
+
     set({
-      layouts: generatePresetLayout(preset, sessionIds, viewportW, viewportH),
+      layouts: [...presetLayouts, ...overflowLayouts],
       maximizedPane: null,
-    }),
+    });
+  },
 
   toggleMaximize: (sessionId) =>
     set((state) => {

@@ -6,7 +6,7 @@ import { useToastStore } from "../stores/toastStore";
 import type { GitHubRepo, RepoQuickStatus } from "../lib/ipc";
 
 interface NewSessionDialogProps {
-  onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean) => void;
+  onCreateSession: (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean, sessionType?: string) => void;
 }
 
 function shortenPath(path: string): string {
@@ -37,7 +37,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
   const [cloneUrl, setCloneUrl] = useState("");
   const [cloneTargetDir, setCloneTargetDir] = useState("");
   const [resume, setResume] = useState(false);
-  const [sessionType, setSessionType] = useState<"claude" | "shell">("claude");
+  const [sessionType, setSessionType] = useState<"claude" | "shell" | "codex" | "gemini" | "cursor">("claude");
   const [filter, setFilter] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -196,7 +196,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
   const handleSubmit = useCallback(
     (dir?: string) => {
       const finalDir = dir ?? (path.trim() || "~");
-      onCreateSession(finalDir, false, resume, sessionType === "shell");
+      onCreateSession(finalDir, false, resume, sessionType === "shell", sessionType);
       setNewSessionDialogOpen(false);
     },
     [path, resume, sessionType, onCreateSession, setNewSessionDialogOpen],
@@ -221,7 +221,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       const { cloneRepo } = await import("../lib/ipc");
       const targetDir = cloneTargetDir.trim() || undefined;
       const clonedPath = await cloneRepo(repo.clone_url, targetDir);
-      onCreateSession(clonedPath, false, false, sessionType === "shell");
+      onCreateSession(clonedPath, false, false, sessionType === "shell", sessionType);
       setNewSessionDialogOpen(false);
     } catch (e) {
       console.error("Clone failed:", e);
@@ -321,29 +321,32 @@ export const NewSessionDialog = memo(function NewSessionDialog({
         </div>
 
         {/* Session type selector */}
-        <div style={{ display: "flex", gap: "1px", padding: "8px 16px" }}>
-          {(["claude", "shell"] as const).map((type) => (
+        <div style={{ display: "flex", gap: "1px", padding: "8px 16px", flexWrap: "wrap" }}>
+          {([
+            { id: "claude", label: "Claude Code", desc: "Anthropic", color: "#ff8c00" },
+            { id: "codex", label: "Codex", desc: "OpenAI", color: "#10a37f" },
+            { id: "gemini", label: "Gemini", desc: "Google", color: "#4285f4" },
+            { id: "cursor", label: "Cursor Agent", desc: "Cursor", color: "#a855f7" },
+            { id: "shell", label: "Terminal", desc: "Shell", color: "#4a9eff" },
+          ] as const).map((agent) => (
             <button
-              key={type}
-              onClick={() => setSessionType(type)}
+              key={agent.id}
+              onClick={() => setSessionType(agent.id)}
               style={{
                 flex: 1,
-                padding: "10px",
-                background: sessionType === type ? (type === "claude" ? "#ff8c0022" : "#4a9eff22") : "#1e1e1e",
-                border: `1px solid ${sessionType === type ? (type === "claude" ? "#ff8c00" : "#4a9eff") : "#2a2a2a"}`,
-                color: sessionType === type ? (type === "claude" ? "#ff8c00" : "#4a9eff") : "#888888",
-                fontSize: "12px",
+                minWidth: "80px",
+                padding: "8px 4px",
+                background: sessionType === agent.id ? `${agent.color}22` : "#1e1e1e",
+                border: `1px solid ${sessionType === agent.id ? agent.color : "#2a2a2a"}`,
+                color: sessionType === agent.id ? agent.color : "#888888",
+                fontSize: "11px",
                 fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
                 cursor: "pointer",
                 textAlign: "center",
               }}
             >
-              <div style={{ fontWeight: "bold", marginBottom: "2px" }}>
-                {type === "claude" ? "Claude Code" : "Terminal Shell"}
-              </div>
-              <div style={{ fontSize: "9px", opacity: 0.7 }}>
-                {type === "claude" ? "AI pair programmer" : "Regular terminal"}
-              </div>
+              <div style={{ fontWeight: "bold", marginBottom: "1px" }}>{agent.label}</div>
+              <div style={{ fontSize: "8px", opacity: 0.7 }}>{agent.desc}</div>
             </button>
           ))}
         </div>
@@ -793,7 +796,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
                   letterSpacing: "1px",
                 }}
               >
-                START {sessionType === "claude" ? "CLAUDE" : "SHELL"} SESSION
+                START {sessionType.toUpperCase()} SESSION
               </button>
             </div>
           )}

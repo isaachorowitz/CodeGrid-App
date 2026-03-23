@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { closeBrowserPane, type WorkspaceInfo } from "../lib/ipc";
+import { type WorkspaceInfo } from "../lib/ipc";
 import { useSessionStore } from "./sessionStore";
 import { useLayoutStore } from "./layoutStore";
 
@@ -63,10 +63,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     for (const sid of removedSessionIds) {
       removePaneLayout(sid);
     }
-    for (const paneId of browserPaneIds) {
-      closeBrowserPane(paneId).catch(() => {});
-    }
-
     set((state) => ({
       workspaces: state.workspaces.filter((w) => w.id !== workspaceId),
       activeWorkspaceId:

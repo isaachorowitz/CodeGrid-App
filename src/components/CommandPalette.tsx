@@ -104,16 +104,6 @@ export const CommandPalette = memo(function CommandPalette() {
       category: "Sessions",
       action: () => { setCommandPaletteOpen(false); setNewSessionDialogOpen(true); },
     });
-    items.push({
-      id: "new-browser",
-      label: "New browser pane",
-      category: "Sessions",
-      action: () => {
-        setCommandPaletteOpen(false);
-        window.dispatchEvent(new CustomEvent("codegrid:new-browser-pane", { detail: { url: "https://google.com" } }));
-      },
-    });
-
     // --- View ---
     items.push(
       {

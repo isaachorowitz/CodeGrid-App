@@ -17,42 +17,44 @@ export const TrialBanner = memo(function TrialBanner() {
   return (
     <div
       style={{
-        margin: "8px 12px 0 12px",
-        padding: "6px 14px",
-        background: "#1a1a1a",
-        border: "1px solid #2a2a2a",
-        borderRadius: "6px",
         display: "flex",
         alignItems: "center",
-        justifyContent: "center",
-        gap: "6px",
+        gap: "4px",
         fontFamily: MONO,
-        fontSize: "11px",
-        color: "#888888",
-        flexShrink: 0,
+        fontSize: "10px",
       }}
     >
-      {expired ? (
-        <span>Trial expired — {status.max_panes} pane limit —</span>
-      ) : (
-        <span>Trial: {status.trial_days_remaining} day{status.trial_days_remaining !== 1 ? "s" : ""} remaining —</span>
-      )}
+      <span
+        style={{
+          background: "#1a1a1a",
+          border: "1px solid #2a2a2a",
+          color: "#666666",
+          padding: "3px 6px",
+          fontFamily: MONO,
+          fontSize: "10px",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {expired
+          ? `Trial expired — ${status.max_panes} pane limit`
+          : `Trial: ${status.trial_days_remaining}d remaining`}
+      </span>
       <button
         onClick={() => setLicenseDialogOpen(true)}
         style={{
-          background: "none",
-          border: "none",
+          background: "#1a1a1a",
+          border: "1px solid #2a2a2a",
           color: "#ff8c00",
-          fontSize: "11px",
-          fontFamily: MONO,
+          padding: "3px 6px",
           cursor: "pointer",
-          padding: 0,
-          textDecoration: "underline",
+          fontFamily: MONO,
+          fontSize: "10px",
+          whiteSpace: "nowrap",
         }}
-        onMouseEnter={(e) => { e.currentTarget.style.color = "#ffa040"; }}
-        onMouseLeave={(e) => { e.currentTarget.style.color = "#ff8c00"; }}
+        onMouseEnter={(e) => { e.currentTarget.style.color = "#ffa040"; e.currentTarget.style.borderColor = "#ff8c00"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
       >
-        Activate License
+        ACTIVATE
       </button>
     </div>
   );
