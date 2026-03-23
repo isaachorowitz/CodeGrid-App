@@ -57,6 +57,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
         display: "flex",
         flexDirection: "column",
         height: "100%",
+        minHeight: 0,
         background: "#0d0d0d",
         border: `1px solid ${isFocused ? "#ff8c00" : "#2a2a2a"}`,
         overflow: "hidden",
@@ -150,7 +151,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
       </div>
 
       {/* Browser content area - this is where the native webview sits underneath */}
-      <div style={{ flex: 1, background: "#0a0a0a", position: "relative" }}>
+      <div data-browser-content style={{ flex: 1, minHeight: 0, background: "#0a0a0a", position: "relative" }}>
         {/* The native webview renders here — this div is transparent to let it show through */}
         <div style={{
           position: "absolute", inset: 0,

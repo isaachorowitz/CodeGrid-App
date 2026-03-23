@@ -41,9 +41,9 @@ import {
   clearPersistedSessions,
   createBrowserPane,
   closeBrowserPane,
-  updateBrowserPanePosition,
 } from "./lib/ipc";
 import { canvasToWindow, BROWSER_HEADER_HEIGHT } from "./lib/canvasToWindow";
+import { getBrowserPaneWebviewBounds } from "./lib/browserPaneWebviewBounds";
 
 export default function App() {
   const {
@@ -405,39 +405,55 @@ export default function App() {
               .sessions
               .some((s) => s.id === browserSessionId && s.type === "browser");
             if (!stillInStore || closingBrowserPaneIdsRef.current.has(browserSessionId)) return;
-            const canvasState = useLayoutStore.getState().canvas;
-            // Read viewport position from Canvas's viewport element for accuracy
-            // (containerRef has a 1px border that shifts the offset)
-            const viewport = document.querySelector('[data-canvas-viewport]') as HTMLElement | null;
-            const rect = viewport?.getBoundingClientRect() ?? containerRef.current?.getBoundingClientRect();
-            const offsetX = rect?.left ?? 0;
-            const offsetY = rect?.top ?? 0;
-            const win = canvasToWindow(
-              layout.x, layout.y, layout.w, layout.h,
-              canvasState.zoom, canvasState.panX, canvasState.panY,
-              offsetX, offsetY,
-            );
-            // Offset for the BrowserPane header bar so the native webview sits below it
-            const headerH = Math.round(BROWSER_HEADER_HEIGHT * canvasState.zoom);
-            createBrowserPane(
-              browserSessionId, url,
-              win.x, win.y + headerH, win.w, Math.max(0, win.h - headerH),
-            )
-              .then(async () => {
-                const wasClosed = closingBrowserPaneIdsRef.current.has(browserSessionId);
-                const stillExists = useSessionStore
-                  .getState()
-                  .sessions
-                  .some((s) => s.id === browserSessionId && s.type === "browser");
-                if (wasClosed || !stillExists) {
-                  try { await closeBrowserPane(browserSessionId); } catch {}
-                }
-                closingBrowserPaneIdsRef.current.delete(browserSessionId);
-              })
-              .catch((err) => {
-                closingBrowserPaneIdsRef.current.delete(browserSessionId);
-                console.warn("Failed to create browser pane:", err);
-              });
+            const createNativePane = (attempt: number) => {
+              const measured = getBrowserPaneWebviewBounds(browserSessionId);
+              if (!measured && attempt < 6) {
+                requestAnimationFrame(() => createNativePane(attempt + 1));
+                return;
+              }
+
+              const canvasState = useLayoutStore.getState().canvas;
+              const fallback = (() => {
+                // Fallback if content node still isn't available.
+                const viewport = document.querySelector('[data-canvas-viewport]') as HTMLElement | null;
+                const rect = viewport?.getBoundingClientRect() ?? containerRef.current?.getBoundingClientRect();
+                const offsetX = rect?.left ?? 0;
+                const offsetY = rect?.top ?? 0;
+                const win = canvasToWindow(
+                  layout.x, layout.y, layout.w, layout.h,
+                  canvasState.zoom, canvasState.panX, canvasState.panY,
+                  offsetX, offsetY,
+                );
+                const headerH = Math.round(BROWSER_HEADER_HEIGHT * canvasState.zoom);
+                return { x: win.x, y: win.y + headerH, w: win.w, h: Math.max(0, win.h - headerH) };
+              })();
+
+              createBrowserPane(
+                browserSessionId,
+                url,
+                measured?.x ?? fallback.x,
+                measured?.y ?? fallback.y,
+                measured?.w ?? fallback.w,
+                measured?.h ?? fallback.h,
+              )
+                .then(async () => {
+                  const wasClosed = closingBrowserPaneIdsRef.current.has(browserSessionId);
+                  const stillExists = useSessionStore
+                    .getState()
+                    .sessions
+                    .some((s) => s.id === browserSessionId && s.type === "browser");
+                  if (wasClosed || !stillExists) {
+                    try { await closeBrowserPane(browserSessionId); } catch {}
+                  }
+                  closingBrowserPaneIdsRef.current.delete(browserSessionId);
+                })
+                .catch((err) => {
+                  closingBrowserPaneIdsRef.current.delete(browserSessionId);
+                  console.warn("Failed to create browser pane:", err);
+                });
+            };
+
+            createNativePane(0);
           }
         });
       });

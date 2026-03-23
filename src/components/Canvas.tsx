@@ -7,6 +7,7 @@ import { useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { updateBrowserPanePosition } from "../lib/ipc";
 import { canvasToWindow, BROWSER_HEADER_HEIGHT } from "../lib/canvasToWindow";
+import { getBrowserPaneWebviewBounds, getBrowserPaneWebviewBoundsFromElement } from "../lib/browserPaneWebviewBounds";
 import { useShallow } from "zustand/react/shallow";
 
 interface CanvasProps {
@@ -102,7 +103,6 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     const offsetX = rect?.left ?? 0;
     const offsetY = rect?.top ?? 0;
     const currentLayouts = useLayoutStore.getState().layouts;
-    const currentMaximized = useLayoutStore.getState().maximizedPane;
 
     for (const session of browserSessions) {
       const isActive = session.workspace_id === activeWs;
@@ -111,25 +111,28 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       if (!isActive || !layout) {
         // Hide: move off-screen
         updateBrowserPanePosition(session.id, -9999, -9999, 0, 0).catch(() => {});
-      } else if (currentMaximized === session.id) {
-        // Maximized: use viewport bounds directly (transform is "none")
-        const vpRect = viewportRef.current?.getBoundingClientRect();
-        if (vpRect) {
-          const hdrH = BROWSER_HEADER_HEIGHT;
+      } else {
+        const measured = getBrowserPaneWebviewBounds(session.id);
+        if (measured) {
           updateBrowserPanePosition(
-            session.id, vpRect.left, vpRect.top + hdrH, vpRect.width, Math.max(0, vpRect.height - hdrH),
+            session.id,
+            measured.x,
+            measured.y,
+            measured.w,
+            measured.h,
+          ).catch(() => {});
+        } else {
+          // Fallback during first paint before the pane content node is mounted.
+          const win = canvasToWindow(
+            layout.x, layout.y, layout.w, layout.h,
+            zoom, panX, panY,
+            offsetX, offsetY,
+          );
+          const hdrH = Math.round(BROWSER_HEADER_HEIGHT * zoom);
+          updateBrowserPanePosition(
+            session.id, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH),
           ).catch(() => {});
         }
-      } else {
-        const win = canvasToWindow(
-          layout.x, layout.y, layout.w, layout.h,
-          zoom, panX, panY,
-          offsetX, offsetY,
-        );
-        const hdrH = Math.round(BROWSER_HEADER_HEIGHT * zoom);
-        updateBrowserPanePosition(
-          session.id, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH),
-        ).catch(() => {});
       }
     }
   }
@@ -422,15 +425,17 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           const now = performance.now();
           if (now - L.lastBrowserSync > 33) {
             L.lastBrowserSync = now;
-            const rect = viewportRef.current?.getBoundingClientRect();
-            if (rect) {
-              const preview = L.panePreview[L.dragId];
-              const layout = useLayoutStore.getState().layouts.find((l) => l.i === L.dragId);
-              const pw = preview?.w ?? layout?.w ?? 600;
-              const ph = preview?.h ?? layout?.h ?? 400;
-              const win = canvasToWindow(nx, ny, pw, ph, L.zoom, L.panX, L.panY, rect.left, rect.top);
-              const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
-              updateBrowserPanePosition(L.dragId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
+            const measured = L.dragEl
+              ? getBrowserPaneWebviewBoundsFromElement(L.dragEl)
+              : getBrowserPaneWebviewBounds(L.dragId);
+            if (measured) {
+              updateBrowserPanePosition(
+                L.dragId,
+                measured.x,
+                measured.y,
+                measured.w,
+                measured.h,
+              ).catch(() => {});
             }
           }
         }
@@ -458,11 +463,17 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           const now = performance.now();
           if (now - L.lastBrowserSync > 33) {
             L.lastBrowserSync = now;
-            const rect = viewportRef.current?.getBoundingClientRect();
-            if (rect) {
-              const win = canvasToWindow(x, y, w, h, L.zoom, L.panX, L.panY, rect.left, rect.top);
-              const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
-              updateBrowserPanePosition(L.resizeId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
+            const measured = L.resizeEl
+              ? getBrowserPaneWebviewBoundsFromElement(L.resizeEl)
+              : getBrowserPaneWebviewBounds(L.resizeId);
+            if (measured) {
+              updateBrowserPanePosition(
+                L.resizeId,
+                measured.x,
+                measured.y,
+                measured.w,
+                measured.h,
+              ).catch(() => {});
             }
           }
         }
@@ -504,14 +515,16 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           // Sync browser pane position with native webview
           const session = useSessionStore.getState().sessions.find((s) => s.id === L.dragId);
           if (session?.type === "browser") {
-            const rect = viewportRef.current?.getBoundingClientRect();
-            const win = canvasToWindow(
-              preview.x, preview.y, layout.w, layout.h,
-              L.zoom, L.panX, L.panY,
-              rect?.left ?? 0, rect?.top ?? 0,
-            );
-            const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
-            updateBrowserPanePosition(L.dragId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
+            const measured = getBrowserPaneWebviewBounds(L.dragId);
+            if (measured) {
+              updateBrowserPanePosition(
+                L.dragId,
+                measured.x,
+                measured.y,
+                measured.w,
+                measured.h,
+              ).catch(() => {});
+            }
           }
         }
         delete L.panePreview[L.dragId];
@@ -522,14 +535,16 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           // Sync browser pane position with native webview
           const session = useSessionStore.getState().sessions.find((s) => s.id === L.resizeId);
           if (session?.type === "browser") {
-            const rect = viewportRef.current?.getBoundingClientRect();
-            const win = canvasToWindow(
-              preview.x, preview.y, preview.w, preview.h,
-              L.zoom, L.panX, L.panY,
-              rect?.left ?? 0, rect?.top ?? 0,
-            );
-            const hdrH = Math.round(BROWSER_HEADER_HEIGHT * L.zoom);
-            updateBrowserPanePosition(L.resizeId, win.x, win.y + hdrH, win.w, Math.max(0, win.h - hdrH)).catch(() => {});
+            const measured = getBrowserPaneWebviewBounds(L.resizeId);
+            if (measured) {
+              updateBrowserPanePosition(
+                L.resizeId,
+                measured.x,
+                measured.y,
+                measured.w,
+                measured.h,
+              ).catch(() => {});
+            }
           }
         }
         delete L.panePreview[L.resizeId];
