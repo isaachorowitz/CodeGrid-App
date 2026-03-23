@@ -3699,6 +3699,19 @@ fn parse_browser_url(url: &str) -> Result<tauri::Url, String> {
     Ok(parsed)
 }
 
+/// Compute the Y offset between the window's outer frame and its inner content area.
+/// On macOS with a native title bar, this is the title bar height (~28-30 logical px).
+/// JavaScript's getBoundingClientRect() returns coordinates relative to the webview
+/// viewport (below the title bar), but Tauri's set_position/add_child positions child
+/// webviews relative to the window's content view which includes the title bar region.
+fn get_titlebar_offset(window: &tauri::Window) -> f64 {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let outer = window.outer_position().unwrap_or(tauri::PhysicalPosition { x: 0, y: 0 });
+    let inner = window.inner_position().unwrap_or(tauri::PhysicalPosition { x: 0, y: 0 });
+    // Convert physical pixel difference to logical pixels
+    (inner.y - outer.y) as f64 / scale
+}
+
 #[tauri::command]
 pub async fn create_browser_pane(
     app: AppHandle,
@@ -3723,9 +3736,13 @@ pub async fn create_browser_pane(
     let parsed = parse_browser_url(&url)?;
     let builder = WebviewBuilder::new(&pane_id, tauri::WebviewUrl::External(parsed));
 
+    // JS sends viewport-relative coords; Tauri positions relative to the window
+    // content view which on macOS includes the title bar area — compensate.
+    let offset_y = get_titlebar_offset(&window);
+
     window.add_child(
         builder,
-        LogicalPosition::new(x, y),
+        LogicalPosition::new(x, y + offset_y),
         LogicalSize::new(width, height),
     ).map_err(|e| format!("Failed to create browser pane: {e}"))?;
 
@@ -3743,9 +3760,13 @@ pub async fn update_browser_pane_position(
 ) -> Result<(), String> {
     use tauri::{Manager, LogicalPosition, LogicalSize};
 
+    let window = app.get_window("main")
+        .ok_or("Main window not found")?;
+
     // Silently skip if pane doesn't exist (may have been closed during drag)
     if let Some(webview) = app.get_webview(&pane_id) {
-        webview.set_position(LogicalPosition::new(x, y))
+        let offset_y = get_titlebar_offset(&window);
+        webview.set_position(LogicalPosition::new(x, y + offset_y))
             .map_err(|e| format!("Failed to set position: {e}"))?;
         webview.set_size(LogicalSize::new(width, height))
             .map_err(|e| format!("Failed to set size: {e}"))?;
