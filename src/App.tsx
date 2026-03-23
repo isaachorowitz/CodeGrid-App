@@ -67,6 +67,7 @@ export default function App() {
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
   const attentionCooldownRef = useRef<Record<string, number>>({});
+  const closingBrowserPaneIdsRef = useRef<Set<string>>(new Set());
   const initRef = useRef(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -372,6 +373,7 @@ export default function App() {
       if (!activeWorkspaceId) return;
       const url = detail?.url ?? "https://google.com";
       const browserSessionId = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      closingBrowserPaneIdsRef.current.delete(browserSessionId);
 
       // Create a synthetic session entry for the browser pane
       const syntheticSession = {
@@ -397,6 +399,12 @@ export default function App() {
         requestAnimationFrame(() => {
           const layout = useLayoutStore.getState().layouts.find((l) => l.i === browserSessionId);
           if (layout) {
+            // Session may have been closed before the deferred create runs.
+            const stillInStore = useSessionStore
+              .getState()
+              .sessions
+              .some((s) => s.id === browserSessionId && s.type === "browser");
+            if (!stillInStore || closingBrowserPaneIdsRef.current.has(browserSessionId)) return;
             const canvasState = useLayoutStore.getState().canvas;
             // Read viewport position from Canvas's viewport element for accuracy
             // (containerRef has a 1px border that shifts the offset)
@@ -414,9 +422,22 @@ export default function App() {
             createBrowserPane(
               browserSessionId, url,
               win.x, win.y + headerH, win.w, Math.max(0, win.h - headerH),
-            ).catch((err) =>
-              console.warn("Failed to create browser pane:", err)
-            );
+            )
+              .then(async () => {
+                const wasClosed = closingBrowserPaneIdsRef.current.has(browserSessionId);
+                const stillExists = useSessionStore
+                  .getState()
+                  .sessions
+                  .some((s) => s.id === browserSessionId && s.type === "browser");
+                if (wasClosed || !stillExists) {
+                  try { await closeBrowserPane(browserSessionId); } catch {}
+                }
+                closingBrowserPaneIdsRef.current.delete(browserSessionId);
+              })
+              .catch((err) => {
+                closingBrowserPaneIdsRef.current.delete(browserSessionId);
+                console.warn("Failed to create browser pane:", err);
+              });
           }
         });
       });
@@ -508,12 +529,16 @@ export default function App() {
     async (sessionId: string) => {
       // Check if this is a browser pane
       const session = useSessionStore.getState().sessions.find((s) => s.id === sessionId);
+      if (session?.type === "browser") {
+        closingBrowserPaneIdsRef.current.add(sessionId);
+      }
       // Optimistically remove from UI first for instant feedback
       removeSession(sessionId);
       removePaneLayout(sessionId);
       // Then kill the PTY or close the browser pane in the background
       if (session?.type === "browser") {
         try { await closeBrowserPane(sessionId); } catch (e) { console.warn("Failed to close browser pane:", e); }
+        finally { closingBrowserPaneIdsRef.current.delete(sessionId); }
       } else {
         try { await killSession(sessionId); } catch (e) { console.warn("Failed to kill session:", e); }
       }

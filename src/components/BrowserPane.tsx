@@ -44,6 +44,13 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
     }
   }, [sessionId, url]);
 
+  const handleHeaderMouseDown = useCallback((e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    // Keep URL typing/button clicks reliable; only drag from empty header space.
+    if (target.closest("input, button")) return;
+    onDragStart?.(e);
+  }, [onDragStart]);
+
   return (
     <div
       style={{
@@ -58,7 +65,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
     >
       {/* Header bar - draggable */}
       <div
-        onMouseDown={onDragStart}
+        onMouseDown={handleHeaderMouseDown}
         onDoubleClick={() => toggleMaximize(sessionId)}
         style={{
           display: "flex",
@@ -85,6 +92,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
           value={inputUrl}
           onChange={(e) => setInputUrl(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleNavigate(); }}
+          onMouseDown={(e) => e.stopPropagation()}
           placeholder="Enter URL..."
           style={{
             flex: 1,
@@ -104,6 +112,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
         {/* Refresh */}
         <button
           onClick={handleRefresh}
+          onMouseDown={(e) => e.stopPropagation()}
           title="Refresh"
           style={{
             background: "none", border: "none", color: "#555",
@@ -116,6 +125,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
         {/* Minimize */}
         <button
           onClick={(e) => { e.stopPropagation(); minimizePane(sessionId); }}
+          onMouseDown={(e) => e.stopPropagation()}
           title="Minimize"
           style={{
             background: "none", border: "none", color: "#555",
@@ -128,6 +138,7 @@ export const BrowserPane = memo(function BrowserPane({ sessionId, url: initialUr
         {/* Close */}
         <button
           onClick={(e) => { e.stopPropagation(); onClose(sessionId); }}
+          onMouseDown={(e) => e.stopPropagation()}
           title="Close"
           style={{
             background: "none", border: "none", color: "#555",
