@@ -148,14 +148,15 @@ jobs:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
           REPO="isaachorowitz/CodeGrid-Claude-Code-Terminal"
-          # Delete existing latest release and tag
-          gh release delete latest --repo "$REPO" --yes 2>/dev/null || true
-          gh api "repos/${REPO}/git/refs/tags/latest" -X DELETE 2>/dev/null || true
-          # Create fresh latest release
-          gh release create latest "${{ steps.version.outputs.dmg }}" \
+          VERSION=${{ steps.version.outputs.version }}
+          DMG="${{ steps.version.outputs.dmg }}"
+          # Upload the DMG to the existing versioned release instead of a separate "latest"
+          # This avoids the tag conflict entirely — "latest" is just the newest versioned release
+          gh release upload "v${VERSION}" "$DMG" \
+            --repo "$REPO" --clobber 2>/dev/null || true
+          # Mark this release as latest
+          gh release edit "v${VERSION}" \
             --repo "$REPO" \
-            --title "CodeGrid (latest build)" \
-            --notes "Automatically built from the latest commit on \`main\`. Version ${{ steps.version.outputs.version }}. Signed and notarized." \
             --latest
 
       - name: Notify landing page
