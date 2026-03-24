@@ -95,3 +95,22 @@ jobs:
             --title "CodeGrid (latest build)" \
             --notes "Automatically built from the latest commit on \`main\`. Signed and notarized." \
             --latest
+
+      - name: Notify landing page
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          DMG_NAME="CodeGrid_${VERSION}_aarch64.dmg"
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG=${GITHUB_REF#refs/tags/}
+            DOWNLOAD_URL="https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/download/${TAG}/${DMG_NAME}"
+          else
+            DOWNLOAD_URL="https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/download/latest/${DMG_NAME}"
+          fi
+          gh api repos/isaachorowitz/CodeGrid-Landing/dispatches \
+            -f event_type=update-download \
+            -f "client_payload[version]=${VERSION}" \
+            -f "client_payload[download_url]=${DOWNLOAD_URL}" \
+            -f "client_payload[tag]=${GITHUB_REF#refs/tags/}"
