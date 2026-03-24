@@ -20,7 +20,25 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|_app| {
-            let db = Database::new().expect("Failed to initialize database");
+            let db = match Database::new() {
+                Ok(db) => db,
+                Err(e) => {
+                    eprintln!("Database initialization failed: {e}. Attempting recovery...");
+                    // Try to recover by backing up the corrupt DB and creating a fresh one
+                    let db_dir = if let Ok(home) = std::env::var("HOME") {
+                        std::path::PathBuf::from(home).join(".config").join("codegrid")
+                    } else {
+                        std::path::PathBuf::from("/tmp/codegrid")
+                    };
+                    let db_path = db_dir.join("codegrid.db");
+                    if db_path.exists() {
+                        let backup = db_path.with_extension("db.corrupt");
+                        let _ = std::fs::rename(&db_path, &backup);
+                        eprintln!("Backed up corrupt database to {}", backup.display());
+                    }
+                    Database::new().expect("Failed to initialize database even after recovery")
+                }
+            };
             let state = Arc::new(AppState {
                 pty_manager: PtyManager::new(),
                 db,

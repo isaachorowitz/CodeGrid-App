@@ -12,7 +12,7 @@ export const TrialBanner = memo(function TrialBanner() {
   // Don't render if loading, no status, or fully licensed
   if (loading || !status || (status.is_licensed && !status.is_trial)) return null;
 
-  const expired = status.is_trial && status.trial_days_remaining <= 0;
+  const expired = !status.is_licensed && !status.is_trial;
 
   return (
     <div

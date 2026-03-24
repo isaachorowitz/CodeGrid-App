@@ -37,7 +37,11 @@ export const useLicenseStore = create<LicenseStore>((set) => ({
   },
 
   deactivate: async () => {
-    const status = await deactivateLicense();
-    set({ status });
+    try {
+      const status = await deactivateLicense();
+      set({ status });
+    } catch (e) {
+      set({ error: String(e) });
+    }
   },
 }));

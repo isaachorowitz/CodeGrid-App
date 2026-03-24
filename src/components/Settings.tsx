@@ -233,7 +233,7 @@ export const Settings = memo(function Settings() {
                   {!licenseStatus
                     ? "Loading..."
                     : licenseStatus.is_licensed && !licenseStatus.is_trial
-                    ? "Licensed — unlimited panes"
+                    ? "Licensed — up to 50 panes"
                     : licenseStatus.is_trial && licenseStatus.trial_days_remaining > 0
                     ? `Trial — ${licenseStatus.trial_days_remaining} day${licenseStatus.trial_days_remaining !== 1 ? "s" : ""} remaining (${licenseStatus.max_panes} pane limit)`
                     : `Trial expired — limited to ${licenseStatus?.max_panes ?? 2} panes`}

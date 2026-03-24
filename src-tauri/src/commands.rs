@@ -3178,7 +3178,8 @@ pub async fn write_file_contents(file_path: String, content: String) -> Result<(
 
 #[tauri::command]
 pub async fn get_env_allow_status(working_dir: String) -> Result<bool, String> {
-    let settings_path = PathBuf::from(&working_dir).join(".claude").join("settings.local.json");
+    let dir = validate_dir(&working_dir)?;
+    let settings_path = PathBuf::from(&dir).join(".claude").join("settings.local.json");
     if !settings_path.exists() {
         return Ok(false);
     }
@@ -3194,7 +3195,8 @@ pub async fn get_env_allow_status(working_dir: String) -> Result<bool, String> {
 
 #[tauri::command]
 pub async fn toggle_env_allow(working_dir: String, enabled: bool) -> Result<(), String> {
-    let claude_dir = PathBuf::from(&working_dir).join(".claude");
+    let dir = validate_dir(&working_dir)?;
+    let claude_dir = PathBuf::from(&dir).join(".claude");
     let settings_path = claude_dir.join("settings.local.json");
 
     let mut json: serde_json::Value = if settings_path.exists() {
@@ -3480,6 +3482,7 @@ pub async fn search_files(
 #[tauri::command]
 pub async fn git_stage_hunk(working_dir: String, file_path: String, hunk_header: String) -> Result<(), String> {
     let dir = validate_dir(&working_dir)?;
+    validate_file_path(&file_path)?;
 
     // Get the full diff for this file
     let diff_output = std::process::Command::new("git")
@@ -3615,7 +3618,8 @@ pub struct DepGraph {
 
 #[tauri::command]
 pub async fn analyze_dependencies(working_dir: String) -> Result<DepGraph, String> {
-    let dir = std::path::Path::new(&working_dir);
+    let validated = validate_dir(&working_dir)?;
+    let dir = std::path::Path::new(&validated);
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
     let mut file_paths: Vec<String> = Vec::new();
@@ -3853,6 +3857,10 @@ pub async fn get_system_memory() -> Result<SystemMemoryInfo, String> {
 
 #[tauri::command]
 pub async fn reveal_in_finder(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !is_path_or_parent_within_allowed_roots(p) {
+        return Err("Access denied: path must be under your home directory or /tmp".to_string());
+    }
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
     if meta.is_dir() {
         std::process::Command::new("open")
@@ -3871,6 +3879,10 @@ pub async fn reveal_in_finder(path: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn open_in_default_app(path: String) -> Result<(), String> {
+    let p = Path::new(&path);
+    if !is_path_or_parent_within_allowed_roots(p) {
+        return Err("Access denied: path must be under your home directory or /tmp".to_string());
+    }
     std::process::Command::new("open")
         .arg(&path)
         .spawn()

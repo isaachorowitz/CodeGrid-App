@@ -231,7 +231,6 @@ export function sanitizeCanvasState(raw: unknown): CanvasState {
  */
 function optimalGrid(n: number, viewportW: number, viewportH: number): { cols: number; rows: number } {
   if (n <= 1) return { cols: 1, rows: 1 };
-  const aspect = viewportW / viewportH;
   let bestCols = 1;
   let bestScore = Infinity;
   for (let c = 1; c <= n; c++) {

@@ -251,20 +251,29 @@ export default function App() {
   }, []);
 
   // Persist layout (including empty layouts so closing all sessions clears saved state)
+  const layoutFlushRef = useRef<{ workspaceId: string; json: string } | null>(null);
   useEffect(() => {
     if (!activeWorkspaceId) return;
     const layoutJson = JSON.stringify({ layouts, canvas });
     // Keep workspace store in sync so workspace switching can read current layout
     updateWorkspace(activeWorkspaceId, { layout_json: layoutJson });
+    layoutFlushRef.current = { workspaceId: activeWorkspaceId, json: layoutJson };
     const timer = setTimeout(() => {
       saveLayoutIpc(activeWorkspaceId, layoutJson).catch(() => {});
     }, 1000);
     return () => {
       clearTimeout(timer);
-      // Best-effort flush on workspace switch/unmount so we don't lose the latest drag/resize.
-      saveLayoutIpc(activeWorkspaceId, layoutJson).catch(() => {});
     };
   }, [layouts, canvas, activeWorkspaceId, updateWorkspace]);
+  // Flush latest layout on workspace switch or unmount
+  useEffect(() => {
+    return () => {
+      const pending = layoutFlushRef.current;
+      if (pending) {
+        saveLayoutIpc(pending.workspaceId, pending.json).catch(() => {});
+      }
+    };
+  }, [activeWorkspaceId]);
 
   // Broadcast input routing (only to sessions in the active workspace)
   useEffect(() => {

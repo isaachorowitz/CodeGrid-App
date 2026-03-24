@@ -121,9 +121,12 @@ export function usePty(options: UsePtyOptions) {
 
   const write = useCallback(
     (data: string) => {
-      writeToPty(sessionId, textEncoder.encode(data)).catch(console.error);
+      writeToPty(sessionId, textEncoder.encode(data)).catch((err) => {
+        console.error("[usePty] write failed:", err);
+        addToast?.(`Terminal write failed — session may have ended`, "warning");
+      });
     },
-    [sessionId],
+    [sessionId, addToast],
   );
 
   const resize = useCallback(

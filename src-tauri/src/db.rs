@@ -21,6 +21,12 @@ impl Database {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create DB directory: {e}"))?;
+            // Restrict directory to owner-only access
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
         }
 
         let conn = Connection::open(&db_path)
@@ -188,7 +194,9 @@ impl Database {
                 })
             })
             .map_err(|e| format!("Failed to query workspaces: {e}"))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| {
+                r.map_err(|e| eprintln!("Warning: skipping corrupt workspace row: {e}")).ok()
+            })
             .collect();
 
         Ok(workspaces)
@@ -270,7 +278,9 @@ impl Database {
                 })
             })
             .map_err(|e| format!("Failed to query sessions: {e}"))?
-            .filter_map(|r| r.ok())
+            .filter_map(|r| {
+                r.map_err(|e| eprintln!("Warning: skipping corrupt session row: {e}")).ok()
+            })
             .collect();
 
         Ok(sessions)

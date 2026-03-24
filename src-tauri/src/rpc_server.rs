@@ -47,7 +47,11 @@ pub async fn start_rpc_server(app_handle: tauri::AppHandle) {
     }
 
     // Write socket path to a discoverable file
-    let socket_path_file = path.parent().unwrap().join("socket-path");
+    let Some(parent) = path.parent() else {
+        eprintln!("[rpc] Socket path has no parent directory");
+        return;
+    };
+    let socket_path_file = parent.join("socket-path");
     let _ = std::fs::write(&socket_path_file, path.to_string_lossy().as_bytes());
 
     let listener = match UnixListener::bind(&path) {

@@ -32,7 +32,7 @@ interface WorkspaceState {
   setLicenseDialogOpen: (open: boolean) => void;
 }
 
-export const useWorkspaceStore = create<WorkspaceState>((set) => ({
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   workspaces: [],
   activeWorkspaceId: null,
   sidebarOpen: true,
@@ -52,6 +52,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
     })),
 
   removeWorkspace: (workspaceId) => {
+    // Prevent deleting the last workspace
+    const currentWorkspaces = get().workspaces;
+    if (currentWorkspaces.length <= 1) return;
+
     const sessionState = useSessionStore.getState();
     const browserPaneIds = sessionState.sessions
       .filter((s) => s.workspace_id === workspaceId && s.type === "browser")
