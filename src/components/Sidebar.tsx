@@ -395,6 +395,55 @@ const GitPanel = memo(function GitPanel({
     }
   }, [dir, saveLoading, addToast, onRefreshGit]);
 
+  // ── Resizable sections state ──
+  const [changesPct, setChangesPct] = useState(60); // percentage of available space for Changes
+  const dragRef = useRef<{ active: boolean; startY: number; startPct: number; containerH: number } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const changesSectionRef = useRef<HTMLDivElement>(null);
+  const historySectionRef = useRef<HTMLDivElement>(null);
+
+  // Direct-DOM drag handlers (no React re-renders during drag)
+  const onDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+    const containerRect = container.getBoundingClientRect();
+    dragRef.current = { active: true, startY: e.clientY, startPct: changesPct, containerH: containerRect.height };
+
+    const onMove = (ev: MouseEvent) => {
+      const d = dragRef.current;
+      if (!d || !d.active) return;
+      const dy = ev.clientY - d.startY;
+      const deltaPct = (dy / d.containerH) * 100;
+      const newPct = Math.max(15, Math.min(85, d.startPct + deltaPct));
+      // Direct DOM mutation for smooth dragging
+      if (changesSectionRef.current) changesSectionRef.current.style.flex = `${newPct} 0 0`;
+      if (historySectionRef.current) historySectionRef.current.style.flex = `${100 - newPct} 0 0`;
+    };
+
+    const onUp = () => {
+      const d = dragRef.current;
+      if (d && d.active) {
+        // Read final position from DOM and commit to React state
+        const changesEl = changesSectionRef.current;
+        const historyEl = historySectionRef.current;
+        if (changesEl && historyEl && containerRef.current) {
+          const totalH = changesEl.offsetHeight + historyEl.offsetHeight;
+          if (totalH > 0) {
+            const finalPct = (changesEl.offsetHeight / totalH) * 100;
+            setChangesPct(Math.max(15, Math.min(85, finalPct)));
+          }
+        }
+      }
+      dragRef.current = null;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [changesPct]);
+
   const totalChanges = (workspaceGitStatus?.staged.length ?? 0)
     + (workspaceGitStatus?.unstaged.length ?? 0)
     + (workspaceGitStatus?.untracked.length ?? 0);
@@ -411,7 +460,7 @@ const GitPanel = memo(function GitPanel({
   const hasRemote = workspaceGitStatus.has_remote;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, overflow: "auto" }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
       {/* Quick Publish / Save buttons */}
       <div style={{ padding: "8px 12px", display: "flex", flexDirection: "column", gap: "4px", borderBottom: "1px solid #2a2a2a" }}>
         {!hasRemote ? (
@@ -728,8 +777,11 @@ const GitPanel = memo(function GitPanel({
         </div>
       </div>
 
-      {/* Changes list */}
-      <div style={{ padding: "6px 12px 4px", color: "#ff8c00", fontWeight: "bold", fontSize: "10px", letterSpacing: "1px", display: "flex", alignItems: "center", gap: "6px" }}>
+      {/* Resizable Changes + History container */}
+      <div ref={containerRef} style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+      {/* Changes section */}
+      <div ref={changesSectionRef} style={{ display: "flex", flexDirection: "column", flex: `${changesPct} 0 0`, minHeight: 0, overflow: "hidden" }}>
+      <div style={{ padding: "6px 12px 4px", color: "#ff8c00", fontWeight: "bold", fontSize: "10px", letterSpacing: "1px", display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
         CHANGES
         {totalChanges > 0 && (
           <span style={{
@@ -954,9 +1006,27 @@ const GitPanel = memo(function GitPanel({
           No changes
         </div>
       )}
+      </div>{/* end Changes section */}
 
-      {/* Git History */}
-      <div style={{ borderTop: "1px solid #2a2a2a", flexShrink: 0 }}>
+      {/* ── Drag divider between Changes and History ── */}
+      <div
+        onMouseDown={onDividerMouseDown}
+        style={{
+          height: "4px",
+          flexShrink: 0,
+          background: "#2a2a2a",
+          cursor: "row-resize",
+          position: "relative",
+          zIndex: 2,
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "#444"; }}
+        onMouseLeave={(e) => { if (!dragRef.current?.active) e.currentTarget.style.background = "#2a2a2a"; }}
+      />
+
+      {/* History section */}
+      <div ref={historySectionRef} style={{ display: "flex", flexDirection: "column", flex: `${100 - changesPct} 0 0`, minHeight: 0, overflow: "hidden" }}>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+      <div style={{ flexShrink: 0 }}>
         <button
           onClick={() => setHistoryExpanded((e) => !e)}
           style={{
@@ -973,7 +1043,7 @@ const GitPanel = memo(function GitPanel({
           <span style={{ color: "#555555", fontSize: "8px" }}>{historyExpanded ? "▲" : "▼"}</span>
         </button>
         {historyExpanded && (
-          <div style={{ maxHeight: "200px", overflow: "auto" }}>
+          <div style={{ flex: 1, overflow: "auto", minHeight: 0 }}>
             {logEntries.length === 0 ? (
               <div style={{ padding: "6px 12px", color: "#444444", fontSize: "10px" }}>No commits yet</div>
             ) : logEntries.map((entry) => (
@@ -1029,6 +1099,9 @@ const GitPanel = memo(function GitPanel({
           </div>
         )}
       </div>
+      </div>{/* end inner history flex */}
+      </div>{/* end History section */}
+      </div>{/* end resizable container */}
 
       {/* Discard All Confirmation Dialog */}
       {discardConfirmOpen && (

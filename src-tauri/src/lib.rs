@@ -144,6 +144,10 @@ pub fn run() {
             commands::close_browser_pane,
             // System info
             commands::get_system_memory,
+            // File context menu actions
+            commands::reveal_in_finder,
+            commands::open_in_default_app,
+            commands::clipboard_write,
 
         ])
         // Intercept close (red X / Cmd+Q) → show confirmation if sessions are running.

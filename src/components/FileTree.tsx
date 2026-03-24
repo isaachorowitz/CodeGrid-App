@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, writeFileContents, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 import { getFileIconUrl, getFolderIconUrl } from "../lib/fileIcons";
-import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { invoke } from "@tauri-apps/api/core";
 
 // Request deduplication: tracks in-flight directory loads
 const pendingLoads = new Set<string>();
@@ -214,22 +214,20 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
   const handleRevealInFinder = async () => {
     onClose();
     try {
-      // shellOpen opens a path with the system handler; for folders it opens Finder
-      const dir = entry.is_dir ? entry.path : parentDir;
-      await shellOpen(dir);
+      await invoke("reveal_in_finder", { path: entry.path });
     } catch { /* ignore */ }
   };
 
   const handleOpenInDefaultApp = async () => {
     onClose();
     try {
-      await shellOpen(entry.path);
+      await invoke("open_in_default_app", { path: entry.path });
     } catch { /* ignore */ }
   };
 
   const handleCopyPath = () => {
     onClose();
-    navigator.clipboard.writeText(entry.path).catch(() => {});
+    invoke("clipboard_write", { text: entry.path }).catch(() => {});
   };
 
   const handleCopyRelativePath = () => {
@@ -239,12 +237,12 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
       : entry.path.startsWith(rootPath)
         ? entry.path.substring(rootPath.length)
         : entry.path;
-    navigator.clipboard.writeText(relative).catch(() => {});
+    invoke("clipboard_write", { text: relative }).catch(() => {});
   };
 
   const handleCopyFileName = () => {
     onClose();
-    navigator.clipboard.writeText(entry.name).catch(() => {});
+    invoke("clipboard_write", { text: entry.name }).catch(() => {});
   };
 
   const handleOpenInTerminal = () => {
@@ -491,31 +489,34 @@ const FileTreeNode = memo(function FileTreeNode({
   const isSelected = selectedPath === entry.path;
 
   const handleToggle = useCallback(
-    async (e: React.MouseEvent) => {
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return; // Only handle left-click
       e.stopPropagation();
+      e.preventDefault();
       if (!entry.is_dir) {
         onFileClick(entry.path);
         return;
       }
 
-      if (!expanded && children === null) {
-        // Lazy load children (with dedup)
-        if (pendingLoads.has(entry.path)) return;
-        pendingLoads.add(entry.path);
-        setLoading(true);
-        try {
-          const result = await listDirectory(entry.path, 1);
-          setChildren(result);
-        } catch {
-          setChildren([]);
-        } finally {
-          pendingLoads.delete(entry.path);
+      setExpanded((prev) => {
+        if (!prev && children === null) {
+          // Lazy load children (with dedup)
+          if (!pendingLoads.has(entry.path)) {
+            pendingLoads.add(entry.path);
+            setLoading(true);
+            listDirectory(entry.path, 1)
+              .then((result) => setChildren(result))
+              .catch(() => setChildren([]))
+              .finally(() => {
+                pendingLoads.delete(entry.path);
+                setLoading(false);
+              });
+          }
         }
-        setLoading(false);
-      }
-      setExpanded(!expanded);
+        return !prev;
+      });
     },
-    [expanded, children, entry.path, entry.is_dir, onFileClick],
+    [children, entry.path, entry.is_dir, onFileClick],
   );
 
   // Filter logic
@@ -545,7 +546,7 @@ const FileTreeNode = memo(function FileTreeNode({
     <div>
       <div
         draggable
-        onClick={handleToggle}
+        onMouseDown={handleToggle}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();

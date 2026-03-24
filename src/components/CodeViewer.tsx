@@ -583,7 +583,7 @@ export const CodeViewer = memo(function CodeViewer() {
       {/* Content */}
       <div
         ref={contentRef}
-        style={{ flex: 1, overflow: "auto", position: "relative" }}
+        style={{ flex: 1, overflow: "auto", position: "relative", minHeight: 0 }}
       >
         {/* CODE VIEW */}
         {viewMode === "code" && (
@@ -599,27 +599,29 @@ export const CodeViewer = memo(function CodeViewer() {
               </div>
             )}
             {!loading && !error && loadedFile === codeViewerFile && (
-              <CodeMirror
-                key={codeViewerFile}
-                value={editBuffer}
-                onChange={(value) => setEditBuffer(value)}
-                onCreateEditor={(view) => { editorViewRef.current = view; }}
-                theme={oneDark}
-                extensions={extensions}
-                height="100%"
-                style={{ height: "100%" }}
-                basicSetup={{
-                  lineNumbers: true,
-                  highlightActiveLineGutter: true,
-                  highlightActiveLine: true,
-                  foldGutter: true,
-                  bracketMatching: true,
-                  closeBrackets: true,
-                  autocompletion: false,
-                  highlightSelectionMatches: true,
-                  searchKeymap: true,
-                }}
-              />
+              <div style={{ position: "absolute", inset: 0 }}>
+                <CodeMirror
+                  key={codeViewerFile}
+                  value={editBuffer}
+                  onChange={(value) => setEditBuffer(value)}
+                  onCreateEditor={(view) => { editorViewRef.current = view; }}
+                  theme={oneDark}
+                  extensions={extensions}
+                  height="100%"
+                  style={{ height: "100%" }}
+                  basicSetup={{
+                    lineNumbers: true,
+                    highlightActiveLineGutter: true,
+                    highlightActiveLine: true,
+                    foldGutter: true,
+                    bracketMatching: true,
+                    closeBrackets: true,
+                    autocompletion: false,
+                    highlightSelectionMatches: true,
+                    searchKeymap: true,
+                  }}
+                />
+              </div>
             )}
           </>
         )}
