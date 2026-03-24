@@ -13,21 +13,76 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          fetch-depth: 0
+
+      # Auto-bump patch version on every main push (skip if this is a tag push or a version bump commit)
+      - name: Auto-bump version
+        if: github.ref == 'refs/heads/main'
+        id: bump
+        run: |
+          # Skip if the last commit was an auto-version bump (prevent infinite loop)
+          LAST_MSG=$(git log -1 --pretty=%s)
+          if [[ "$LAST_MSG" == chore:\ bump\ version* ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Read current version from Cargo.toml
+          CURRENT=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+
+          # Update all three version files
+          sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+          sed -i '' "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" src-tauri/tauri.conf.json
+          sed -i '' "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" package.json
+
+          # Also update Cargo.lock
+          cd src-tauri && cargo update -p codegrid --precise "$NEW_VERSION" 2>/dev/null || true && cd ..
+
+          # Commit and tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git tag "v${NEW_VERSION}"
+          git push origin main --tags
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      # Exit early if this was a version bump commit (the tag push will trigger a new run)
+      - name: Check if should continue
+        id: check
+        run: |
+          if [[ "${{ steps.bump.outputs.skip }}" == "true" ]]; then
+            echo "continue=false" >> $GITHUB_OUTPUT
+          else
+            echo "continue=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Install Node.js
+        if: steps.check.outputs.continue == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Install Rust
+        if: steps.check.outputs.continue == 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
 
       - name: Install dependencies
+        if: steps.check.outputs.continue == 'true'
         run: npm ci
 
       - name: Import signing certificate
+        if: steps.check.outputs.continue == 'true'
         env:
           CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -43,11 +98,13 @@ jobs:
           rm certificate.p12
 
       - name: Build
+        if: steps.check.outputs.continue == 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Notarize
+        if: steps.check.outputs.continue == 'true'
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -62,28 +119,31 @@ jobs:
           xcrun stapler staple $DMG
 
       - name: Get version
+        if: steps.check.outputs.continue == 'true'
         id: version
         run: |
           VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "dmg=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg" >> $GITHUB_OUTPUT
 
-      # On version tag: create a proper versioned release on the public repo
+      # Create versioned release on the public repo
       - name: Create versioned release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.check.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          NOTES=$(awk "/^## \[${TAG#v}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md)
+          VERSION=${{ steps.version.outputs.version }}
+          TAG="v${VERSION}"
+          # Create versioned release
           gh release create "$TAG" "${{ steps.version.outputs.dmg }}" \
             --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
             --title "CodeGrid $TAG" \
-            --notes "$NOTES"
+            --notes "CodeGrid v${VERSION} — Signed and notarized for macOS." \
+            --latest || true
 
-      # On every main push: update the rolling "latest" release
+      # Also update the rolling "latest" release
       - name: Update latest release
-        if: github.ref == 'refs/heads/main'
+        if: steps.check.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
@@ -93,24 +153,19 @@ jobs:
           gh release create latest "${{ steps.version.outputs.dmg }}" \
             --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
             --title "CodeGrid (latest build)" \
-            --notes "Automatically built from the latest commit on \`main\`. Signed and notarized." \
+            --notes "Automatically built from the latest commit on \`main\`. Version ${{ steps.version.outputs.version }}. Signed and notarized." \
             --latest
 
       - name: Notify landing page
-        if: success()
+        if: steps.check.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
           VERSION=${{ steps.version.outputs.version }}
           DMG_NAME="CodeGrid_${VERSION}_aarch64.dmg"
-          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-            TAG=${GITHUB_REF#refs/tags/}
-            DOWNLOAD_URL="https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/download/${TAG}/${DMG_NAME}"
-          else
-            DOWNLOAD_URL="https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/download/latest/${DMG_NAME}"
-          fi
+          DOWNLOAD_URL="https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/download/v${VERSION}/${DMG_NAME}"
           gh api repos/isaachorowitz/CodeGrid-Landing/dispatches \
             -f event_type=update-download \
             -f "client_payload[version]=${VERSION}" \
             -f "client_payload[download_url]=${DOWNLOAD_URL}" \
-            -f "client_payload[tag]=${GITHUB_REF#refs/tags/}"
+            -f "client_payload[tag]=v${VERSION}"
