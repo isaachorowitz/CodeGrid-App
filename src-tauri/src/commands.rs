@@ -3827,3 +3827,27 @@ pub async fn close_browser_pane(
     Ok(())
 }
 
+#[derive(serde::Serialize, Clone)]
+pub struct SystemMemoryInfo {
+    pub total_memory_mb: u64,
+    pub available_memory_mb: u64,
+    pub used_memory_mb: u64,
+    pub usage_percent: f64,
+}
+
+#[tauri::command]
+pub async fn get_system_memory() -> Result<SystemMemoryInfo, String> {
+    use sysinfo::System;
+    let mut sys = System::new_all();
+    sys.refresh_memory();
+    let total = sys.total_memory() / 1_048_576;
+    let used = sys.used_memory() / 1_048_576;
+    let available = total.saturating_sub(used);
+    Ok(SystemMemoryInfo {
+        total_memory_mb: total,
+        available_memory_mb: available,
+        used_memory_mb: used,
+        usage_percent: if total > 0 { (used as f64 / total as f64) * 100.0 } else { 0.0 },
+    })
+}
+

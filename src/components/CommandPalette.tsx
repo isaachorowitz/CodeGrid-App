@@ -184,22 +184,22 @@ export const CommandPalette = memo(function CommandPalette() {
       },
     );
 
-    // Layout presets
-    const presets: { label: string; value: PresetLayout }[] = [
-      { label: "1×1", value: "1x1" },
-      { label: "2×2", value: "2x2" },
-      { label: "3×3", value: "3x3" },
-      { label: "1+2", value: "1+2" },
-      { label: "1+3", value: "1+3" },
+    // Layout modes
+    const layoutModes: { label: string; value: PresetLayout }[] = [
+      { label: "Auto", value: "auto" },
+      { label: "Focus", value: "focus" },
+      { label: "Columns", value: "columns" },
+      { label: "Rows", value: "rows" },
+      { label: "Grid", value: "grid" },
     ];
 
-    for (const p of presets) {
+    for (const p of layoutModes) {
       items.push({
         id: `layout-${p.value}`,
-        label: `Layout ${p.label}`,
+        label: `Layout: ${p.label}`,
         category: "Layouts",
         action: () => {
-          applyPreset(p.value, activeSessions.map((s) => s.id));
+          applyPreset(p.value, activeSessions.map((s) => s.id), window.innerWidth - 60, window.innerHeight - 52);
           setCommandPaletteOpen(false);
         },
       });

@@ -16,6 +16,7 @@ interface AppState {
   codeViewerFile: string | null;
   codeViewerDiffMode: boolean;
   codeViewerWorkingDir: string | null;
+  codeViewerLineNumber: number | null;
   gitManagerDir: string | null;
   mcpManagerDir: string | null;
   claudeMdDir: string | null;
@@ -34,7 +35,7 @@ interface AppState {
   setMcpManagerOpen: (open: boolean, dir?: string) => void;
   setClaudeMdEditorOpen: (open: boolean, dir?: string) => void;
   setGitSetupWizardOpen: (open: boolean) => void;
-  setCodeViewerOpen: (open: boolean, filePath?: string, opts?: { diffMode?: boolean; workingDir?: string }) => void;
+  setCodeViewerOpen: (open: boolean, filePath?: string, opts?: { diffMode?: boolean; workingDir?: string; lineNumber?: number }) => void;
   setProjectSearchOpen: (open: boolean, dir?: string) => void;
   setDependencyGraphOpen: (open: boolean, dir?: string) => void;
 }
@@ -54,6 +55,7 @@ export const useAppStore = create<AppState>((set) => ({
   codeViewerFile: null,
   codeViewerDiffMode: false,
   codeViewerWorkingDir: null,
+  codeViewerLineNumber: null,
   gitManagerDir: null,
   mcpManagerDir: null,
   claudeMdDir: null,
@@ -79,5 +81,6 @@ export const useAppStore = create<AppState>((set) => ({
     codeViewerFile: filePath ?? null,
     codeViewerDiffMode: opts?.diffMode ?? false,
     codeViewerWorkingDir: opts?.workingDir ?? null,
+    codeViewerLineNumber: opts?.lineNumber ?? null,
   }),
 }));

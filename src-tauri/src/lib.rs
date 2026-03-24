@@ -142,6 +142,8 @@ pub fn run() {
             commands::update_browser_pane_position,
             commands::navigate_browser_pane,
             commands::close_browser_pane,
+            // System info
+            commands::get_system_memory,
 
         ])
         // Intercept close (red X / Cmd+Q) → show confirmation if sessions are running.

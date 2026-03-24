@@ -18,7 +18,7 @@ export const ToastContainer = memo(function ToastContainer() {
     <div
       style={{
         position: "fixed",
-        bottom: "16px",
+        top: "48px",
         right: "16px",
         zIndex: 9999,
         display: "flex",

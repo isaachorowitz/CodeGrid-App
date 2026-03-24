@@ -17,6 +17,16 @@ function folderName(path: string): string {
   return path.split("/").pop() || path;
 }
 
+const AGENTS = [
+  { id: "claude", label: "Claude", desc: "Anthropic", color: "#ff8c00", icon: "C" },
+  { id: "codex", label: "Codex", desc: "OpenAI", color: "#10a37f", icon: "X" },
+  { id: "gemini", label: "Gemini", desc: "Google", color: "#4285f4", icon: "G" },
+  { id: "cursor", label: "Cursor", desc: "Cursor", color: "#a855f7", icon: "A" },
+  { id: "shell", label: "Shell", desc: "Terminal", color: "#4a9eff", icon: ">" },
+] as const;
+
+const FONT = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
+
 export const NewSessionDialog = memo(function NewSessionDialog({
   onCreateSession,
 }: NewSessionDialogProps) {
@@ -25,13 +35,14 @@ export const NewSessionDialog = memo(function NewSessionDialog({
   const recentDirs = useAppStore((s) => s.recentDirs);
   const addToast = useToastStore((s) => s.addToast);
 
-  // Determine the current workspace's working directory for "Same Project" quick action
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId);
   const workspaceSessions = useMemo(
     () => allSessions.filter((s) => s.workspace_id === activeWorkspaceId),
     [allSessions, activeWorkspaceId],
   );
   const currentProjectDir = activeWorkspace?.repo_path ?? workspaceSessions[0]?.working_dir ?? null;
+
+  const [showDifferentProject, setShowDifferentProject] = useState(false);
   const [tab, setTab] = useState<"recent" | "browse" | "clone" | "github">("recent");
   const [path, setPath] = useState("");
   const [cloneUrl, setCloneUrl] = useState("");
@@ -40,6 +51,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
   const [sessionType, setSessionType] = useState<"claude" | "shell" | "codex" | "gemini" | "cursor">("claude");
   const [filter, setFilter] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Repo quick status for recent dirs
   const [repoStatuses, setRepoStatuses] = useState<Record<string, RepoQuickStatus>>({});
@@ -63,12 +75,13 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       setGhSearch("");
       setGhRepos([]);
       setGhCloning(null);
+      setShowDifferentProject(false);
       setTab(recentDirs.length > 0 ? "recent" : "browse");
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [newSessionDialogOpen, recentDirs.length]);
 
-  // Default clone destination: ~/Projects
+  // Default clone destination
   useEffect(() => {
     if (!newSessionDialogOpen) return;
     (async () => {
@@ -76,20 +89,17 @@ export const NewSessionDialog = memo(function NewSessionDialog({
         const { getHomeDir } = await import("../lib/ipc");
         const home = await getHomeDir();
         setCloneTargetDir(`${home}/Projects`);
-      } catch {
-        // Keep empty and let backend fallback if home can't be resolved
-      }
+      } catch { /* fallback */ }
     })();
   }, [newSessionDialogOpen]);
 
-  // Fetch repo statuses for recent dirs (batch, non-blocking)
+  // Fetch repo statuses
   useEffect(() => {
     if (!newSessionDialogOpen || recentDirs.length === 0) return;
     let cancelled = false;
     (async () => {
       const { checkRepoStatus } = await import("../lib/ipc");
       const results: Record<string, RepoQuickStatus> = {};
-      // Process in batches of 10 to avoid flooding
       for (let i = 0; i < recentDirs.length; i += 10) {
         if (cancelled) break;
         const batch = recentDirs.slice(i, i + 10);
@@ -112,31 +122,23 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     return () => { cancelled = true; };
   }, [newSessionDialogOpen, recentDirs]);
 
-  // GitHub identity (username + orgs)
+  // GitHub identity
   const [ghIdentity, setGhIdentity] = useState<{ username: string; orgs: string[] } | null>(null);
 
-  // Load GitHub repos when tab switches to github — personal + all orgs
+  // Load GitHub repos
   useEffect(() => {
     if (tab !== "github") return;
     setGhLoading(true);
     (async () => {
       try {
         const { listGithubRepos, getGithubIdentity } = await import("../lib/ipc");
-
-        // Get identity first
         const identity = await getGithubIdentity().catch(() => null);
         if (identity) setGhIdentity(identity);
-
-        // Load personal repos
         const personalRepos = await listGithubRepos(undefined, 100);
-
-        // Load org repos in parallel
         const orgNames = identity?.orgs ?? [];
         const orgResults = await Promise.allSettled(
           orgNames.map((org) => listGithubRepos(org, 100))
         );
-
-        // Merge all repos, dedup by full_name
         const allRepos = [...personalRepos];
         const seen = new Set(allRepos.map((r) => r.full_name));
         for (const result of orgResults) {
@@ -149,7 +151,6 @@ export const NewSessionDialog = memo(function NewSessionDialog({
             }
           }
         }
-
         setGhRepos(allRepos);
       } catch (e) {
         addToast(`Failed to load GitHub repos: ${e}`, "error", 5000);
@@ -158,7 +159,7 @@ export const NewSessionDialog = memo(function NewSessionDialog({
       }
     })();
     setTimeout(() => ghSearchRef.current?.focus(), 100);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only load repos on tab switch
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   // GitHub search with debounce
@@ -166,7 +167,6 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     setGhSearch(query);
     if (ghSearchTimer.current) clearTimeout(ghSearchTimer.current);
     if (!query.trim()) {
-      // Reset to user repos
       setGhLoading(true);
       (async () => {
         try {
@@ -263,7 +263,32 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     );
   }, [recentDirs, filter]);
 
+  // Close on click outside
+  useEffect(() => {
+    if (!newSessionDialogOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setNewSessionDialogOpen(false);
+      }
+    };
+    // Delay to avoid immediate close from the click that opened it
+    const timer = setTimeout(() => document.addEventListener("mousedown", handler), 50);
+    return () => { clearTimeout(timer); document.removeEventListener("mousedown", handler); };
+  }, [newSessionDialogOpen, setNewSessionDialogOpen]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!newSessionDialogOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setNewSessionDialogOpen(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [newSessionDialogOpen, setNewSessionDialogOpen]);
+
   if (!newSessionDialogOpen) return null;
+
+  const selectedAgent = AGENTS.find((a) => a.id === sessionType) ?? AGENTS[0];
 
   const tabs = [
     { id: "recent" as const, label: "RECENT", count: filteredDirs.length },
@@ -272,7 +297,6 @@ export const NewSessionDialog = memo(function NewSessionDialog({
     { id: "clone" as const, label: "CLONE" },
   ];
 
-  // Language color map for GitHub repos
   const langColors: Record<string, string> = {
     TypeScript: "#3178c6", JavaScript: "#f7df1e", Python: "#3572a5", Rust: "#dea584",
     Go: "#00add8", Java: "#b07219", Ruby: "#701516", C: "#555555", "C++": "#f34b7d",
@@ -281,646 +305,622 @@ export const NewSessionDialog = memo(function NewSessionDialog({
   };
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 1000,
-        display: "flex",
-        justifyContent: "center",
-        paddingTop: "60px",
-      }}
-      onClick={() => setNewSessionDialogOpen(false)}
-    >
-      <div style={{ position: "absolute", inset: 0, background: "rgba(0, 0, 0, 0.6)" }} />
+    <>
+      {/* Subtle backdrop - just dims, click closes */}
       <div
-        onClick={(e) => e.stopPropagation()}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 999,
+          background: "rgba(0, 0, 0, 0.3)",
+        }}
+      />
+
+      {/* Dropdown panel anchored top-right near the + NEW button */}
+      <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label="New Session"
         style={{
-          position: "relative",
-          width: "580px",
-          maxHeight: "600px",
+          position: "fixed",
+          top: "36px",
+          right: "8px",
+          zIndex: 1000,
+          width: showDifferentProject ? "560px" : "380px",
+          maxHeight: showDifferentProject ? "calc(100vh - 60px)" : "auto",
           background: "#141414",
-          border: "1px solid #ff8c00",
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-          zIndex: 1,
+          border: "1px solid #333",
+          borderTop: `2px solid ${selectedAgent.color}`,
+          fontFamily: FONT,
           display: "flex",
           flexDirection: "column",
+          boxShadow: "0 12px 48px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,255,255,0.04)",
+          transition: "width 0.15s ease",
+          overflow: "hidden",
         }}
       >
-        {/* Header */}
-        <div style={{ padding: "12px 16px", borderBottom: "1px solid #2a2a2a" }}>
-          <div style={{ color: "#ff8c00", fontSize: "13px", fontWeight: "bold", letterSpacing: "1px" }}>
-            START A NEW SESSION
-          </div>
-          <div style={{ color: "#555555", fontSize: "10px", marginTop: "4px" }}>
-            Pick a project and start coding with Claude
-          </div>
-        </div>
-
-        {/* Session type selector */}
-        <div style={{ display: "flex", gap: "1px", padding: "8px 16px", flexWrap: "wrap" }}>
-          {([
-            { id: "claude", label: "Claude Code", desc: "Anthropic", color: "#ff8c00" },
-            { id: "codex", label: "Codex", desc: "OpenAI", color: "#10a37f" },
-            { id: "gemini", label: "Gemini", desc: "Google", color: "#4285f4" },
-            { id: "cursor", label: "Cursor Agent", desc: "Cursor", color: "#a855f7" },
-            { id: "shell", label: "Terminal", desc: "Shell", color: "#4a9eff" },
-          ] as const).map((agent) => (
-            <button
-              key={agent.id}
-              onClick={() => setSessionType(agent.id)}
-              style={{
-                flex: 1,
-                minWidth: "80px",
-                padding: "8px 4px",
-                background: sessionType === agent.id ? `${agent.color}22` : "#1e1e1e",
-                border: `1px solid ${sessionType === agent.id ? agent.color : "#2a2a2a"}`,
-                color: sessionType === agent.id ? agent.color : "#888888",
-                fontSize: "11px",
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                cursor: "pointer",
-                textAlign: "center",
-              }}
-            >
-              <div style={{ fontWeight: "bold", marginBottom: "1px" }}>{agent.label}</div>
-              <div style={{ fontSize: "8px", opacity: 0.7 }}>{agent.desc}</div>
-            </button>
-          ))}
-        </div>
-
-        {/* Same Project quick button */}
+        {/* ============================================ */}
+        {/* SECTION 1: Same Project                      */}
+        {/* ============================================ */}
         {currentProjectDir && (
-          <div style={{ padding: "8px 16px", borderBottom: "1px solid #2a2a2a" }}>
+          <div style={{ padding: "14px 16px 12px", borderBottom: "1px solid #222" }}>
+            {/* Section label */}
+            <div style={{
+              fontSize: "9px",
+              color: "#666",
+              letterSpacing: "1.5px",
+              fontWeight: "bold",
+              marginBottom: "10px",
+              textTransform: "uppercase",
+            }}>
+              Same Project
+            </div>
+
+            {/* Current project name */}
+            <div style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              marginBottom: "12px",
+            }}>
+              <div style={{
+                width: "28px",
+                height: "28px",
+                background: "#1e1e1e",
+                border: "1px solid #333",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "13px",
+                color: "#ff8c00",
+                fontWeight: "bold",
+                flexShrink: 0,
+              }}>
+                {folderName(currentProjectDir)[0]?.toUpperCase() ?? "?"}
+              </div>
+              <div style={{ overflow: "hidden" }}>
+                <div style={{ color: "#e0e0e0", fontSize: "13px", fontWeight: "bold" }}>
+                  {folderName(currentProjectDir)}
+                </div>
+                <div style={{ color: "#555", fontSize: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {shortenPath(currentProjectDir)}
+                </div>
+              </div>
+            </div>
+
+            {/* Agent type selector - pill style */}
+            <div style={{
+              display: "flex",
+              gap: "4px",
+              marginBottom: "10px",
+            }}>
+              {AGENTS.map((agent) => {
+                const selected = sessionType === agent.id;
+                return (
+                  <button
+                    key={agent.id}
+                    onClick={() => setSessionType(agent.id)}
+                    title={`${agent.label} (${agent.desc})`}
+                    style={{
+                      flex: 1,
+                      padding: "7px 2px 5px",
+                      background: selected ? `${agent.color}20` : "#1a1a1a",
+                      border: `1.5px solid ${selected ? agent.color : "#2a2a2a"}`,
+                      color: selected ? agent.color : "#666",
+                      fontSize: "10px",
+                      fontFamily: FONT,
+                      cursor: "pointer",
+                      textAlign: "center",
+                      transition: "all 0.1s ease",
+                      position: "relative",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!selected) {
+                        e.currentTarget.style.borderColor = agent.color;
+                        e.currentTarget.style.color = agent.color;
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!selected) {
+                        e.currentTarget.style.borderColor = "#2a2a2a";
+                        e.currentTarget.style.color = "#666";
+                      }
+                    }}
+                  >
+                    <div style={{ fontWeight: "bold", fontSize: "11px", marginBottom: "1px" }}>{agent.icon}</div>
+                    <div style={{ fontSize: "8px", opacity: 0.8 }}>{agent.label}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Resume toggle - only for Claude */}
+            {sessionType === "claude" && (
+              <label style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                color: "#777",
+                fontSize: "10px",
+                cursor: "pointer",
+                marginBottom: "10px",
+                padding: "0 2px",
+              }}>
+                <input
+                  type="checkbox"
+                  checked={resume}
+                  onChange={(e) => setResume(e.target.checked)}
+                  style={{ accentColor: "#ff8c00", margin: 0 }}
+                />
+                Resume previous session
+              </label>
+            )}
+
+            {/* Launch button */}
             <button
               onClick={() => handleSubmit(currentProjectDir)}
               style={{
                 width: "100%",
-                background: "#ff8c0015",
-                border: "1px solid #ff8c00",
-                color: "#ff8c00",
-                fontSize: "12px",
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                cursor: "pointer",
-                padding: "10px 12px",
+                padding: "10px",
+                background: selectedAgent.color,
+                border: "none",
+                color: "#0a0a0a",
+                fontSize: "11px",
+                fontFamily: FONT,
                 fontWeight: "bold",
-                letterSpacing: "0.5px",
+                letterSpacing: "0.8px",
+                cursor: "pointer",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                gap: "8px",
+                gap: "6px",
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.background = "#ff8c0030")}
-              onMouseLeave={(e) => (e.currentTarget.style.background = "#ff8c0015")}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.9")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
             >
-              SAME PROJECT — {currentProjectDir.split("/").pop()}
-              <span style={{ fontSize: "9px", opacity: 0.7, fontWeight: "normal" }}>
-                {currentProjectDir.replace(/^\/Users\/[^/]+/, "~").replace(/^\/home\/[^/]+/, "~")}
-              </span>
+              START {selectedAgent.label.toUpperCase()} SESSION
             </button>
           </div>
         )}
 
-        {/* Tab navigation */}
-        <div style={{ display: "flex", borderBottom: "1px solid #2a2a2a" }}>
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              style={{
-                flex: 1,
-                padding: "8px",
-                background: tab === t.id ? "#1e1e1e" : "transparent",
-                border: "none",
-                borderBottom: tab === t.id ? "2px solid #ff8c00" : "2px solid transparent",
-                color: tab === t.id ? "#ff8c00" : "#555555",
-                fontSize: "10px",
-                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                cursor: "pointer",
-                letterSpacing: "0.5px",
-              }}
-            >
-              {t.label}
-              {t.count !== undefined && (
-                <span style={{ marginLeft: "4px", opacity: 0.5 }}>({t.count})</span>
-              )}
-            </button>
-          ))}
-        </div>
+        {/* ============================================ */}
+        {/* SECTION 2: Different Project                 */}
+        {/* ============================================ */}
+        <div>
+          {/* Toggle header */}
+          <button
+            onClick={() => setShowDifferentProject(!showDifferentProject)}
+            style={{
+              width: "100%",
+              padding: "10px 16px",
+              background: showDifferentProject ? "#1a1a1a" : "transparent",
+              border: "none",
+              borderBottom: showDifferentProject ? "1px solid #222" : "none",
+              color: showDifferentProject ? "#ccc" : "#777",
+              fontSize: "9px",
+              fontFamily: FONT,
+              fontWeight: "bold",
+              letterSpacing: "1.5px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              textTransform: "uppercase",
+            }}
+            onMouseEnter={(e) => {
+              if (!showDifferentProject) e.currentTarget.style.color = "#aaa";
+              e.currentTarget.style.background = "#1a1a1a";
+            }}
+            onMouseLeave={(e) => {
+              if (!showDifferentProject) {
+                e.currentTarget.style.color = "#777";
+                e.currentTarget.style.background = "transparent";
+              }
+            }}
+          >
+            <span>Different Project</span>
+            <span style={{ fontSize: "12px", opacity: 0.6 }}>
+              {showDifferentProject ? "\u25B4" : "\u25BE"}
+            </span>
+          </button>
 
-        {/* Tab content */}
-        <div style={{ flex: 1, overflow: "auto" }}>
-          {/* Recent Projects */}
-          {tab === "recent" && (
-            <div>
-              <div style={{ padding: "8px 16px" }}>
-                <input
-                  ref={inputRef}
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  placeholder="Filter projects..."
-                  style={{
-                    width: "100%",
-                    background: "#0a0a0a",
-                    border: "1px solid #2a2a2a",
-                    color: "#e0e0e0",
-                    fontSize: "12px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    padding: "8px",
-                    outline: "none",
-                    boxSizing: "border-box",
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                />
-              </div>
-              {filteredDirs.length === 0 ? (
-                <div style={{ padding: "20px", textAlign: "center", color: "#555555", fontSize: "11px" }}>
-                  {recentDirs.length === 0
-                    ? "No projects found on your computer. Try Browse or Clone."
-                    : "No projects match your filter"}
-                </div>
-              ) : (
-                filteredDirs.map((dir) => {
-                  const status = repoStatuses[dir];
+          {/* Expanded: project picker */}
+          {showDifferentProject && (
+            <div style={{ display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 280px)" }}>
+              {/* Agent selector (compact, for different project) */}
+              <div style={{ display: "flex", gap: "2px", padding: "8px 12px", borderBottom: "1px solid #222" }}>
+                {AGENTS.map((agent) => {
+                  const selected = sessionType === agent.id;
                   return (
-                    <div
-                      key={dir}
-                      onClick={() => handleSubmit(dir)}
+                    <button
+                      key={agent.id}
+                      onClick={() => setSessionType(agent.id)}
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        padding: "10px 16px",
+                        flex: 1,
+                        padding: "4px 2px",
+                        background: selected ? `${agent.color}18` : "transparent",
+                        border: `1px solid ${selected ? agent.color : "transparent"}`,
+                        color: selected ? agent.color : "#555",
+                        fontSize: "9px",
+                        fontFamily: FONT,
+                        fontWeight: "bold",
                         cursor: "pointer",
-                        gap: "12px",
+                        textAlign: "center",
                       }}
-                      onMouseEnter={(e) => (e.currentTarget.style.background = "#1e1e1e")}
-                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.color = agent.color; }}
+                      onMouseLeave={(e) => { if (!selected) e.currentTarget.style.color = "#555"; }}
                     >
-                      <div
-                        style={{
-                          width: "32px",
-                          height: "32px",
-                          background: "#1e1e1e",
-                          border: "1px solid #2a2a2a",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: "14px",
-                          color: "#ff8c00",
-                          fontWeight: "bold",
-                          flexShrink: 0,
-                        }}
-                      >
-                        {folderName(dir)[0]?.toUpperCase() ?? "?"}
-                      </div>
-                      <div style={{ flex: 1, overflow: "hidden" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                          <span style={{ color: "#e0e0e0", fontSize: "12px", fontWeight: "bold" }}>
-                            {folderName(dir)}
-                          </span>
-                          {/* Git & remote badges */}
-                          {status?.is_git && (
-                            <span style={{
-                              fontSize: "8px",
-                              fontWeight: "bold",
-                              padding: "1px 4px",
-                              border: "1px solid #555555",
-                              color: "#888888",
-                              letterSpacing: "0.5px",
-                            }}>
-                              git
-                            </span>
-                          )}
-                          {status?.has_remote && (
-                            <span style={{
-                              fontSize: "8px",
-                              fontWeight: "bold",
-                              padding: "1px 4px",
-                              color: "#00c853",
-                              letterSpacing: "0.5px",
-                            }}>
-                              &#x21D4;
-                            </span>
-                          )}
-                          {status?.branch && (
-                            <span style={{
-                              fontSize: "9px",
-                              color: "#d500f9",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                              maxWidth: "80px",
-                            }}>
-                              {status.branch}
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          style={{
-                            color: "#555555",
-                            fontSize: "10px",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            whiteSpace: "nowrap",
-                          }}
-                        >
-                          {shortenPath(dir)}
-                        </div>
-                      </div>
-                      <div
-                        style={{
-                          color: "#ff8c00",
-                          fontSize: "10px",
-                          fontWeight: "bold",
-                          padding: "4px 8px",
-                          border: "1px solid #ff8c00",
-                          flexShrink: 0,
-                        }}
-                      >
-                        OPEN
-                      </div>
-                    </div>
+                      {agent.label}
+                    </button>
                   );
-                })
-              )}
-              {/* Footer note */}
-              <div style={{
-                padding: "10px 16px",
-                borderTop: "1px solid #1e1e1e",
-                color: "#444444",
-                fontSize: "9px",
-                textAlign: "center",
-                letterSpacing: "0.3px",
-              }}>
-                Showing projects found on your machine. Use GITHUB tab to clone from GitHub.
+                })}
               </div>
-            </div>
-          )}
 
-          {/* GitHub tab */}
-          {tab === "github" && (
-            <div>
-              <div style={{ padding: "8px 16px" }}>
-                <input
-                  ref={ghSearchRef}
-                  value={ghSearch}
-                  onChange={(e) => handleGhSearch(e.target.value)}
-                  placeholder="Search GitHub repos..."
-                  style={{
-                    width: "100%",
-                    background: "#0a0a0a",
-                    border: "1px solid #2a2a2a",
-                    color: "#e0e0e0",
-                    fontSize: "12px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    padding: "8px",
-                    outline: "none",
-                    boxSizing: "border-box",
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "#00c853")}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                />
-              </div>
-              <div style={{ padding: "0 16px 8px 16px" }}>
-                <div style={{ color: "#666666", fontSize: "9px", marginBottom: "4px", letterSpacing: "0.4px" }}>
-                  CLONE DESTINATION
-                </div>
-                <div style={{ display: "flex", gap: "4px" }}>
-                  <input
-                    value={cloneTargetDir}
-                    onChange={(e) => setCloneTargetDir(e.target.value)}
-                    placeholder="~/Projects (or absolute path)"
+              {/* Tab navigation */}
+              <div style={{ display: "flex", borderBottom: "1px solid #222" }}>
+                {tabs.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setTab(t.id)}
                     style={{
                       flex: 1,
-                      background: "#0a0a0a",
-                      border: "1px solid #2a2a2a",
-                      color: "#e0e0e0",
-                      fontSize: "11px",
-                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                      padding: "6px 8px",
-                      outline: "none",
-                    }}
-                    onFocus={(e) => (e.currentTarget.style.borderColor = "#00c853")}
-                    onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  />
-                  <button
-                    onClick={handlePickCloneDestination}
-                    style={{
-                      background: "#1e1e1e",
-                      border: "1px solid #2a2a2a",
-                      color: "#888888",
-                      fontSize: "10px",
-                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                      padding: "7px",
+                      background: tab === t.id ? "#1e1e1e" : "transparent",
+                      border: "none",
+                      borderBottom: tab === t.id ? `2px solid ${selectedAgent.color}` : "2px solid transparent",
+                      color: tab === t.id ? selectedAgent.color : "#555",
+                      fontSize: "9px",
+                      fontFamily: FONT,
                       cursor: "pointer",
-                      padding: "6px 10px",
-                      fontWeight: "bold",
+                      letterSpacing: "0.5px",
+                      fontWeight: tab === t.id ? "bold" : "normal",
                     }}
                   >
-                    BROWSE
+                    {t.label}
+                    {t.count !== undefined && (
+                      <span style={{ marginLeft: "3px", opacity: 0.5, fontSize: "8px" }}>({t.count})</span>
+                    )}
                   </button>
-                </div>
+                ))}
               </div>
-              {ghLoading && (
-                <div style={{ padding: "20px", textAlign: "center", color: "#555555", fontSize: "11px" }}>
-                  Loading...
-                </div>
-              )}
-              {/* Identity + org filter */}
-              {ghIdentity && !ghSearch && (
-                <div style={{ padding: "6px 16px", borderBottom: "1px solid #1e1e1e", display: "flex", gap: "4px", flexWrap: "wrap", alignItems: "center" }}>
-                  <span style={{ fontSize: "9px", color: "#555", marginRight: "4px" }}>SHOWING:</span>
-                  <button onClick={() => handleGhSearch("")} style={{
-                    background: "#1e1e1e", border: "1px solid #00c853", color: "#00c853",
-                    fontSize: "9px", padding: "2px 6px", cursor: "pointer", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                  }}>{ghIdentity.username}</button>
-                  {ghIdentity.orgs.map((org) => (
-                    <button key={org} style={{
-                      background: "#1e1e1e", border: "1px solid #4a9eff", color: "#4a9eff",
-                      fontSize: "9px", padding: "2px 6px", cursor: "default", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    }}>{org}</button>
-                  ))}
-                  <span style={{ fontSize: "9px", color: "#444", marginLeft: "auto" }}>{ghRepos.length} repos</span>
-                </div>
-              )}
-              {!ghLoading && ghRepos.length === 0 && (
-                <div style={{ padding: "20px", textAlign: "center", color: "#555555", fontSize: "11px" }}>
-                  {ghSearch ? "No repos found. Try a different search." : "No repos found. Make sure GitHub CLI is authenticated."}
-                </div>
-              )}
-              {!ghLoading && ghRepos.map((repo) => (
-                <div
-                  key={repo.full_name}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    padding: "10px 16px",
-                    gap: "12px",
-                    borderBottom: "1px solid #1a1a1a",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "#1e1e1e")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-                >
-                  <div style={{ flex: 1, overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <span style={{ color: "#e0e0e0", fontSize: "12px", fontWeight: "bold" }}>
-                        {repo.name}
-                      </span>
-                      {repo.is_private && (
-                        <span style={{
-                          fontSize: "8px", padding: "1px 4px", border: "1px solid #ff8c00",
-                          color: "#ff8c00", fontWeight: "bold",
-                        }}>PRIVATE</span>
-                      )}
-                      {repo.is_fork && (
-                        <span style={{
-                          fontSize: "8px", padding: "1px 4px", border: "1px solid #555555",
-                          color: "#555555",
-                        }}>FORK</span>
-                      )}
-                      {repo.language && (
-                        <span style={{
-                          fontSize: "9px",
-                          color: langColors[repo.language] ?? "#888888",
-                          fontWeight: "bold",
-                        }}>
-                          {repo.language}
-                        </span>
-                      )}
+
+              {/* Tab content */}
+              <div style={{ flex: 1, overflow: "auto", maxHeight: "340px" }}>
+                {/* Recent Projects */}
+                {tab === "recent" && (
+                  <div>
+                    <div style={{ padding: "8px 12px" }}>
+                      <input
+                        ref={inputRef}
+                        value={filter}
+                        onChange={(e) => setFilter(e.target.value)}
+                        placeholder="Filter projects..."
+                        style={{
+                          width: "100%",
+                          background: "#0a0a0a",
+                          border: "1px solid #2a2a2a",
+                          color: "#e0e0e0",
+                          fontSize: "11px",
+                          fontFamily: FONT,
+                          padding: "7px 8px",
+                          outline: "none",
+                          boxSizing: "border-box",
+                        }}
+                        onFocus={(e) => (e.currentTarget.style.borderColor = selectedAgent.color)}
+                        onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                      />
                     </div>
-                    {repo.description && (
-                      <div style={{
-                        color: "#666666", fontSize: "10px", marginTop: "2px",
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                      }}>
-                        {repo.description}
+                    {filteredDirs.length === 0 ? (
+                      <div style={{ padding: "20px", textAlign: "center", color: "#555", fontSize: "10px" }}>
+                        {recentDirs.length === 0
+                          ? "No projects found. Try Browse or Clone."
+                          : "No projects match your filter"}
+                      </div>
+                    ) : (
+                      filteredDirs.map((dir) => {
+                        const status = repoStatuses[dir];
+                        return (
+                          <div
+                            key={dir}
+                            onClick={() => handleSubmit(dir)}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              padding: "8px 12px",
+                              cursor: "pointer",
+                              gap: "10px",
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = "#1e1e1e")}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                          >
+                            <div style={{
+                              width: "26px", height: "26px",
+                              background: "#1e1e1e", border: "1px solid #2a2a2a",
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              fontSize: "12px", color: selectedAgent.color, fontWeight: "bold", flexShrink: 0,
+                            }}>
+                              {folderName(dir)[0]?.toUpperCase() ?? "?"}
+                            </div>
+                            <div style={{ flex: 1, overflow: "hidden" }}>
+                              <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                                <span style={{ color: "#e0e0e0", fontSize: "11px", fontWeight: "bold" }}>
+                                  {folderName(dir)}
+                                </span>
+                                {status?.is_git && (
+                                  <span style={{ fontSize: "7px", fontWeight: "bold", padding: "1px 3px", border: "1px solid #555", color: "#888", letterSpacing: "0.5px" }}>git</span>
+                                )}
+                                {status?.has_remote && (
+                                  <span style={{ fontSize: "8px", fontWeight: "bold", color: "#00c853" }}>&#x21D4;</span>
+                                )}
+                                {status?.branch && (
+                                  <span style={{ fontSize: "8px", color: "#d500f9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "70px" }}>{status.branch}</span>
+                                )}
+                              </div>
+                              <div style={{ color: "#555", fontSize: "9px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {shortenPath(dir)}
+                              </div>
+                            </div>
+                            <div style={{
+                              color: selectedAgent.color, fontSize: "9px", fontWeight: "bold",
+                              padding: "3px 6px", border: `1px solid ${selectedAgent.color}`, flexShrink: 0,
+                            }}>
+                              OPEN
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+
+                {/* GitHub tab */}
+                {tab === "github" && (
+                  <div>
+                    <div style={{ padding: "8px 12px" }}>
+                      <input
+                        ref={ghSearchRef}
+                        value={ghSearch}
+                        onChange={(e) => handleGhSearch(e.target.value)}
+                        placeholder="Search GitHub repos..."
+                        style={{
+                          width: "100%",
+                          background: "#0a0a0a",
+                          border: "1px solid #2a2a2a",
+                          color: "#e0e0e0",
+                          fontSize: "11px",
+                          fontFamily: FONT,
+                          padding: "7px 8px",
+                          outline: "none",
+                          boxSizing: "border-box",
+                        }}
+                        onFocus={(e) => (e.currentTarget.style.borderColor = "#00c853")}
+                        onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                      />
+                    </div>
+                    <div style={{ padding: "0 12px 6px 12px" }}>
+                      <div style={{ color: "#666", fontSize: "8px", marginBottom: "3px", letterSpacing: "0.4px" }}>CLONE DESTINATION</div>
+                      <div style={{ display: "flex", gap: "3px" }}>
+                        <input
+                          value={cloneTargetDir}
+                          onChange={(e) => setCloneTargetDir(e.target.value)}
+                          placeholder="~/Projects"
+                          style={{
+                            flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a",
+                            color: "#e0e0e0", fontSize: "10px", fontFamily: FONT,
+                            padding: "5px 6px", outline: "none",
+                          }}
+                          onFocus={(e) => (e.currentTarget.style.borderColor = "#00c853")}
+                          onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                        />
+                        <button
+                          onClick={handlePickCloneDestination}
+                          style={{
+                            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+                            fontSize: "9px", fontFamily: FONT, cursor: "pointer", padding: "5px 8px", fontWeight: "bold",
+                          }}
+                        >PICK</button>
+                      </div>
+                    </div>
+                    {ghLoading && (
+                      <div style={{ padding: "16px", textAlign: "center", color: "#555", fontSize: "10px" }}>Loading...</div>
+                    )}
+                    {ghIdentity && !ghSearch && (
+                      <div style={{ padding: "5px 12px", borderBottom: "1px solid #1e1e1e", display: "flex", gap: "3px", flexWrap: "wrap", alignItems: "center" }}>
+                        <span style={{ fontSize: "8px", color: "#555", marginRight: "3px" }}>SHOWING:</span>
+                        <button onClick={() => handleGhSearch("")} style={{
+                          background: "#1e1e1e", border: "1px solid #00c853", color: "#00c853",
+                          fontSize: "8px", padding: "1px 5px", cursor: "pointer", fontFamily: FONT,
+                        }}>{ghIdentity.username}</button>
+                        {ghIdentity.orgs.map((org) => (
+                          <button key={org} style={{
+                            background: "#1e1e1e", border: "1px solid #4a9eff", color: "#4a9eff",
+                            fontSize: "8px", padding: "1px 5px", cursor: "default", fontFamily: FONT,
+                          }}>{org}</button>
+                        ))}
+                        <span style={{ fontSize: "8px", color: "#444", marginLeft: "auto" }}>{ghRepos.length} repos</span>
                       </div>
                     )}
-                    <div style={{ color: "#444444", fontSize: "9px", marginTop: "2px" }}>
-                      {repo.full_name}
-                      {repo.stars > 0 && <span style={{ marginLeft: "8px" }}>* {repo.stars}</span>}
-                    </div>
+                    {!ghLoading && ghRepos.length === 0 && (
+                      <div style={{ padding: "16px", textAlign: "center", color: "#555", fontSize: "10px" }}>
+                        {ghSearch ? "No repos found." : "No repos found. Ensure GitHub CLI is authenticated."}
+                      </div>
+                    )}
+                    {!ghLoading && ghRepos.map((repo) => (
+                      <div
+                        key={repo.full_name}
+                        style={{
+                          display: "flex", alignItems: "center", padding: "8px 12px",
+                          gap: "10px", borderBottom: "1px solid #1a1a1a",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "#1e1e1e")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                      >
+                        <div style={{ flex: 1, overflow: "hidden" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                            <span style={{ color: "#e0e0e0", fontSize: "11px", fontWeight: "bold" }}>{repo.name}</span>
+                            {repo.is_private && (
+                              <span style={{ fontSize: "7px", padding: "1px 3px", border: "1px solid #ff8c00", color: "#ff8c00", fontWeight: "bold" }}>PRIVATE</span>
+                            )}
+                            {repo.is_fork && (
+                              <span style={{ fontSize: "7px", padding: "1px 3px", border: "1px solid #555", color: "#555" }}>FORK</span>
+                            )}
+                            {repo.language && (
+                              <span style={{ fontSize: "8px", color: langColors[repo.language] ?? "#888", fontWeight: "bold" }}>{repo.language}</span>
+                            )}
+                          </div>
+                          {repo.description && (
+                            <div style={{ color: "#666", fontSize: "9px", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {repo.description}
+                            </div>
+                          )}
+                          <div style={{ color: "#444", fontSize: "8px", marginTop: "1px" }}>
+                            {repo.full_name}
+                            {repo.stars > 0 && <span style={{ marginLeft: "6px" }}>* {repo.stars}</span>}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleGhCloneAndOpen(repo)}
+                          disabled={ghCloning !== null}
+                          style={{
+                            background: ghCloning === repo.full_name ? "#2a2a2a" : "#00c853",
+                            border: "none",
+                            color: ghCloning === repo.full_name ? "#555" : "#0a0a0a",
+                            fontSize: "8px", fontFamily: FONT,
+                            cursor: ghCloning !== null ? "default" : "pointer",
+                            padding: "5px 8px", fontWeight: "bold", letterSpacing: "0.5px",
+                            flexShrink: 0, whiteSpace: "nowrap",
+                          }}
+                        >
+                          {ghCloning === repo.full_name ? "CLONING..." : "CLONE & OPEN"}
+                        </button>
+                      </div>
+                    ))}
                   </div>
-                  <button
-                    onClick={() => handleGhCloneAndOpen(repo)}
-                    disabled={ghCloning !== null}
-                    style={{
-                      background: ghCloning === repo.full_name ? "#2a2a2a" : "#00c853",
-                      border: "none",
-                      color: ghCloning === repo.full_name ? "#555555" : "#0a0a0a",
-                      fontSize: "9px",
-                      fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                      cursor: ghCloning !== null ? "default" : "pointer",
-                      padding: "6px 10px",
-                      fontWeight: "bold",
-                      letterSpacing: "0.5px",
-                      flexShrink: 0,
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {ghCloning === repo.full_name ? "CLONING..." : "CLONE & OPEN"}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+                )}
 
-          {/* Browse folder */}
-          {tab === "browse" && (
-            <div style={{ padding: "16px" }}>
-              <div style={{ color: "#888888", fontSize: "10px", marginBottom: "6px", letterSpacing: "0.5px" }}>
-                FOLDER PATH
-              </div>
-              <div style={{ display: "flex", gap: "4px", marginBottom: "16px" }}>
-                <input
-                  ref={tab === "browse" ? inputRef : undefined}
-                  value={path}
-                  onChange={(e) => setPath(e.target.value)}
-                  placeholder="~/projects/my-app"
-                  style={{
-                    flex: 1,
-                    background: "#0a0a0a",
-                    border: "1px solid #2a2a2a",
-                    color: "#e0e0e0",
-                    fontSize: "13px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    padding: "10px",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSubmit();
-                  }}
-                />
-                <button
-                  onClick={handleBrowse}
-                  style={{
-                    background: "#1e1e1e",
-                    border: "1px solid #2a2a2a",
-                    color: "#888888",
-                    fontSize: "12px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    cursor: "pointer",
-                    padding: "10px 16px",
-                    fontWeight: "bold",
-                  }}
-                >
-                  BROWSE
-                </button>
-              </div>
+                {/* Browse folder */}
+                {tab === "browse" && (
+                  <div style={{ padding: "12px" }}>
+                    <div style={{ color: "#888", fontSize: "9px", marginBottom: "5px", letterSpacing: "0.5px" }}>FOLDER PATH</div>
+                    <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
+                      <input
+                        ref={tab === "browse" ? inputRef : undefined}
+                        value={path}
+                        onChange={(e) => setPath(e.target.value)}
+                        placeholder="~/projects/my-app"
+                        style={{
+                          flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a",
+                          color: "#e0e0e0", fontSize: "12px", fontFamily: FONT, padding: "8px", outline: "none",
+                        }}
+                        onFocus={(e) => (e.currentTarget.style.borderColor = selectedAgent.color)}
+                        onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleSubmit(); }}
+                      />
+                      <button
+                        onClick={handleBrowse}
+                        style={{
+                          background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+                          fontSize: "10px", fontFamily: FONT, cursor: "pointer", padding: "8px 12px", fontWeight: "bold",
+                        }}
+                      >BROWSE</button>
+                    </div>
 
-              {sessionType === "claude" && (
-                <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "16px" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "8px", color: "#888888", fontSize: "11px", cursor: "pointer" }}>
-                    <input type="checkbox" checked={resume} onChange={(e) => setResume(e.target.checked)} style={{ accentColor: "#ff8c00" }} />
-                    Resume previous Claude session
-                  </label>
-                </div>
-              )}
+                    {sessionType === "claude" && (
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", color: "#777", fontSize: "10px", cursor: "pointer", marginBottom: "12px" }}>
+                        <input type="checkbox" checked={resume} onChange={(e) => setResume(e.target.checked)} style={{ accentColor: "#ff8c00", margin: 0 }} />
+                        Resume previous session
+                      </label>
+                    )}
 
-              <button
-                onClick={() => handleSubmit()}
-                style={{
-                  width: "100%",
-                  background: "#ff8c00",
-                  border: "none",
-                  color: "#0a0a0a",
-                  fontSize: "12px",
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                  cursor: "pointer",
-                  padding: "12px",
-                  fontWeight: "bold",
-                  letterSpacing: "1px",
-                }}
-              >
-                START {sessionType.toUpperCase()} SESSION
-              </button>
-            </div>
-          )}
+                    <button
+                      onClick={() => handleSubmit()}
+                      style={{
+                        width: "100%", background: selectedAgent.color, border: "none",
+                        color: "#0a0a0a", fontSize: "11px", fontFamily: FONT, cursor: "pointer",
+                        padding: "10px", fontWeight: "bold", letterSpacing: "0.8px",
+                      }}
+                    >
+                      START {selectedAgent.label.toUpperCase()} SESSION
+                    </button>
+                  </div>
+                )}
 
-          {/* Clone repo */}
-          {tab === "clone" && (
-            <div style={{ padding: "16px" }}>
-              <div style={{ color: "#888888", fontSize: "10px", marginBottom: "6px", letterSpacing: "0.5px" }}>
-                GIT REPOSITORY URL
+                {/* Clone repo */}
+                {tab === "clone" && (
+                  <div style={{ padding: "12px" }}>
+                    <div style={{ color: "#888", fontSize: "9px", marginBottom: "5px", letterSpacing: "0.5px" }}>GIT REPOSITORY URL</div>
+                    <input
+                      ref={tab === "clone" ? inputRef : undefined}
+                      value={cloneUrl}
+                      onChange={(e) => setCloneUrl(e.target.value)}
+                      placeholder="https://github.com/user/repo"
+                      style={{
+                        width: "100%", background: "#0a0a0a", border: "1px solid #2a2a2a",
+                        color: "#e0e0e0", fontSize: "12px", fontFamily: FONT, padding: "8px",
+                        outline: "none", boxSizing: "border-box", marginBottom: "10px",
+                      }}
+                      onFocus={(e) => (e.currentTarget.style.borderColor = selectedAgent.color)}
+                      onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleClone(); }}
+                    />
+                    <div style={{ color: "#888", fontSize: "9px", marginBottom: "5px", letterSpacing: "0.5px" }}>DESTINATION FOLDER</div>
+                    <div style={{ display: "flex", gap: "4px", marginBottom: "10px" }}>
+                      <input
+                        value={cloneTargetDir}
+                        onChange={(e) => setCloneTargetDir(e.target.value)}
+                        placeholder="~/Projects"
+                        style={{
+                          flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a",
+                          color: "#e0e0e0", fontSize: "12px", fontFamily: FONT, padding: "8px", outline: "none",
+                        }}
+                        onFocus={(e) => (e.currentTarget.style.borderColor = selectedAgent.color)}
+                        onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                      />
+                      <button
+                        onClick={handlePickCloneDestination}
+                        style={{
+                          background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+                          fontSize: "10px", fontFamily: FONT, cursor: "pointer", padding: "8px 10px", fontWeight: "bold",
+                        }}
+                      >BROWSE</button>
+                    </div>
+                    <button
+                      onClick={handleClone}
+                      disabled={!cloneUrl.trim()}
+                      style={{
+                        width: "100%",
+                        background: cloneUrl.trim() ? selectedAgent.color : "#2a2a2a",
+                        border: "none",
+                        color: cloneUrl.trim() ? "#0a0a0a" : "#555",
+                        fontSize: "11px", fontFamily: FONT,
+                        cursor: cloneUrl.trim() ? "pointer" : "default",
+                        padding: "10px", fontWeight: "bold", letterSpacing: "0.8px", marginBottom: "6px",
+                      }}
+                    >
+                      CLONE & START
+                    </button>
+                    <button
+                      onClick={() => {
+                        setNewSessionDialogOpen(false);
+                        useAppStore.getState().setHubBrowserOpen(true);
+                      }}
+                      style={{
+                        width: "100%", background: "transparent", border: "1px solid #2a2a2a",
+                        color: "#888", fontSize: "10px", fontFamily: FONT, cursor: "pointer", padding: "8px",
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.borderColor = selectedAgent.color; e.currentTarget.style.color = selectedAgent.color; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#2a2a2a"; e.currentTarget.style.color = "#888"; }}
+                    >
+                      Browse Featured Repos in Hub
+                    </button>
+                  </div>
+                )}
               </div>
-              <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
-                <input
-                  ref={tab === "clone" ? inputRef : undefined}
-                  value={cloneUrl}
-                  onChange={(e) => setCloneUrl(e.target.value)}
-                  placeholder="https://github.com/user/repo"
-                  style={{
-                    flex: 1,
-                    background: "#0a0a0a",
-                    border: "1px solid #2a2a2a",
-                    color: "#e0e0e0",
-                    fontSize: "13px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    padding: "10px",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleClone();
-                  }}
-                />
-              </div>
-              <div style={{ color: "#888888", fontSize: "10px", marginBottom: "6px", letterSpacing: "0.5px" }}>
-                DESTINATION FOLDER
-              </div>
-              <div style={{ display: "flex", gap: "4px", marginBottom: "10px" }}>
-                <input
-                  value={cloneTargetDir}
-                  onChange={(e) => setCloneTargetDir(e.target.value)}
-                  placeholder="~/Projects (or absolute path)"
-                  style={{
-                    flex: 1,
-                    background: "#0a0a0a",
-                    border: "1px solid #2a2a2a",
-                    color: "#e0e0e0",
-                    fontSize: "13px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    padding: "10px",
-                    outline: "none",
-                  }}
-                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
-                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
-                />
-                <button
-                  onClick={handlePickCloneDestination}
-                  style={{
-                    background: "#1e1e1e",
-                    border: "1px solid #2a2a2a",
-                    color: "#888888",
-                    fontSize: "11px",
-                    fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                    cursor: "pointer",
-                    padding: "10px 12px",
-                    fontWeight: "bold",
-                  }}
-                >
-                  BROWSE
-                </button>
-              </div>
-              <div style={{ color: "#555555", fontSize: "10px", marginBottom: "16px" }}>
-                Repo will be saved in this folder and then opened automatically
-              </div>
-              <button
-                onClick={handleClone}
-                disabled={!cloneUrl.trim()}
-                style={{
-                  width: "100%",
-                  background: cloneUrl.trim() ? "#ff8c00" : "#2a2a2a",
-                  border: "none",
-                  color: cloneUrl.trim() ? "#0a0a0a" : "#555555",
-                  fontSize: "12px",
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                  cursor: cloneUrl.trim() ? "pointer" : "default",
-                  padding: "12px",
-                  fontWeight: "bold",
-                  letterSpacing: "1px",
-                }}
-              >
-                CLONE & START
-              </button>
-
-              {/* Quick hub link */}
-              <button
-                onClick={() => {
-                  setNewSessionDialogOpen(false);
-                  useAppStore.getState().setHubBrowserOpen(true);
-                }}
-                style={{
-                  width: "100%",
-                  background: "transparent",
-                  border: "1px solid #2a2a2a",
-                  color: "#888888",
-                  fontSize: "11px",
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
-                  cursor: "pointer",
-                  padding: "10px",
-                  marginTop: "8px",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = "#ff8c00";
-                  e.currentTarget.style.color = "#ff8c00";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = "#2a2a2a";
-                  e.currentTarget.style.color = "#888888";
-                }}
-              >
-                Browse Featured Repos in Hub
-              </button>
             </div>
           )}
         </div>
       </div>
-    </div>
+    </>
   );
 });

@@ -660,6 +660,19 @@ export async function closeBrowserPane(paneId: string): Promise<void> {
   return invoke("close_browser_pane", { paneId });
 }
 
+// === System Memory ===
+
+export interface SystemMemoryInfo {
+  total_memory_mb: number;
+  available_memory_mb: number;
+  used_memory_mb: number;
+  usage_percent: number;
+}
+
+export async function getSystemMemory(): Promise<SystemMemoryInfo> {
+  return invoke("get_system_memory");
+}
+
 // Event listeners
 export function onPtyOutput(
   callback: (data: PtyOutput) => void,

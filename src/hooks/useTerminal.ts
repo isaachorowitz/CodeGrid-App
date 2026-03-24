@@ -7,12 +7,15 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { CODEGRID_DARK } from "../lib/themes";
+import { useResourceStore } from "../stores/resourceStore";
+import { useSessionStore } from "../stores/sessionStore";
 
 interface UseTerminalOptions {
   onData: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
   fontSize?: number;
   fontFamily?: string;
+  agentColor?: string;
 }
 
 export function useTerminal(
@@ -67,14 +70,24 @@ export function useTerminal(
 
     disposedRef.current = false;
 
+    // Build scrollbar colors from agent color (default to theme accent)
+    const ac = options.agentColor ?? "#ff8c00";
+    const scrollbarTheme = {
+      scrollbarSliderBackground: ac + "40",        // 25% opacity
+      scrollbarSliderHoverBackground: ac + "80",   // 50% opacity
+      scrollbarSliderActiveBackground: ac + "b3",  // 70% opacity
+    };
+
     const terminal = new Terminal({
-      theme: CODEGRID_DARK.terminal,
+      theme: { ...CODEGRID_DARK.terminal, ...scrollbarTheme },
       fontSize: options.fontSize ?? 13,
       fontFamily: options.fontFamily ?? "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
       cursorBlink: true,
       /* Bar reads more reliably than block when the renderer draws the cursor. */
       cursorStyle: "bar",
-      scrollback: 50000,
+      scrollback: useResourceStore.getState().getScrollbackForCount(
+        useSessionStore.getState().sessions.length,
+      ),
       allowProposedApi: true,
       convertEol: true,
       macOptionIsMeta: true,

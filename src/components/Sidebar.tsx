@@ -158,6 +158,8 @@ const GitPanel = memo(function GitPanel({
   const [aiGenerating, setAiGenerating] = useState(false);
   const [publishLoading, setPublishLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
+  const [discardConfirmOpen, setDiscardConfirmOpen] = useState(false);
+  const [discardLoading, setDiscardLoading] = useState(false);
   const [branches, setBranches] = useState<GitBranchInfo[]>([]);
   const [logEntries, setLogEntries] = useState<GitLogEntry[]>([]);
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
@@ -581,19 +583,7 @@ const GitPanel = memo(function GitPanel({
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >STAGE ALL</button>
               <button
-                onClick={async () => {
-                  if (!dir) return;
-                  if (!window.confirm("Discard ALL changes? This cannot be undone.")) return;
-                  try {
-                    const allFiles = [
-                      ...workspaceGitStatus!.unstaged.map((c) => c.path),
-                      ...workspaceGitStatus!.untracked,
-                    ];
-                    for (const f of allFiles) { await gitDiscardFile(dir, f); }
-                    addToast("All changes discarded", "success");
-                    onRefreshGit();
-                  } catch (e) { addToast(`Discard failed: ${e}`, "error"); }
-                }}
+                onClick={() => setDiscardConfirmOpen(true)}
                 style={{ flex: 1, padding: "4px 6px", background: "transparent", border: "1px solid #ff3d0066", color: "#ff3d00", fontSize: "9px", fontWeight: "bold", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer", letterSpacing: "0.5px" }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "#ff3d0022"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
@@ -1035,6 +1025,100 @@ const GitPanel = memo(function GitPanel({
           </div>
         )}
       </div>
+
+      {/* Discard All Confirmation Dialog */}
+      {discardConfirmOpen && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 99999,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.6)", backdropFilter: "blur(2px)",
+          }}
+          onClick={() => { if (!discardLoading) setDiscardConfirmOpen(false); }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#1a1a1a", border: "1px solid #ff3d00", borderRadius: "8px",
+              padding: "20px 24px", maxWidth: "380px", width: "90%",
+              boxShadow: "0 8px 32px rgba(255,61,0,0.15), 0 0 0 1px rgba(255,61,0,0.1)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+              <span style={{ fontSize: "16px", color: "#ff3d00" }}>&#9888;</span>
+              <span style={{
+                color: "#ff3d00", fontSize: "13px", fontWeight: "bold", letterSpacing: "0.5px",
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+              }}>
+                DISCARD ALL CHANGES
+              </span>
+            </div>
+            <p style={{ color: "#cccccc", fontSize: "12px", lineHeight: "1.5", margin: "0 0 6px" }}>
+              This will permanently discard <strong style={{ color: "#ffffff" }}>{totalChanges} file{totalChanges === 1 ? "" : "s"}</strong> with unsaved changes. This action cannot be undone.
+            </p>
+            <p style={{ color: "#888888", fontSize: "10px", margin: "0 0 18px" }}>
+              {workspaceGitStatus!.staged.length > 0 && <span>{workspaceGitStatus!.staged.length} staged, </span>}
+              {workspaceGitStatus!.unstaged.length > 0 && <span>{workspaceGitStatus!.unstaged.length} modified, </span>}
+              {workspaceGitStatus!.untracked.length > 0 && <span>{workspaceGitStatus!.untracked.length} untracked</span>}
+            </p>
+            <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setDiscardConfirmOpen(false)}
+                disabled={discardLoading}
+                style={{
+                  padding: "6px 16px", background: "transparent", border: "1px solid #444444",
+                  color: "#cccccc", fontSize: "11px", fontWeight: "bold", cursor: "pointer",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  borderRadius: "4px", letterSpacing: "0.3px",
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#ffffff0a"; e.currentTarget.style.borderColor = "#666666"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "#444444"; }}
+              >
+                CANCEL
+              </button>
+              <button
+                onClick={async () => {
+                  if (!dir) return;
+                  setDiscardLoading(true);
+                  try {
+                    // Unstage staged files first, then discard
+                    for (const c of workspaceGitStatus!.staged) {
+                      await gitUnstageFile(dir, c.path);
+                    }
+                    const allFiles = [
+                      ...workspaceGitStatus!.staged.map((c) => c.path),
+                      ...workspaceGitStatus!.unstaged.map((c) => c.path),
+                      ...workspaceGitStatus!.untracked,
+                    ];
+                    // Deduplicate (a file can appear in both staged and unstaged)
+                    const unique = [...new Set(allFiles)];
+                    for (const f of unique) { await gitDiscardFile(dir, f); }
+                    addToast("All changes discarded", "success");
+                    onRefreshGit();
+                    setDiscardConfirmOpen(false);
+                  } catch (e) {
+                    addToast(`Discard failed: ${e}`, "error");
+                  } finally {
+                    setDiscardLoading(false);
+                  }
+                }}
+                disabled={discardLoading}
+                style={{
+                  padding: "6px 16px", background: discardLoading ? "#661a00" : "#cc2200",
+                  border: "1px solid #ff3d00", color: "#ffffff", fontSize: "11px", fontWeight: "bold",
+                  cursor: discardLoading ? "default" : "pointer",
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
+                  borderRadius: "4px", letterSpacing: "0.3px",
+                }}
+                onMouseEnter={(e) => { if (!discardLoading) e.currentTarget.style.background = "#ff3d00"; }}
+                onMouseLeave={(e) => { if (!discardLoading) e.currentTarget.style.background = "#cc2200"; }}
+              >
+                {discardLoading ? "DISCARDING..." : "DISCARD ALL"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -1173,7 +1257,7 @@ const SettingsPanel = memo(function SettingsPanel() {
 const PANEL_WIDTHS: Record<string, number> = {
   files: 286,
   search: 286,
-  git: 312,
+  git: 286,
   settings: 286,
 };
 

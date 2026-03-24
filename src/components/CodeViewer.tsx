@@ -161,7 +161,7 @@ const customTheme = EditorView.theme({
 export const CodeViewer = memo(function CodeViewer() {
   const {
     codeViewerOpen, codeViewerFile, codeViewerDiffMode, codeViewerWorkingDir,
-    setCodeViewerOpen,
+    codeViewerLineNumber, setCodeViewerOpen,
   } = useAppStore();
 
   const [content, setContent] = useState<string>("");
@@ -180,6 +180,7 @@ export const CodeViewer = memo(function CodeViewer() {
 
   const contentRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
 
   // Sync viewMode with diffMode from store.
   useEffect(() => {
@@ -264,6 +265,27 @@ export const CodeViewer = memo(function CodeViewer() {
       fetchDiff();
     }
   }, [viewMode, codeViewerOpen, codeViewerFile, fetchDiff]);
+
+  // Scroll to target line number when content is loaded
+  useEffect(() => {
+    if (!codeViewerOpen || !codeViewerLineNumber || loading || viewMode !== "code") return;
+    // Small delay to let CodeMirror render
+    const timer = setTimeout(() => {
+      const view = editorViewRef.current;
+      if (view) {
+        const lineNum = Math.min(codeViewerLineNumber, view.state.doc.lines);
+        if (lineNum > 0) {
+          const line = view.state.doc.line(lineNum);
+          view.dispatch({
+            selection: { anchor: line.from, head: line.to },
+            effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+          });
+          view.focus();
+        }
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [codeViewerOpen, codeViewerLineNumber, loading, viewMode, content]);
 
   // ESC to close
   useEffect(() => {
@@ -568,6 +590,7 @@ export const CodeViewer = memo(function CodeViewer() {
               <CodeMirror
                 value={editBuffer}
                 onChange={(value) => setEditBuffer(value)}
+                onCreateEditor={(view) => { editorViewRef.current = view; }}
                 theme={oneDark}
                 extensions={extensions}
                 height="100%"

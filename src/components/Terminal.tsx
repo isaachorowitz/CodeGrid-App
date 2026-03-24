@@ -13,11 +13,12 @@ import { detectActivity, detectAttentionNeeded } from "../lib/terminalActivity";
 
 interface TerminalProps {
   sessionId: string;
+  agentColor?: string;
 }
 
 type SessionStatus = "idle" | "running" | "waiting" | "error" | "dead";
 
-export const TerminalView = memo(function TerminalView({ sessionId }: TerminalProps) {
+export const TerminalView = memo(function TerminalView({ sessionId, agentColor }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,6 +69,7 @@ export const TerminalView = memo(function TerminalView({ sessionId }: TerminalPr
   const { write, fit, focus, searchAddon } = useTerminal(containerRef, {
     onData: handleData,
     onResize: handleResize,
+    agentColor,
   });
 
   const flushOutput = useCallback(() => {

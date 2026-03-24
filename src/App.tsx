@@ -38,7 +38,10 @@ import {
   getSetting,
   getPersistedSessions,
   clearPersistedSessions,
+  getSystemMemory,
 } from "./lib/ipc";
+import { useResourceStore } from "./stores/resourceStore";
+import { ResourceWarningDialog } from "./components/ResourceWarningDialog";
 
 export default function App() {
   const {
@@ -63,6 +66,15 @@ export default function App() {
   const addToast = useToastStore((s) => s.addToast);
   const attentionCooldownRef = useRef<Record<string, number>>({});
   const initRef = useRef(false);
+  const prevWarningLevelRef = useRef<string>("none");
+  const [resourceWarningOpen, setResourceWarningOpen] = useState(false);
+  const [pendingSession, setPendingSession] = useState<{
+    workingDir: string;
+    useWorktree: boolean;
+    resume: boolean;
+    isShell: boolean;
+    sessionType?: string;
+  } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
@@ -272,6 +284,50 @@ export default function App() {
     return () => window.removeEventListener("codegrid:session-attention", handler);
   }, [addToast]);
 
+  // Memory polling — fetch system memory every 30s and feed into resource store
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const info = await getSystemMemory();
+        if (!cancelled) useResourceStore.getState().updateMemory(info);
+      } catch (e) {
+        console.warn("Failed to poll system memory:", e);
+      }
+    };
+    poll(); // immediate first poll
+    const interval = setInterval(poll, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  // Session count tracking — count shells vs agents and update resource store
+  useEffect(() => {
+    const agentKeywords = ["claude", "codex", "gemini", "cursor", "agent"];
+    let shellCount = 0;
+    let agentCount = 0;
+    for (const s of allSessions) {
+      const cmd = (s.command ?? "").toLowerCase();
+      if (agentKeywords.some((kw) => cmd.includes(kw))) {
+        agentCount++;
+      } else {
+        shellCount++;
+      }
+    }
+    useResourceStore.getState().updateSessionCounts(shellCount, agentCount);
+  }, [allSessions]);
+
+  // Soft warning toast when warningLevel transitions to "soft"
+  useEffect(() => {
+    const unsub = useResourceStore.subscribe((state) => {
+      const level = state.warningLevel;
+      if (level === "soft" && prevWarningLevelRef.current !== "soft") {
+        addToast("System memory is running low. Consider closing unused sessions.", "warning", 8000);
+      }
+      prevWarningLevelRef.current = level;
+    });
+    return unsub;
+  }, [addToast]);
+
   // New workspace events
   useEffect(() => {
     const handler = async () => {
@@ -306,22 +362,29 @@ export default function App() {
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean, sessionType?: string) => {
       if (!activeWorkspaceId) return;
 
+      // License cap: only enforce for trial/expired users
       const licenseStatus = useLicenseStore.getState().status;
-      const maxPanes = licenseStatus?.max_panes ?? 50;
-      const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
-      if (licenseStatus && currentCount >= maxPanes) {
-        if (licenseStatus?.is_trial) {
+      const isTrialOrExpired = licenseStatus?.is_trial || (licenseStatus?.trial_days_remaining !== undefined && licenseStatus.trial_days_remaining <= 0);
+      if (isTrialOrExpired) {
+        const maxPanes = licenseStatus?.max_panes ?? 50;
+        const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
+        if (currentCount >= maxPanes) {
           addToast(`Trial limited to ${maxPanes} panes. Upgrade to unlock unlimited panes.`, "error");
-        } else {
-          addToast(`License limit reached (${maxPanes} panes). Please upgrade your license.`, "error");
+          useWorkspaceStore.getState().setLicenseDialogOpen(true);
+          return;
         }
-        useWorkspaceStore.getState().setLicenseDialogOpen(true);
+      }
+
+      // Resource check: warn if system is low on memory
+      if (!useResourceStore.getState().canCreateTerminal()) {
+        setPendingSession({ workingDir, useWorktree, resume, isShell, sessionType });
+        setResourceWarningOpen(true);
         return;
       }
 
       try {
         let session;
-        if (isShell && !sessionType) {
+        if (isShell || sessionType === "shell") {
           session = await spawnShellSession(workingDir, activeWorkspaceId);
         } else {
           session = await createSession(workingDir, activeWorkspaceId, useWorktree, resume, (sessionType ?? "claude") as any);
@@ -351,7 +414,9 @@ export default function App() {
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      handleCreateSession(detail.path, false, false, detail.type === "shell");
+      const isShell = detail.type === "shell";
+      const sessionType = !isShell && detail.type ? detail.type : undefined;
+      handleCreateSession(detail.path, false, false, isShell, sessionType);
     };
     window.addEventListener("codegrid:quick-session", handler);
     return () => window.removeEventListener("codegrid:quick-session", handler);
@@ -464,6 +529,35 @@ export default function App() {
     [setFocusedSession],
   );
 
+  const handleForceCreateSession = useCallback(async () => {
+    setResourceWarningOpen(false);
+    if (!pendingSession || !activeWorkspaceId) { setPendingSession(null); return; }
+    const { workingDir, useWorktree, resume, isShell, sessionType } = pendingSession;
+    setPendingSession(null);
+    try {
+      let session;
+      if (isShell || sessionType === "shell") {
+        session = await spawnShellSession(workingDir, activeWorkspaceId);
+      } else {
+        session = await createSession(workingDir, activeWorkspaceId, useWorktree, resume, (sessionType ?? "claude") as any);
+      }
+      addSession(session);
+      addPaneLayout(session.id);
+      setFocusedSession(session.id);
+      const ws = useWorkspaceStore.getState().workspaces.find(w => w.id === activeWorkspaceId);
+      if (ws && /^(Default|Workspace \d+)$/i.test(ws.name)) {
+        const folderName = workingDir.split("/").pop() ?? workingDir;
+        useWorkspaceStore.getState().updateWorkspace(activeWorkspaceId, { name: folderName });
+        import("./lib/ipc").then(({ renameWorkspace }) => renameWorkspace(activeWorkspaceId, folderName).catch(() => {}));
+      }
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
+      }, 200);
+    } catch (e) {
+      addToast(`Failed to create session: ${e}`, "error");
+    }
+  }, [pendingSession, activeWorkspaceId, addSession, addPaneLayout, setFocusedSession, addToast]);
+
   const gridWidth = dimensions.width;
   const gridHeight = dimensions.height;
 
@@ -526,6 +620,11 @@ export default function App() {
       <CodeViewer />
       <LicenseDialog />
       <DependencyGraph />
+      <ResourceWarningDialog
+        open={resourceWarningOpen}
+        onClose={() => { setResourceWarningOpen(false); setPendingSession(null); }}
+        onForceCreate={handleForceCreateSession}
+      />
       <ToastContainer />
     </div>
   );

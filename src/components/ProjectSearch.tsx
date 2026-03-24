@@ -76,8 +76,8 @@ export const ProjectSearch = memo(function ProjectSearch({ rootPath }: ProjectSe
   }, []);
 
   const handleResultClick = useCallback(
-    (filePath: string) => {
-      useAppStore.getState().setCodeViewerOpen(true, filePath, { workingDir: rootPath });
+    (filePath: string, lineNumber: number) => {
+      useAppStore.getState().setCodeViewerOpen(true, filePath, { workingDir: rootPath, lineNumber });
     },
     [rootPath],
   );
@@ -208,7 +208,7 @@ export const ProjectSearch = memo(function ProjectSearch({ rootPath }: ProjectSe
                 matches.map((r, i) => (
                   <div
                     key={i}
-                    onClick={() => handleResultClick(filePath)}
+                    onClick={() => handleResultClick(filePath, r.line_number)}
                     style={{
                       padding: "2px 10px 2px 28px",
                       cursor: "pointer",

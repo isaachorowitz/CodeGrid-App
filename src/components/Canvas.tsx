@@ -1,10 +1,12 @@
 import { useCallback, useMemo, memo, useRef, useEffect } from "react";
 import { Pane } from "./Pane";
+import { StickyNote } from "./StickyNote";
 import { MinimizedPaneBar } from "./MinimizedPaneBar";
 import { TrialBanner } from "./TrialBanner";
 import { useSessionStore } from "../stores/sessionStore";
 import { useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useNotesStore } from "../stores/notesStore";
 import { useShallow } from "zustand/react/shallow";
 
 interface CanvasProps {
@@ -38,6 +40,12 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
   const autoLayout = useLayoutStore((s) => s.autoLayout);
   const setCanvas = useLayoutStore((s) => s.setCanvas);
 
+  const allNotes = useNotesStore((s) => s.notes);
+  const workspaceNotes = useMemo(
+    () => allNotes.filter((n) => n.workspaceId === activeWorkspaceId),
+    [allNotes, activeWorkspaceId],
+  );
+
   const viewportRef = useRef<HTMLDivElement>(null);
   const surfaceRef = useRef<HTMLDivElement>(null);
   const bgRef = useRef<HTMLDivElement>(null);
@@ -50,7 +58,7 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     panY: canvas.panY,
     locked: canvas.locked,
     // interaction
-    mode: "idle" as "idle" | "pan" | "drag" | "resize",
+    mode: "idle" as "idle" | "pan" | "drag" | "resize" | "note-drag" | "note-resize",
     startX: 0,
     startY: 0,
     origPanX: 0,
@@ -69,6 +77,13 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     resizeOrigH: 0,
     resizeEl: null as HTMLElement | null,
     panePreview: {} as Record<string, { x: number; y: number; w: number; h: number }>,
+    // note drag/resize
+    noteId: "",
+    noteOrigX: 0,
+    noteOrigY: 0,
+    noteOrigW: 0,
+    noteOrigH: 0,
+    noteEl: null as HTMLElement | null,
     // space
     spaceHeld: false,
     // momentum
@@ -184,7 +199,8 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     useLayoutStore.getState().updatePaneLayout(id, { x, y, w, h });
   }
 
-  // ── Wheel zoom (native event for passive:false) ──
+  // ── Wheel zoom + pan (native event for passive:false) ──
+  // Detects trackpad vs mouse and applies appropriate multipliers for snappy feel.
   useEffect(() => {
     const vp = viewportRef.current;
     if (!vp) return;
@@ -193,29 +209,60 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
       const target = e.target as HTMLElement | null;
       const insideTerminal =
         !!target && !!target.closest(".terminal-container, .xterm, .xterm-screen");
-      // Keep native terminal scrolling; zoom via Cmd/Ctrl+wheel or when not hovering terminal content.
+      // Keep native terminal scrolling; zoom via Cmd/Ctrl+wheel or pinch-to-zoom when not hovering terminal content.
       if (insideTerminal && !e.metaKey && !e.ctrlKey) return;
       e.preventDefault();
       cancelMomentum();
-      const rect = vp.getBoundingClientRect();
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
+
+      // Trackpad detection: trackpad events use deltaMode 0 (pixels) with small
+      // fractional deltas. Mouse wheel uses deltaMode 1 (lines) or large deltaY jumps.
+      const isTrackpad = e.deltaMode === 0 && Math.abs(e.deltaY) < 50 && !Number.isInteger(e.deltaY);
 
       const L = live.current;
-      const oldZoom = L.zoom;
-      const delta = -e.deltaY * 0.001;
-      const newZoom = Math.max(0.1, Math.min(2.0, oldZoom + delta));
 
-      const worldX = mouseX / oldZoom - L.panX;
-      const worldY = mouseY / oldZoom - L.panY;
+      // Pinch-to-zoom (trackpad pinch fires as ctrlKey + wheel) or Cmd+wheel = zoom
+      const isZoom = e.ctrlKey || e.metaKey;
 
-      L.zoom = newZoom;
-      L.panX = mouseX / newZoom - worldX;
-      L.panY = mouseY / newZoom - worldY;
+      if (isZoom) {
+        // ── Zoom ──
+        const rect = vp.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const oldZoom = L.zoom;
+
+        // Pinch-to-zoom (ctrlKey) sends pre-scaled deltas — use a gentler multiplier.
+        // Cmd+wheel is a deliberate zoom gesture — use a stronger multiplier.
+        let zoomSensitivity: number;
+        if (e.ctrlKey && !e.metaKey) {
+          // Pinch-to-zoom: deltas are already amplified by the OS
+          zoomSensitivity = isTrackpad ? 0.008 : 0.005;
+        } else {
+          // Cmd+scroll wheel
+          zoomSensitivity = isTrackpad ? 0.006 : 0.003;
+        }
+
+        const delta = -e.deltaY * zoomSensitivity;
+        const newZoom = Math.max(0.1, Math.min(3.0, oldZoom * (1 + delta)));
+
+        // Zoom toward cursor
+        const worldX = mouseX / oldZoom - L.panX;
+        const worldY = mouseY / oldZoom - L.panY;
+
+        L.zoom = newZoom;
+        L.panX = mouseX / newZoom - worldX;
+        L.panY = mouseY / newZoom - worldY;
+
+        updateZoomLabel();
+      } else {
+        // ── Pan (two-finger scroll on trackpad, or scroll wheel without modifier) ──
+        const panMultiplier = isTrackpad ? 2.0 : 3.0;
+        L.panX -= (e.deltaX * panMultiplier) / L.zoom;
+        L.panY -= (e.deltaY * panMultiplier) / L.zoom;
+      }
 
       applySurfaceTransform();
       applyBgTransform();
-      updateZoomLabel();
     };
     vp.addEventListener("wheel", handler, { passive: false });
     return () => vp.removeEventListener("wheel", handler);
@@ -353,6 +400,26 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         L.resizeEl.style.height = `${h}px`;
         return;
       }
+
+      if (L.mode === "note-drag" && L.noteEl) {
+        const dx = (e.clientX - L.startX) / L.zoom;
+        const dy = (e.clientY - L.startY) / L.zoom;
+        const nx = L.noteOrigX + dx;
+        const ny = L.noteOrigY + dy;
+        L.noteEl.style.left = `${nx}px`;
+        L.noteEl.style.top = `${ny}px`;
+        return;
+      }
+
+      if (L.mode === "note-resize" && L.noteEl) {
+        const dx = (e.clientX - L.startX) / L.zoom;
+        const dy = (e.clientY - L.startY) / L.zoom;
+        const nw = Math.max(120, L.noteOrigW + dx);
+        const nh = Math.max(80, L.noteOrigH + dy);
+        L.noteEl.style.width = `${nw}px`;
+        L.noteEl.style.height = `${nh}px`;
+        return;
+      }
     };
 
     const onUp = () => {
@@ -395,12 +462,23 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
         }
         delete L.panePreview[L.resizeId];
       }
+      if (L.mode === "note-drag" && L.noteEl) {
+        const nx = parseFloat(L.noteEl.style.left) || L.noteOrigX;
+        const ny = parseFloat(L.noteEl.style.top) || L.noteOrigY;
+        useNotesStore.getState().moveNote(L.noteId, nx, ny);
+      } else if (L.mode === "note-resize" && L.noteEl) {
+        const nw = parseFloat(L.noteEl.style.width) || L.noteOrigW;
+        const nh = parseFloat(L.noteEl.style.height) || L.noteOrigH;
+        useNotesStore.getState().resizeNote(L.noteId, nw, nh);
+      }
       if (L.dragEl) L.dragEl.style.zIndex = "";
       L.mode = "idle";
       L.dragId = "";
       L.resizeId = "";
       L.dragEl = null;
       L.resizeEl = null;
+      L.noteId = "";
+      L.noteEl = null;
       if (dragOverlayRef.current) dragOverlayRef.current.style.display = "none";
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
@@ -474,6 +552,50 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
     L.panePreview[id] = { x: layout.x, y: layout.y, w: layout.w, h: layout.h };
     L.resizeEl = el;
     if (dragOverlayRef.current) dragOverlayRef.current.style.display = "block";
+    document.body.style.userSelect = "none";
+  }, [maximizedPane]);
+
+  // ── Note drag start ──
+  const handleNoteDragStart = useCallback((noteId: string, e: React.MouseEvent) => {
+    const L = live.current;
+    if (L.locked || maximizedPane) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
+    if (!note) return;
+    const el = document.querySelector(`[data-note-id="${noteId}"]`) as HTMLElement | null;
+    if (!el) return;
+    L.mode = "note-drag";
+    L.startX = e.clientX;
+    L.startY = e.clientY;
+    L.noteId = noteId;
+    L.noteOrigX = note.x;
+    L.noteOrigY = note.y;
+    L.noteEl = el;
+    if (dragOverlayRef.current) dragOverlayRef.current.style.display = "block";
+    document.body.style.cursor = "move";
+    document.body.style.userSelect = "none";
+  }, [maximizedPane]);
+
+  // ── Note resize start (bottom-right only) ──
+  const handleNoteResizeStart = useCallback((noteId: string, e: React.MouseEvent) => {
+    const L = live.current;
+    if (L.locked || maximizedPane) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const note = useNotesStore.getState().notes.find((n) => n.id === noteId);
+    if (!note) return;
+    const el = document.querySelector(`[data-note-id="${noteId}"]`) as HTMLElement | null;
+    if (!el) return;
+    L.mode = "note-resize";
+    L.startX = e.clientX;
+    L.startY = e.clientY;
+    L.noteId = noteId;
+    L.noteOrigW = note.w;
+    L.noteOrigH = note.h;
+    L.noteEl = el;
+    if (dragOverlayRef.current) dragOverlayRef.current.style.display = "block";
+    document.body.style.cursor = "nwse-resize";
     document.body.style.userSelect = "none";
   }, [maximizedPane]);
 
@@ -564,6 +686,30 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
             zIndex: 1,
           }}
         >
+          {/* Sticky notes — rendered below panes (lower z-index) */}
+          {!maximizedPane && workspaceNotes.map((note) => (
+            <div
+              key={note.id}
+              data-note-id={note.id}
+              onMouseDown={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                left: note.x,
+                top: note.y,
+                width: note.w,
+                height: note.h,
+                zIndex: 0,
+                willChange: "left, top, width, height",
+              }}
+            >
+              <StickyNote
+                note={note}
+                onDragStart={handleNoteDragStart}
+                onResizeStart={handleNoteResizeStart}
+              />
+            </div>
+          ))}
+
           {/* Render ALL sessions in a single list so React preserves DOM nodes
               (and xterm instances) when sessions move between workspaces.
               Hidden sessions are positioned off-screen with visibility:hidden. */}
@@ -654,14 +800,14 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
           }}
           onMouseDown={(e) => e.stopPropagation()}
         >
-          {/* Layout presets */}
+          {/* Layout modes — all handle any number of terminals */}
           {([
-            { label: "1", value: "1x1" as const },
-            { label: "4", value: "2x2" as const },
-            { label: "9", value: "3x3" as const },
-            { label: "1+2", value: "1+2" as const },
-            { label: "1+3", value: "1+3" as const },
-          ]).map((p) => (
+            { label: "AUTO", value: "auto" as const, title: "Auto-arrange all terminals in optimal grid" },
+            { label: "FOCUS", value: "focus" as const, title: "1 main terminal + others stacked in sidebar" },
+            { label: "COLS", value: "columns" as const, title: "Equal columns for all terminals" },
+            { label: "ROWS", value: "rows" as const, title: "Equal rows for all terminals" },
+            { label: "GRID", value: "grid" as const, title: "Strict N\u00D7M grid fitting all terminals" },
+          ]).map((p, idx) => (
             <button
               key={p.value}
               onClick={() => {
@@ -671,38 +817,27 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
                 live.current.zoom = 1; live.current.panX = 0; live.current.panY = 0;
                 applySurfaceTransform(); applyBgTransform(); updateZoomLabel();
               }}
-              title={`Layout: ${p.value}`}
+              title={p.title}
               style={{
-                background: "#1a1a1a", border: "1px solid #2a2a2a", color: "#555",
+                background: idx === 0 ? "#ff8c00" : "#1a1a1a",
+                border: `1px solid ${idx === 0 ? "#ff8c00" : "#2a2a2a"}`,
+                color: idx === 0 ? "#0a0a0a" : "#555",
                 padding: "3px 6px", cursor: "pointer", fontFamily: MONO, fontSize: "10px",
+                fontWeight: idx === 0 ? "bold" : "normal",
                 minWidth: "22px", textAlign: "center",
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "#555"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+              onMouseEnter={(e) => {
+                if (idx === 0) { e.currentTarget.style.background = "#ffa040"; }
+                else { e.currentTarget.style.color = "#ff8c00"; e.currentTarget.style.borderColor = "#ff8c00"; }
+              }}
+              onMouseLeave={(e) => {
+                if (idx === 0) { e.currentTarget.style.background = "#ff8c00"; }
+                else { e.currentTarget.style.color = "#555"; e.currentTarget.style.borderColor = "#2a2a2a"; }
+              }}
             >
               {p.label}
             </button>
           ))}
-
-          {/* Auto-grid: reset all panes to a clean tiled layout */}
-          <button
-            onClick={handleAutoGrid}
-            title="Auto-grid: tile all panes neatly and reset zoom/pan"
-            style={{
-              background: "#ff8c00",
-              border: "1px solid #ff8c00",
-              color: "#0a0a0a",
-              padding: "3px 8px",
-              cursor: "pointer",
-              fontFamily: MONO,
-              fontSize: "10px",
-              fontWeight: "bold",
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = "#ffa040"; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = "#ff8c00"; }}
-          >
-            AUTO
-          </button>
           <button
             onClick={handleFitAll}
             title="Zoom to fit all panes into view"

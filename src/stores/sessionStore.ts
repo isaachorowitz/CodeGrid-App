@@ -32,8 +32,6 @@ interface SessionState {
   removeWorkspaceSessions: (workspaceId: string) => string[];
 }
 
-export const MAX_TERMINALS_PER_WORKSPACE = 9;
-
 function hasUpdates<T extends object>(current: T, updates: Partial<T>): boolean {
   for (const key of Object.keys(updates) as (keyof T)[]) {
     const nextValue = updates[key];

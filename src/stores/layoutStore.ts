@@ -8,13 +8,107 @@ export interface CanvasLayout {
   h: number;
 }
 
-export type PresetLayout = "1x1" | "2x2" | "3x3" | "1+2" | "1+3";
+export type PresetLayout = "auto" | "focus" | "columns" | "rows" | "grid";
 
 const MIN_W = 200;
 const MIN_H = 150;
 const DEFAULT_W = 600;
 const DEFAULT_H = 400;
 const CASCADE_OFFSET = 30;
+const PANE_GAP = 8;
+
+/**
+ * Find the best non-overlapping position for a new pane of size (w, h).
+ * Strategy:
+ *  1. Right of the rightmost pane
+ *  2. Below the bottommost pane
+ *  3. Scan for gaps in the occupied area
+ *  4. Fallback: right of all panes (extends canvas)
+ */
+function findBestPosition(
+  existing: CanvasLayout[],
+  w: number,
+  h: number,
+  viewportW = 1200,
+  viewportH = 800,
+  panX = 0,
+  panY = 0,
+  zoom = 1,
+): { x: number; y: number } {
+  if (existing.length === 0) return { x: 0, y: 0 };
+
+  // Visible viewport bounds in canvas coordinates
+  const vpLeft = -panX;
+  const vpTop = -panY;
+  const vpRight = vpLeft + viewportW / zoom;
+  const vpBottom = vpTop + viewportH / zoom;
+
+  const rectsOverlap = (
+    ax: number, ay: number, aw: number, ah: number,
+    bx: number, by: number, bw: number, bh: number,
+  ) =>
+    ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+
+  const fitsWithoutOverlap = (cx: number, cy: number) =>
+    existing.every(
+      (l) => !rectsOverlap(cx, cy, w, h, l.x, l.y, l.w, l.h),
+    );
+
+  // Bounding box of all existing panes
+  const rightEdge = Math.max(...existing.map((l) => l.x + l.w));
+  const bottomEdge = Math.max(...existing.map((l) => l.y + l.h));
+  const leftEdge = Math.min(...existing.map((l) => l.x));
+  const topEdge = Math.min(...existing.map((l) => l.y));
+
+  // 1. Right of the rightmost pane, aligned to top of viewport
+  {
+    const cx = rightEdge + PANE_GAP;
+    const cy = Math.max(topEdge, vpTop);
+    if (fitsWithoutOverlap(cx, cy) && cx + w <= vpRight) {
+      return { x: cx, y: cy };
+    }
+  }
+
+  // 2. Below the bottommost pane, aligned to left of viewport
+  {
+    const cx = Math.max(leftEdge, vpLeft);
+    const cy = bottomEdge + PANE_GAP;
+    if (fitsWithoutOverlap(cx, cy) && cy + h <= vpBottom) {
+      return { x: cx, y: cy };
+    }
+  }
+
+  // 3. Scan anchor points (right and bottom edges of each existing pane) for gaps
+  const candidatesX: number[] = [vpLeft, leftEdge];
+  const candidatesY: number[] = [vpTop, topEdge];
+  for (const l of existing) {
+    candidatesX.push(l.x + l.w + PANE_GAP);
+    candidatesY.push(l.y + l.h + PANE_GAP);
+    candidatesX.push(l.x);
+    candidatesY.push(l.y);
+  }
+
+  // Sort candidates to prefer positions closer to top-left of viewport
+  candidatesX.sort((a, b) => a - b);
+  candidatesY.sort((a, b) => a - b);
+
+  for (const cy of candidatesY) {
+    for (const cx of candidatesX) {
+      if (
+        fitsWithoutOverlap(cx, cy) &&
+        cx >= vpLeft &&
+        cy >= vpTop &&
+        cx + w <= vpRight &&
+        cy + h <= vpBottom
+      ) {
+        return { x: cx, y: cy };
+      }
+    }
+  }
+
+  // 4. Fallback: place right of everything (extends canvas)
+  return { x: rightEdge + PANE_GAP, y: Math.max(topEdge, vpTop) };
+}
 
 /** Saved layout info for a minimized pane so we can restore it later */
 interface MinimizedPaneInfo {
@@ -131,37 +225,142 @@ export function sanitizeCanvasState(raw: unknown): CanvasState {
   };
 }
 
+/**
+ * Compute optimal grid dimensions for N items to fill a viewport.
+ * Picks cols/rows that minimize wasted space while keeping aspect ratios reasonable.
+ */
+function optimalGrid(n: number, viewportW: number, viewportH: number): { cols: number; rows: number } {
+  if (n <= 1) return { cols: 1, rows: 1 };
+  const aspect = viewportW / viewportH;
+  let bestCols = 1;
+  let bestScore = Infinity;
+  for (let c = 1; c <= n; c++) {
+    const r = Math.ceil(n / c);
+    const cellAspect = (viewportW / c) / (viewportH / r);
+    // Prefer cell aspect ratios close to 16:9 (terminal-friendly)
+    const aspectScore = Math.abs(Math.log(cellAspect / (16 / 9)));
+    // Penalize wasted cells
+    const wasteScore = (c * r - n) / n;
+    const score = aspectScore + wasteScore * 0.5;
+    if (score < bestScore) {
+      bestScore = score;
+      bestCols = c;
+    }
+  }
+  return { cols: bestCols, rows: Math.ceil(n / bestCols) };
+}
+
 function computeAutoLayout(sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
   const n = sessionIds.length;
   if (n === 0) return [];
-  const gap = 4;
-
   if (n === 1) {
     return [{ i: sessionIds[0], x: 0, y: 0, w: viewportW, h: viewportH }];
   }
 
-  // Determine grid dimensions
-  let cols: number, rows: number;
-  if (n === 2) { cols = 2; rows = 1; }
-  else if (n === 3) { cols = 2; rows = 2; }
-  else if (n === 4) { cols = 2; rows = 2; }
-  else if (n <= 6) { cols = 3; rows = 2; }
-  else { cols = 3; rows = 3; }
-
+  const gap = 4;
+  const { cols, rows } = optimalGrid(n, viewportW, viewportH);
   const cellW = (viewportW - gap * (cols - 1)) / cols;
   const cellH = (viewportH - gap * (rows - 1)) / rows;
 
   return sessionIds.map((id, idx) => {
-    // Special case: 3 terminals - 2 on top, 1 full-width bottom
-    if (n === 3 && idx === 2) {
-      return enforceMinSize({
-        i: id,
-        x: 0,
-        y: cellH + gap,
-        w: viewportW,
-        h: cellH,
-      });
+    const row = Math.floor(idx / cols);
+    const col = idx % cols;
+    // Last row may have fewer items -- center or stretch them
+    const isLastRow = row === rows - 1;
+    const itemsInLastRow = n - (rows - 1) * cols;
+    let x: number, w: number;
+    if (isLastRow && itemsInLastRow < cols) {
+      // Stretch last row items to fill the full width evenly
+      const lastW = (viewportW - gap * (itemsInLastRow - 1)) / itemsInLastRow;
+      const lastCol = idx - (rows - 1) * cols;
+      x = lastCol * (lastW + gap);
+      w = lastW;
+    } else {
+      x = col * (cellW + gap);
+      w = cellW;
     }
+    return enforceMinSize({
+      i: id,
+      x,
+      y: row * (cellH + gap),
+      w,
+      h: cellH,
+    });
+  });
+}
+
+function computeFocusLayout(sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
+  const n = sessionIds.length;
+  if (n === 0) return [];
+  if (n === 1) {
+    return [{ i: sessionIds[0], x: 0, y: 0, w: viewportW, h: viewportH }];
+  }
+
+  const gap = 4;
+  const mainW = Math.floor(viewportW * 2 / 3 - gap / 2);
+  const sideW = viewportW - mainW - gap;
+  const sideCount = n - 1;
+  const sideH = (viewportH - gap * (sideCount - 1)) / sideCount;
+
+  return sessionIds.map((id, idx) => {
+    if (idx === 0) {
+      return enforceMinSize({ i: id, x: 0, y: 0, w: mainW, h: viewportH });
+    }
+    const sideIdx = idx - 1;
+    return enforceMinSize({
+      i: id,
+      x: mainW + gap,
+      y: sideIdx * (sideH + gap),
+      w: sideW,
+      h: sideH,
+    });
+  });
+}
+
+function computeColumnsLayout(sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
+  const n = sessionIds.length;
+  if (n === 0) return [];
+  const gap = 4;
+  const colW = (viewportW - gap * (n - 1)) / n;
+
+  return sessionIds.map((id, idx) =>
+    enforceMinSize({
+      i: id,
+      x: idx * (colW + gap),
+      y: 0,
+      w: colW,
+      h: viewportH,
+    })
+  );
+}
+
+function computeRowsLayout(sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
+  const n = sessionIds.length;
+  if (n === 0) return [];
+  const gap = 4;
+  const rowH = (viewportH - gap * (n - 1)) / n;
+
+  return sessionIds.map((id, idx) =>
+    enforceMinSize({
+      i: id,
+      x: 0,
+      y: idx * (rowH + gap),
+      w: viewportW,
+      h: rowH,
+    })
+  );
+}
+
+function computeGridLayout(sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
+  const n = sessionIds.length;
+  if (n === 0) return [];
+  const gap = 4;
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const cellW = (viewportW - gap * (cols - 1)) / cols;
+  const cellH = (viewportH - gap * (rows - 1)) / rows;
+
+  return sessionIds.map((id, idx) => {
     const col = idx % cols;
     const row = Math.floor(idx / cols);
     return enforceMinSize({
@@ -175,54 +374,19 @@ function computeAutoLayout(sessionIds: string[], viewportW = 1200, viewportH = 8
 }
 
 function generatePresetLayout(preset: PresetLayout, sessionIds: string[], viewportW = 1200, viewportH = 800): CanvasLayout[] {
-  const gap = 4;
   switch (preset) {
-    case "1x1":
-      return sessionIds.slice(0, 1).map((id) => ({
-        i: id, x: 0, y: 0, w: viewportW, h: viewportH,
-      }));
-    case "2x2": {
-      const hw = (viewportW - gap) / 2;
-      const hh = (viewportH - gap) / 2;
-      return sessionIds.slice(0, 4).map((id, idx) => ({
-        i: id,
-        x: (idx % 2) * (hw + gap),
-        y: Math.floor(idx / 2) * (hh + gap),
-        w: hw,
-        h: hh,
-      }));
-    }
-    case "3x3": {
-      const tw = (viewportW - gap * 2) / 3;
-      const th = (viewportH - gap * 2) / 3;
-      return sessionIds.slice(0, 9).map((id, idx) => ({
-        i: id,
-        x: (idx % 3) * (tw + gap),
-        y: Math.floor(idx / 3) * (th + gap),
-        w: tw,
-        h: th,
-      }));
-    }
-    case "1+2": {
-      const mainW = viewportW * 2 / 3 - gap / 2;
-      const sideW = viewportW / 3 - gap / 2;
-      const sideH = (viewportH - gap) / 2;
-      return sessionIds.slice(0, 3).map((id, idx) => {
-        if (idx === 0) return { i: id, x: 0, y: 0, w: mainW, h: viewportH };
-        return { i: id, x: mainW + gap, y: (idx - 1) * (sideH + gap), w: sideW, h: sideH };
-      });
-    }
-    case "1+3": {
-      const topH = viewportH * 2 / 3 - gap / 2;
-      const botH = viewportH / 3 - gap / 2;
-      const botW = (viewportW - gap * 2) / 3;
-      return sessionIds.slice(0, 4).map((id, idx) => {
-        if (idx === 0) return { i: id, x: 0, y: 0, w: viewportW, h: topH };
-        return { i: id, x: (idx - 1) * (botW + gap), y: topH + gap, w: botW, h: botH };
-      });
-    }
+    case "auto":
+      return computeAutoLayout(sessionIds, viewportW, viewportH);
+    case "focus":
+      return computeFocusLayout(sessionIds, viewportW, viewportH);
+    case "columns":
+      return computeColumnsLayout(sessionIds, viewportW, viewportH);
+    case "rows":
+      return computeRowsLayout(sessionIds, viewportW, viewportH);
+    case "grid":
+      return computeGridLayout(sessionIds, viewportW, viewportH);
     default:
-      return [];
+      return computeAutoLayout(sessionIds, viewportW, viewportH);
   }
 }
 
@@ -244,15 +408,17 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
 
   addPaneLayout: (sessionId) =>
     set((state) => {
-      // Place new pane to the right of the rightmost visible pane, never overlapping.
-      // First pane starts at top-left (0,0).
       const visible = state.layouts.filter((l) => !state.minimizedPanes[l.i]);
-      let x = 0;
-      const y = 0;
-      if (visible.length > 0) {
-        const rightEdge = Math.max(...visible.map((l) => l.x + l.w));
-        x = rightEdge + 8; // 8px gap
-      }
+      const { x, y } = findBestPosition(
+        visible,
+        DEFAULT_W,
+        DEFAULT_H,
+        undefined,
+        undefined,
+        state.canvas.panX,
+        state.canvas.panY,
+        state.canvas.zoom,
+      );
       const newLayout = enforceMinSize({ i: sessionId, x, y, w: DEFAULT_W, h: DEFAULT_H });
       const nextLayouts = [...state.layouts, newLayout];
       if (state.maximizedPane) {
@@ -278,27 +444,10 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     }),
 
   applyPreset: (preset, sessionIds, viewportW = 1200, viewportH = 800) => {
-    const presetLayouts = generatePresetLayout(preset, sessionIds, viewportW, viewportH);
-    const presetIds = new Set(presetLayouts.map((l) => l.i));
-
-    // Sessions not included in the preset keep their existing layouts.
-    // If they don't have one, stack them to the right of the preset grid.
-    const existing = get().layouts;
-    const overflowLayouts: CanvasLayout[] = [];
-    let overflowX = viewportW + 16;
-    for (const id of sessionIds) {
-      if (presetIds.has(id)) continue;
-      const prev = existing.find((l) => l.i === id);
-      if (prev) {
-        overflowLayouts.push(prev);
-      } else {
-        overflowLayouts.push({ i: id, x: overflowX, y: 0, w: DEFAULT_W, h: DEFAULT_H });
-        overflowX += DEFAULT_W + 8;
-      }
-    }
-
+    // All presets now handle ALL sessions -- none are hidden or overflowed
+    const layouts = generatePresetLayout(preset, sessionIds, viewportW, viewportH);
     set({
-      layouts: [...presetLayouts, ...overflowLayouts],
+      layouts,
       maximizedPane: null,
     });
   },

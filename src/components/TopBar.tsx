@@ -2,10 +2,13 @@ import { memo, useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
-import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore, type PresetLayout } from "../stores/layoutStore";
+import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "../stores/layoutStore";
 import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
 import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc, deleteWorkspace as deleteWorkspaceIpc } from "../lib/ipc";
+import { ResourceIndicator } from "./ResourceIndicator";
+import { useNotesStore } from "../stores/notesStore";
+import { useLayoutStore as useLayoutStoreForNotes } from "../stores/layoutStore";
 
 const STATUS_COLORS: Record<string, string> = {
   idle: "#4a9eff",
@@ -37,7 +40,6 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const toggleBroadcast = useSessionStore((s) => s.toggleBroadcast);
   const setSessionManualName = useSessionStore((s) => s.setSessionManualName);
-  const applyPreset = useLayoutStore((s) => s.applyPreset);
   const autoLayout = useLayoutStore((s) => s.autoLayout);
   const canvasState = useLayoutStore((s) => s.canvas);
   const toggleLocked = useLayoutStore((s) => s.toggleLocked);
@@ -140,23 +142,10 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     window.dispatchEvent(new CustomEvent("codegrid:workspace-changed", { detail: { workspaceId: wsId } }));
   }, [setActiveWorkspace, workspaces, setLayouts, setCanvas]);
 
-  const handlePreset = useCallback(
-    (preset: PresetLayout) => {
-      const ids = activeSessions.map((s) => s.id);
-      // Use actual viewport size (subtract sidebar + topbar estimate)
-      const vw = window.innerWidth - 60;
-      const vh = window.innerHeight - 100;
-      applyPreset(preset, ids, vw, vh);
-      // Reset zoom/pan so panes are visible
-      setCanvas({ zoom: 1, panX: 0, panY: 0 });
-    },
-    [activeSessions, applyPreset, setCanvas],
-  );
-
   const handleAutoLayout = useCallback(() => {
     const ids = activeSessions.map((s) => s.id);
     const vw = window.innerWidth - 60;
-    const vh = window.innerHeight - 100;
+    const vh = window.innerHeight - 52;
     autoLayout(ids, vw, vh);
     // Reset zoom/pan so panes are visible
     setCanvas({ zoom: 1, panX: 0, panY: 0 });
@@ -206,14 +195,6 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
       addToast(`Failed to delete workspace: ${e}`, "error");
     }
   }, [confirmDeleteId, removeWorkspace, addToast]);
-
-  const presets: { label: string; value: PresetLayout }[] = [
-    { label: "1", value: "1x1" },
-    { label: "4", value: "2x2" },
-    { label: "9", value: "3x3" },
-    { label: "1+2", value: "1+2" },
-    { label: "1+3", value: "1+3" },
-  ];
 
   return (
     <div
@@ -336,8 +317,33 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
         {/* Spacer to push buttons right */}
         <div style={{ flex: 1 }} />
 
-        {/* === Three toolbar buttons — same size, right-aligned === */}
+        {/* Resource indicator */}
+        <ResourceIndicator />
+
+        {/* === Toolbar buttons — right-aligned === */}
         <div style={{ display: "flex", gap: "2px" }}>
+          <button
+            onClick={() => {
+              if (!activeWorkspaceId) return;
+              const canvasState = useLayoutStoreForNotes.getState().canvas;
+              // Place note at center of current viewport
+              const vw = window.innerWidth - 60;
+              const vh = window.innerHeight - 52;
+              const cx = -canvasState.panX + (vw / canvasState.zoom) / 2 - 100;
+              const cy = -canvasState.panY + (vh / canvasState.zoom) / 2 - 75;
+              useNotesStore.getState().addNote(activeWorkspaceId, cx, cy);
+            }}
+            title="Add sticky note"
+            style={{
+              background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+              fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+              padding: "3px 10px", fontWeight: "bold",
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = "#ffab00"; e.currentTarget.style.borderColor = "#ffab00"; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+          >
+            NOTE
+          </button>
           <button
             onClick={() => setCommandPaletteOpen(true)}
             title="Command Palette (Cmd+K)"
@@ -354,9 +360,18 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           <button
             onClick={() => {
               const ws = workspaces.find((w) => w.id === activeWorkspaceId);
-              const dir = ws?.repo_path ?? activeSessions[0]?.working_dir ?? "";
+              const focusedSession = activeSessions.find((s) => s.id === focusedSessionId);
+              const dir = focusedSession?.working_dir ?? ws?.repo_path ?? activeSessions[0]?.working_dir ?? "";
               if (dir) {
-                window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type: "claude" } }));
+                // Detect the type of the currently focused session from its command
+                const cmd = focusedSession?.command ?? "";
+                let type: string = "claude";
+                if (/\bcodex\b/i.test(cmd)) type = "codex";
+                else if (/\bgemini\b/i.test(cmd)) type = "gemini";
+                else if (/\bcursor\b/i.test(cmd)) type = "cursor";
+                else if (/\b(zsh|bash|fish|sh|powershell|pwsh|cmd)\b/i.test(cmd)) type = "shell";
+                else if (/\bclaude\b/i.test(cmd)) type = "claude";
+                window.dispatchEvent(new CustomEvent("codegrid:quick-session", { detail: { path: dir, type } }));
               } else {
                 setNewSessionDialogOpen(true);
               }

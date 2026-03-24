@@ -22,10 +22,22 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
   const isFocused = focusedSessionId === session.id;
   const isMaximized = maximizedPane === session.id;
 
+  // Detect agent type from command string
+  const cmd = (session.command ?? "").toLowerCase();
+  const detectAgent = (): { label: string; color: string } => {
+    if (cmd.includes("claude")) return { label: "CLAUDE", color: "#ff8c00" };
+    if (cmd.includes("codex")) return { label: "CODEX", color: "#10a37f" };
+    if (cmd.includes("gemini")) return { label: "GEMINI", color: "#4285f4" };
+    // Cursor agent binary is called "agent", not "cursor"
+    if (cmd.includes("cursor") || /\bagent\b/.test(cmd)) return { label: "CURSOR", color: "#a855f7" };
+    return { label: "SHELL", color: "#4a9eff" };
+  };
+  const { label: agentLabel, color: agentColor } = detectAgent();
+
   // Display name: manual name > activity name > fallback
   const displayName = session.manualName
     ?? session.activityName
-    ?? (session.command?.includes("claude") ? "claude" : "shell");
+    ?? agentLabel.toLowerCase();
 
   const handleFocus = useCallback(() => {
     setFocusedSession(session.id);
@@ -127,8 +139,15 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
   const borderColor = broadcastMode
     ? "#ff8c00"
     : isFocused
-      ? "#ff8c00"
-      : statusColor + "80"; // 50% opacity for unfocused status borders
+      ? agentColor
+      : statusColor + "40"; // 25% opacity for unfocused — very muted
+
+  // Convert hex color to rgba for glow
+  const hexToRgb = (hex: string) => {
+    const h = hex.replace("#", "");
+    return `${parseInt(h.substring(0, 2), 16)}, ${parseInt(h.substring(2, 4), 16)}, ${parseInt(h.substring(4, 6), 16)}`;
+  };
+  const glowRgb = hexToRgb(broadcastMode ? "#ff8c00" : agentColor);
 
   return (
     <div
@@ -138,46 +157,63 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
         flexDirection: "column",
         height: "100%",
         width: "100%",
-        border: `1px solid ${borderColor}`,
-        background: "#0a0a0a",
+        border: isFocused
+          ? `2px solid ${borderColor}`
+          : `1px solid ${borderColor}`,
+        borderRadius: isFocused ? "4px" : "2px",
+        boxShadow: isFocused
+          ? `0 0 14px rgba(${glowRgb}, 0.45), 0 0 4px rgba(${glowRgb}, 0.3), inset 0 0 6px rgba(${glowRgb}, 0.08)`
+          : "none",
+        background: isFocused ? "#0c0c0c" : "#0a0a0a",
         overflow: "hidden",
         position: "relative",
+        zIndex: isFocused ? 2 : 1,
+        transition: "border 0.15s ease, box-shadow 0.2s ease, z-index 0s",
       }}
     >
-      {/* Title bar */}
+      {/* Title bar — fully colored per agent type */}
       <div
         className="drag-handle"
         onMouseDown={onDragStart}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
         style={{
-          height: "24px",
+          height: "28px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          padding: "0 6px",
-          background: isFocused ? "#1e1e1e" : "#141414",
-          borderLeft: isFocused ? "none" : `2px solid ${statusColor}`,
-          borderBottom: "1px solid #2a2a2a",
+          padding: "0 8px",
+          background: isFocused
+            ? `linear-gradient(90deg, ${agentColor} 0%, ${agentColor}cc 60%, ${agentColor}99 100%)`
+            : `linear-gradient(90deg, ${agentColor}88 0%, ${agentColor}55 60%, ${agentColor}33 100%)`,
+          borderBottom: `2px solid ${agentColor}`,
           cursor: "move",
           userSelect: "none",
           flexShrink: 0,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace" }}>
           <span
             style={{
-              color: "#ff8c00", fontWeight: "bold", fontSize: "10px",
-              width: "16px", height: "16px", display: "flex", alignItems: "center",
-              justifyContent: "center", background: "#2a2a2a",
+              color: "#000", fontWeight: "900", fontSize: "11px",
+              width: "18px", height: "18px", display: "flex", alignItems: "center",
+              justifyContent: "center", background: "rgba(0,0,0,0.25)", borderRadius: "3px",
             }}
           >
             {session.pane_number}
           </span>
           <span
             style={{
-              fontSize: "8px", fontWeight: "bold", letterSpacing: "0.5px",
-              color: statusColor, flexShrink: 0,
+              fontSize: "10px", fontWeight: "800", letterSpacing: "1px",
+              color: "#000", flexShrink: 0, textTransform: "uppercase",
+            }}
+          >
+            {agentLabel}
+          </span>
+          <span
+            style={{
+              fontSize: "9px", fontWeight: "600", letterSpacing: "0.5px",
+              color: "rgba(0,0,0,0.5)", flexShrink: 0,
             }}
           >
             {(session.status ?? "idle").toUpperCase()}
@@ -202,7 +238,7 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
               autoFocus
             />
           ) : (
-            <span style={{ color: "#888888" }}>{displayName}</span>
+            <span style={{ color: "rgba(0,0,0,0.6)", fontSize: "10px" }}>{displayName}</span>
           )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "2px" }}>
@@ -213,12 +249,12 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
             title="Minimize pane"
             aria-label={`Minimize pane ${session.pane_number}`}
             style={{
-              background: "none", border: "none", color: "#555555", cursor: "pointer",
+              background: "none", border: "none", color: "rgba(0,0,0,0.4)", cursor: "pointer",
               fontSize: "11px", padding: "0 3px", lineHeight: 1,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "#ffab00")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0,0,0,0.8)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,0,0,0.4)")}
           >
             −
           </button>
@@ -229,12 +265,12 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
             title={isMaximized ? "Restore pane" : "Maximize pane"}
             aria-label={isMaximized ? "Restore pane" : "Maximize pane"}
             style={{
-              background: "none", border: "none", color: "#555555", cursor: "pointer",
+              background: "none", border: "none", color: "rgba(0,0,0,0.4)", cursor: "pointer",
               fontSize: "10px", padding: "0 3px", lineHeight: 1,
               fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "#00c853")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0,0,0,0.8)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,0,0,0.4)")}
           >
             {isMaximized ? "⊡" : "⊞"}
           </button>
@@ -245,11 +281,11 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
             title="Close pane (Cmd+W)"
             aria-label={`Close pane ${session.pane_number}`}
             style={{
-              background: "none", border: "none", color: "#555555", cursor: "pointer",
+              background: "none", border: "none", color: "rgba(0,0,0,0.4)", cursor: "pointer",
               fontSize: "14px", padding: "0 2px", lineHeight: 1, fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "#ff3d00")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "#555555")}
+            onMouseEnter={(e) => (e.currentTarget.style.color = "rgba(0,0,0,0.8)")}
+            onMouseLeave={(e) => (e.currentTarget.style.color = "rgba(0,0,0,0.4)")}
           >
             x
           </button>
@@ -299,7 +335,7 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
 
       {/* Terminal */}
       <div style={{ flex: 1, overflow: "hidden", position: "relative" }}>
-        <TerminalView sessionId={session.id} />
+        <TerminalView sessionId={session.id} agentColor={agentColor} />
 
         {/* Dead-session overlay: shown for sessions restored from DB on startup */}
         {session.status === "dead" && (
