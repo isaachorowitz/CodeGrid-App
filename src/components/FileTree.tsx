@@ -1,7 +1,9 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, writeFileContents, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
 import { getFileIconUrl, getFolderIconUrl } from "../lib/fileIcons";
+import { open as shellOpen } from "@tauri-apps/plugin-shell";
 
 // Request deduplication: tracks in-flight directory loads
 const pendingLoads = new Set<string>();
@@ -90,17 +92,26 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  // Close on outside click
+  // Close on outside click or Escape
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const handler = (e: MouseEvent | KeyboardEvent) => {
+      if (e instanceof KeyboardEvent) {
+        if (e.key === "Escape") onClose();
+        return;
+      }
       const target = e.target as HTMLElement;
       if (!target.closest("[data-context-menu]")) {
         onClose();
       }
     };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", handler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("keydown", handler);
+    };
   }, [onClose]);
 
   useEffect(() => {
@@ -152,7 +163,6 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setError(null);
     try {
       await moveFile(entry.path, inputValue.trim());
-      // Refresh both source and destination directories
       onRefreshDir(parentDir);
       onRefreshDir(inputValue.trim());
       onClose();
@@ -167,17 +177,6 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     try {
       await copyFile(entry.path, inputValue.trim());
       onRefreshDir(inputValue.trim());
-      onClose();
-    } catch (e) { setError(String(e)); }
-    setLoading(false);
-  };
-
-  const handleDuplicate = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      await copyFile(entry.path, parentDir);
-      onRefreshDir(parentDir);
       onClose();
     } catch (e) { setError(String(e)); }
     setLoading(false);
@@ -210,24 +209,59 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
     setLoading(false);
   };
 
+  // --- New context menu actions ---
+
+  const handleRevealInFinder = async () => {
+    onClose();
+    try {
+      // shellOpen opens a path with the system handler; for folders it opens Finder
+      const dir = entry.is_dir ? entry.path : parentDir;
+      await shellOpen(dir);
+    } catch { /* ignore */ }
+  };
+
+  const handleOpenInDefaultApp = async () => {
+    onClose();
+    try {
+      await shellOpen(entry.path);
+    } catch { /* ignore */ }
+  };
+
+  const handleCopyPath = () => {
+    onClose();
+    navigator.clipboard.writeText(entry.path).catch(() => {});
+  };
+
+  const handleCopyRelativePath = () => {
+    onClose();
+    const relative = entry.path.startsWith(rootPath + "/")
+      ? entry.path.substring(rootPath.length + 1)
+      : entry.path.startsWith(rootPath)
+        ? entry.path.substring(rootPath.length)
+        : entry.path;
+    navigator.clipboard.writeText(relative).catch(() => {});
+  };
+
+  const handleCopyFileName = () => {
+    onClose();
+    navigator.clipboard.writeText(entry.name).catch(() => {});
+  };
+
+  const handleOpenInTerminal = () => {
+    onClose();
+    const dir = entry.is_dir ? entry.path : parentDir;
+    window.dispatchEvent(
+      new CustomEvent("codegrid:open-terminal", { detail: { workingDir: dir } }),
+    );
+  };
+
   const MONO = "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace";
 
-  const menuItemStyle = (hovered: boolean): React.CSSProperties => ({
-    padding: "5px 12px",
-    fontSize: "11px",
-    color: hovered ? "#ff8c00" : "#e0e0e0",
-    background: hovered ? "#1e1e1e" : "transparent",
-    cursor: "pointer",
-    fontFamily: MONO,
-    border: "none",
-    width: "100%",
-    textAlign: "left",
-    display: "block",
-  });
+  // --- Sub-action panels (rename, delete, move, copy, new file/folder) ---
 
   if (action === "rename") {
-    return (
-      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "200px" }}>
+    return createPortal(
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "200px", borderRadius: "4px", boxShadow: "0 4px 16px rgba(0,0,0,0.6)" }}>
         <div style={{ fontSize: "9px", color: "#ff8c00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>RENAME</div>
         <input ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") handleRename(); if (e.key === "Escape") onClose(); }}
@@ -240,13 +274,14 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
             {loading ? "..." : "Rename"}
           </button>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   if (action === "delete") {
-    return (
-      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff3d00", padding: "8px", minWidth: "200px" }}>
+    return createPortal(
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff3d00", padding: "8px", minWidth: "200px", borderRadius: "4px", boxShadow: "0 4px 16px rgba(0,0,0,0.6)" }}>
         <div style={{ fontSize: "9px", color: "#ff3d00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>DELETE</div>
         <div style={{ color: "#e0e0e0", fontSize: "11px", fontFamily: MONO, marginBottom: "8px" }}>
           Delete <span style={{ color: "#ff8c00" }}>{entry.name}</span>?{entry.is_dir ? " (and all contents)" : ""}
@@ -258,14 +293,15 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
             {loading ? "..." : "Delete"}
           </button>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   if (action === "move" || action === "copy") {
     const isMove = action === "move";
-    return (
-      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "250px" }}>
+    return createPortal(
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "250px", borderRadius: "4px", boxShadow: "0 4px 16px rgba(0,0,0,0.6)" }}>
         <div style={{ fontSize: "9px", color: "#ff8c00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>{isMove ? "MOVE TO" : "COPY TO"}</div>
         <input ref={inputRef} value={inputValue} onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") isMove ? handleMove() : handleCopy(); if (e.key === "Escape") onClose(); }}
@@ -279,15 +315,16 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
             {loading ? "..." : isMove ? "Move" : "Copy"}
           </button>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   if (action === "new-file" || action === "new-folder") {
     const isFile = action === "new-file";
     const handler = isFile ? handleNewFile : handleNewFolder;
-    return (
-      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "200px" }}>
+    return createPortal(
+      <div data-context-menu style={{ position: "fixed", left: x, top: y, zIndex: 9999, background: "#1a1a1a", border: "1px solid #ff8c00", padding: "8px", minWidth: "200px", borderRadius: "4px", boxShadow: "0 4px 16px rgba(0,0,0,0.6)" }}>
         <div style={{ fontSize: "9px", color: "#ff8c00", marginBottom: "4px", fontFamily: MONO, letterSpacing: "1px" }}>
           {isFile ? "NEW FILE" : "NEW FOLDER"}
         </div>
@@ -303,28 +340,94 @@ const ContextMenu = memo(function ContextMenu({ x, y, entry, rootPath, onClose, 
             {loading ? "..." : "Create"}
           </button>
         </div>
-      </div>
+      </div>,
+      document.body,
     );
   }
 
-  // Default: show menu items
-  return (
-    <div data-context-menu style={{ position: "fixed", left: Math.min(x, window.innerWidth - 160), top: Math.min(y, window.innerHeight - 200), zIndex: 9999, background: "#1a1a1a", border: "1px solid #2a2a2a", minWidth: "140px", padding: "4px 0" }}>
-      <ContextMenuItem label="New File" onClick={() => setAction("new-file")} />
-      <ContextMenuItem label="New Folder" onClick={() => setAction("new-folder")} />
-      <div style={{ height: "1px", background: "#2a2a2a", margin: "4px 0" }} />
-      <ContextMenuItem label="Rename" onClick={() => setAction("rename")} />
-      <ContextMenuItem label="Duplicate" onClick={handleDuplicate} />
-      <ContextMenuItem label="Delete" onClick={() => setAction("delete")} />
-      <div style={{ height: "1px", background: "#2a2a2a", margin: "4px 0" }} />
-      <ContextMenuItem label="Move to..." onClick={() => setAction("move")} />
-      <ContextMenuItem label="Copy to..." onClick={() => setAction("copy")} />
-    </div>
+  // --- Default: VS Code-style context menu ---
+
+  type MenuItem = { label: string; action: () => void; danger?: boolean; shortcut?: string } | null;
+
+  const fileMenuItems: MenuItem[] = [
+    { label: "Reveal in Finder", action: handleRevealInFinder },
+    { label: "Open in Default App", action: handleOpenInDefaultApp },
+    { label: "Open in Terminal", action: handleOpenInTerminal },
+    null,
+    { label: "Copy Path", action: handleCopyPath, shortcut: "Alt+Cmd+C" },
+    { label: "Copy Relative Path", action: handleCopyRelativePath, shortcut: "Shift+Alt+Cmd+C" },
+    { label: "Copy File Name", action: handleCopyFileName },
+    null,
+    { label: "New File", action: () => setAction("new-file") },
+    { label: "New Folder", action: () => setAction("new-folder") },
+    null,
+    { label: "Rename", action: () => setAction("rename") },
+    { label: "Move to...", action: () => setAction("move") },
+    { label: "Delete", action: () => setAction("delete"), danger: true },
+  ];
+
+  const folderMenuItems: MenuItem[] = [
+    { label: "Reveal in Finder", action: handleRevealInFinder },
+    { label: "Open in Terminal", action: handleOpenInTerminal },
+    null,
+    { label: "Copy Path", action: handleCopyPath, shortcut: "Alt+Cmd+C" },
+    { label: "Copy Relative Path", action: handleCopyRelativePath, shortcut: "Shift+Alt+Cmd+C" },
+    null,
+    { label: "New File", action: () => setAction("new-file") },
+    { label: "New Folder", action: () => setAction("new-folder") },
+    null,
+    { label: "Rename", action: () => setAction("rename") },
+    { label: "Move to...", action: () => setAction("move") },
+    { label: "Delete", action: () => setAction("delete"), danger: true },
+  ];
+
+  const items = entry.is_dir ? folderMenuItems : fileMenuItems;
+
+  // Clamp position so the menu doesn't overflow the viewport
+  const menuWidth = 220;
+  const menuHeight = items.length * 26;
+  const clampedX = Math.min(x, window.innerWidth - menuWidth - 4);
+  const clampedY = Math.min(y, window.innerHeight - menuHeight - 4);
+
+  return createPortal(
+    <div
+      ref={menuRef}
+      data-context-menu
+      style={{
+        position: "fixed",
+        left: clampedX,
+        top: clampedY,
+        zIndex: 9999,
+        background: "#1a1a1a",
+        border: "1px solid #333333",
+        borderRadius: "4px",
+        minWidth: `${menuWidth}px`,
+        padding: "4px 0",
+        fontFamily: MONO,
+        fontSize: "11px",
+        boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+      }}
+    >
+      {items.map((item, i) =>
+        item === null ? (
+          <div key={`sep-${i}`} style={{ height: "1px", background: "#2a2a2a", margin: "3px 0" }} />
+        ) : (
+          <ContextMenuItem
+            key={item.label}
+            label={item.label}
+            shortcut={item.shortcut}
+            danger={item.danger}
+            onClick={item.action}
+          />
+        ),
+      )}
+    </div>,
+    document.body,
   );
 });
 
 // Extracted to avoid hooks-in-map violation
-const ContextMenuItem = memo(function ContextMenuItem({ label, onClick }: { label: string; onClick: () => void }) {
+const ContextMenuItem = memo(function ContextMenuItem({ label, onClick, shortcut, danger }: { label: string; onClick: () => void; shortcut?: string; danger?: boolean }) {
   const [hovered, setHovered] = useState(false);
   return (
     <div
@@ -334,16 +437,24 @@ const ContextMenuItem = memo(function ContextMenuItem({ label, onClick }: { labe
       style={{
         padding: "5px 12px",
         fontSize: "11px",
-        color: hovered ? "#ff8c00" : "#e0e0e0",
-        background: hovered ? "#1e1e1e" : "transparent",
+        color: danger ? (hovered ? "#ff6040" : "#ff3d00") : (hovered ? "#ff8c00" : "#cccccc"),
+        background: hovered ? "#2a2a2a" : "transparent",
         cursor: "pointer",
         fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace",
         border: "none",
         width: "100%",
         textAlign: "left",
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
       }}
     >
-      {label}
+      <span>{label}</span>
+      {shortcut && (
+        <span style={{ fontSize: "9px", color: "#555555", marginLeft: "16px", flexShrink: 0 }}>
+          {shortcut}
+        </span>
+      )}
     </div>
   );
 });

@@ -518,6 +518,27 @@ export default function App() {
     return () => window.removeEventListener("codegrid:restart-session", handler);
   }, [addSession, addPaneLayout, setFocusedSession, removeSession, removePaneLayout, addToast]);
 
+  // Listen for "open terminal in directory" events from the file tree context menu
+  useEffect(() => {
+    const handler = async (e: Event) => {
+      const detail = (e as CustomEvent).detail as { workingDir: string };
+      if (!activeWorkspaceId) return;
+      try {
+        const session = await spawnShellSession(detail.workingDir, activeWorkspaceId);
+        addSession(session);
+        addPaneLayout(session.id);
+        setFocusedSession(session.id);
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent("codegrid:focus-terminal", { detail: { sessionId: session.id } }));
+        }, 200);
+      } catch (err) {
+        addToast(`Failed to open terminal: ${err}`, "error");
+      }
+    };
+    window.addEventListener("codegrid:open-terminal", handler);
+    return () => window.removeEventListener("codegrid:open-terminal", handler);
+  }, [addSession, addPaneLayout, setFocusedSession, addToast, activeWorkspaceId]);
+
   const handleCloseSession = useCallback(
     async (sessionId: string) => {
       removeSession(sessionId);

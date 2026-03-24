@@ -220,8 +220,9 @@ export const Canvas = memo(function Canvas({ width, height, onCloseSession }: Ca
 
       const L = live.current;
 
-      // Pinch-to-zoom (trackpad pinch fires as ctrlKey + wheel) or Cmd+wheel = zoom
-      const isZoom = e.ctrlKey || e.metaKey;
+      // Zoom on: pinch-to-zoom (ctrlKey), Cmd+wheel, or plain mouse scroll wheel.
+      // Pan on: two-finger trackpad scroll (no modifiers, trackpad detected).
+      const isZoom = e.ctrlKey || e.metaKey || !isTrackpad;
 
       if (isZoom) {
         // ── Zoom ──

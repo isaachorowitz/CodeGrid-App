@@ -833,9 +833,9 @@ const GitPanel = memo(function GitPanel({
                 onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
               >
                 <span style={{
-                  color: "#555555", fontWeight: "bold", fontSize: "9px",
+                  color: "#4a9eff", fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
-                }}>?</span>
+                }}>U</span>
                 <img src={getFileIconUrl(fileName)} width={14} height={14} style={{ flexShrink: 0, verticalAlign: "middle" }} draggable={false} />
                 <span style={{ color: "#888888", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}

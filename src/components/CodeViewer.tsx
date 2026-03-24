@@ -183,6 +183,10 @@ export const CodeViewer = memo(function CodeViewer() {
   const resizeRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const editorViewRef = useRef<EditorView | null>(null);
 
+  // Track which file we have fetched content for, so we can show loading
+  // state on the very first render (before the fetch effect runs).
+  const [loadedFile, setLoadedFile] = useState<string | null>(null);
+
   // Sync viewMode with diffMode from store.
   useEffect(() => {
     if (codeViewerOpen) {
@@ -198,10 +202,12 @@ export const CodeViewer = memo(function CodeViewer() {
       const result = await readFileContents(codeViewerFile);
       setContent(result);
       setEditBuffer(result);
+      setLoadedFile(codeViewerFile);
     } catch (e) {
       setError(String(e));
       setContent("");
       setEditBuffer("");
+      setLoadedFile(codeViewerFile);
     }
     setLoading(false);
   }, [codeViewerFile]);
@@ -257,6 +263,10 @@ export const CodeViewer = memo(function CodeViewer() {
   useEffect(() => {
     if (codeViewerOpen && codeViewerFile) {
       fetchContent();
+    }
+    if (!codeViewerOpen) {
+      // Reset loaded file tracker when viewer closes so next open shows loading state
+      setLoadedFile(null);
     }
   }, [codeViewerOpen, codeViewerFile, fetchContent]);
 
@@ -578,18 +588,19 @@ export const CodeViewer = memo(function CodeViewer() {
         {/* CODE VIEW */}
         {viewMode === "code" && (
           <>
-            {loading && (
+            {(loading || loadedFile !== codeViewerFile) && !error && (
               <div style={{ padding: "24px", textAlign: "center", color: "#ffab00", fontSize: "11px" }}>
                 Loading file...
               </div>
             )}
-            {error && (
+            {error && loadedFile === codeViewerFile && (
               <div style={{ padding: "24px", textAlign: "center", color: "#ff3d00", fontSize: "11px" }}>
                 {error}
               </div>
             )}
-            {!loading && !error && (
+            {!loading && !error && loadedFile === codeViewerFile && (
               <CodeMirror
+                key={codeViewerFile}
                 value={editBuffer}
                 onChange={(value) => setEditBuffer(value)}
                 onCreateEditor={(view) => { editorViewRef.current = view; }}
