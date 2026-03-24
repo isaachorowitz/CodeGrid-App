@@ -147,17 +147,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
-          gh release delete latest \
-            --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
-            --yes --cleanup-tag 2>/dev/null || true
+          REPO="isaachorowitz/CodeGrid-Claude-Code-Terminal"
+          # Delete existing latest release and tag
+          gh release delete latest --repo "$REPO" --yes 2>/dev/null || true
+          gh api "repos/${REPO}/git/refs/tags/latest" -X DELETE 2>/dev/null || true
+          # Create fresh latest release
           gh release create latest "${{ steps.version.outputs.dmg }}" \
-            --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
+            --repo "$REPO" \
             --title "CodeGrid (latest build)" \
             --notes "Automatically built from the latest commit on \`main\`. Version ${{ steps.version.outputs.version }}. Signed and notarized." \
             --latest
 
       - name: Notify landing page
-        if: steps.check.outputs.continue == 'true'
+        if: steps.check.outputs.continue == 'true' && always()
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
