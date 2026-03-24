@@ -127,40 +127,27 @@ jobs:
           echo "dmg=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg" >> $GITHUB_OUTPUT
 
       # Create versioned release on the public repo
-      - name: Create versioned release
-        if: steps.check.outputs.continue == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
-        run: |
-          VERSION=${{ steps.version.outputs.version }}
-          TAG="v${VERSION}"
-          # Create versioned release
-          gh release create "$TAG" "${{ steps.version.outputs.dmg }}" \
-            --repo isaachorowitz/CodeGrid-Claude-Code-Terminal \
-            --title "CodeGrid $TAG" \
-            --notes "CodeGrid v${VERSION} — Signed and notarized for macOS." \
-            --latest || true
-
-      # Also update the rolling "latest" release
-      - name: Update latest release
+      - name: Publish release
         if: steps.check.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
           REPO="isaachorowitz/CodeGrid-Claude-Code-Terminal"
           VERSION=${{ steps.version.outputs.version }}
+          TAG="v${VERSION}"
           DMG="${{ steps.version.outputs.dmg }}"
-          # Upload the DMG to the existing versioned release instead of a separate "latest"
-          # This avoids the tag conflict entirely — "latest" is just the newest versioned release
-          gh release upload "v${VERSION}" "$DMG" \
-            --repo "$REPO" --clobber 2>/dev/null || true
-          # Mark this release as latest
-          gh release edit "v${VERSION}" \
+          # Delete existing release with same tag if any
+          gh release delete "$TAG" --repo "$REPO" --yes 2>/dev/null || true
+          # Create release with DMG
+          gh release create "$TAG" "$DMG" \
             --repo "$REPO" \
+            --title "CodeGrid $TAG" \
+            --notes "CodeGrid v${VERSION} — Signed and notarized for macOS." \
             --latest
 
       - name: Notify landing page
         if: steps.check.outputs.continue == 'true' && always()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
         run: |
