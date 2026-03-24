@@ -7,6 +7,7 @@ import { RunButton } from "./RunButton";
 import { useToastStore } from "../stores/toastStore";
 import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorkspace as setActiveWorkspaceIpc, renameSession as renameSessionIpc, deleteWorkspace as deleteWorkspaceIpc } from "../lib/ipc";
 import { ResourceIndicator } from "./ResourceIndicator";
+import { TerminalManager } from "./TerminalManager";
 import { useNotesStore } from "../stores/notesStore";
 import { useLayoutStore as useLayoutStoreForNotes } from "../stores/layoutStore";
 
@@ -51,6 +52,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const [editSessionName, setEditSessionName] = useState("");
   const [hoveredTab, setHoveredTab] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [terminalManagerOpen, setTerminalManagerOpen] = useState(false);
 
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{
@@ -319,6 +321,21 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
 
         {/* Resource indicator */}
         <ResourceIndicator />
+
+        {/* Terminal manager button */}
+        <button
+          onClick={() => setTerminalManagerOpen(true)}
+          title="Manage all terminals"
+          style={{
+            background: "#1e1e1e", border: "1px solid #2a2a2a", color: "#888",
+            fontSize: "10px", fontFamily: "'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace", cursor: "pointer",
+            padding: "3px 10px", fontWeight: "bold",
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.color = "#ff3d00"; e.currentTarget.style.borderColor = "#ff3d00"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.color = "#888"; e.currentTarget.style.borderColor = "#2a2a2a"; }}
+        >
+          MANAGE
+        </button>
 
         {/* === Toolbar buttons — right-aligned === */}
         <div style={{ display: "flex", gap: "2px" }}>
@@ -595,6 +612,9 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
         </div>,
         document.body
       )}
+
+      {/* Terminal Manager popup */}
+      <TerminalManager open={terminalManagerOpen} onClose={() => setTerminalManagerOpen(false)} />
 
       {/* Delete confirmation overlay — portaled to body */}
       {confirmDeleteId && createPortal(

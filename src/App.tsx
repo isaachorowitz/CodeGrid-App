@@ -43,6 +43,20 @@ import {
 import { useResourceStore } from "./stores/resourceStore";
 import { ResourceWarningDialog } from "./components/ResourceWarningDialog";
 
+/**
+ * Detect the agent/session type from a stored command string (binary path).
+ * Used when restoring persisted sessions or restarting dead sessions.
+ */
+function detectSessionType(command: string): string {
+  const cmd = (command ?? "").toLowerCase();
+  if (cmd.includes("codex")) return "codex";
+  if (cmd.includes("gemini")) return "gemini";
+  // Cursor agent binary is called "agent", not "cursor"
+  if (cmd.includes("cursor") || /\bagent\b/.test(cmd)) return "cursor";
+  if (cmd.includes("claude")) return "claude";
+  return "shell";
+}
+
 export default function App() {
   const {
     sessions: allSessions,
@@ -134,13 +148,14 @@ export default function App() {
                   if (old.command === "browser") {
                     continue; // legacy browser panes are not restorable
                   }
-                  const isShell = !old.command.includes("claude");
+                  const sessionType = detectSessionType(old.command);
+                  const isShell = sessionType === "shell";
                   let restored;
                   try {
                     if (isShell) {
                       restored = await spawnShellSession(old.working_dir, active.id);
                     } else {
-                      restored = await createSession(old.working_dir, active.id, false, false);
+                      restored = await createSession(old.working_dir, active.id, false, false, sessionType as any);
                     }
                   } catch (sessionErr) {
                     addToast(`Failed to restore session for ${old.working_dir} — directory may no longer exist`, "error");
@@ -452,7 +467,7 @@ export default function App() {
     const handler = async (e: Event) => {
       const detail = (e as CustomEvent).detail as {
         sessionId: string; workingDir: string; workspaceId: string;
-        isShell: boolean; resume: boolean;
+        isShell: boolean; resume: boolean; sessionType?: string;
       };
       try {
         // Capture the dead session's name and layout position before removing it
@@ -465,9 +480,10 @@ export default function App() {
         removeSession(detail.sessionId);
 
         // Create new live session in the same workspace
-        const session = detail.isShell
+        const agentType = detail.sessionType ?? (detail.isShell ? "shell" : "claude");
+        const session = agentType === "shell"
           ? await spawnShellSession(detail.workingDir, detail.workspaceId)
-          : await createSession(detail.workingDir, detail.workspaceId, false, detail.resume);
+          : await createSession(detail.workingDir, detail.workspaceId, false, detail.resume, agentType as any);
 
         addSession(session);
         // Swap the layout ID in-place to avoid layout shifts from remove+add

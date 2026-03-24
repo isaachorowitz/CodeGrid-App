@@ -110,6 +110,14 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
     (e: React.MouseEvent) => {
       e.stopPropagation();
       setRestarting(true);
+      // Detect agent type from the stored command path
+      const cmd = (session.command ?? "").toLowerCase();
+      let sessionType = "shell";
+      if (cmd.includes("codex")) sessionType = "codex";
+      else if (cmd.includes("gemini")) sessionType = "gemini";
+      else if (cmd.includes("cursor") || /\bagent\b/.test(cmd)) sessionType = "cursor";
+      else if (cmd.includes("claude")) sessionType = "claude";
+
       // Signal App.tsx to re-create this session with the same working_dir
       window.dispatchEvent(
         new CustomEvent("codegrid:restart-session", {
@@ -117,8 +125,9 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
             sessionId: session.id,
             workingDir: session.working_dir,
             workspaceId: session.workspace_id,
-            isShell: !session.command.includes("claude"),
+            isShell: sessionType === "shell",
             resume: false,
+            sessionType,
           },
         }),
       );
