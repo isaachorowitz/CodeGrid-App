@@ -12,6 +12,7 @@ import { html } from "@codemirror/lang-html";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorView } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
+import { getFileIconUrl } from "../lib/fileIcons";
 
 // ─── Language Detection ───
 const EXT_LANGUAGE: Record<string, string> = {
@@ -470,6 +471,7 @@ export const CodeViewer = memo(function CodeViewer() {
               </button>
             )}
             <span style={{ color: "#555555", fontSize: "11px" }}>|</span>
+            <img src={getFileIconUrl(fileName)} width={16} height={16} style={{ flexShrink: 0, verticalAlign: "middle" }} draggable={false} />
             <span
               style={{
                 color: "#e0e0e0",

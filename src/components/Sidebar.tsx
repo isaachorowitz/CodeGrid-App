@@ -12,6 +12,7 @@ import {
 } from "../lib/ipc";
 import { FileTree } from "./FileTree";
 import { ProjectSearch } from "./ProjectSearch";
+import { getFileIconUrl } from "../lib/fileIcons";
 
 // ---------------------------------------------------------------------------
 // Activity Bar (far-left icon rail)
@@ -761,6 +762,7 @@ const GitPanel = memo(function GitPanel({
                   color: "#00c853", fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
                 }}>{badge}</span>
+                <img src={getFileIconUrl(fileName)} width={14} height={14} style={{ flexShrink: 0, verticalAlign: "middle" }} draggable={false} />
                 <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}
                 </span>
@@ -798,6 +800,7 @@ const GitPanel = memo(function GitPanel({
                   color: badgeColor, fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
                 }}>{badge}</span>
+                <img src={getFileIconUrl(fileName)} width={14} height={14} style={{ flexShrink: 0, verticalAlign: "middle" }} draggable={false} />
                 <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}
                 </span>
@@ -833,6 +836,7 @@ const GitPanel = memo(function GitPanel({
                   color: "#555555", fontWeight: "bold", fontSize: "9px",
                   width: "14px", textAlign: "center", flexShrink: 0,
                 }}>?</span>
+                <img src={getFileIconUrl(fileName)} width={14} height={14} style={{ flexShrink: 0, verticalAlign: "middle" }} draggable={false} />
                 <span style={{ color: "#888888", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
                   {fileName}
                 </span>

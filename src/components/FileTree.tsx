@@ -1,6 +1,7 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { createFolder, listDirectory, renameFile, deleteFile, copyFile, moveFile, writeFileContents, type FileEntry } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
+import { getFileIconUrl, getFolderIconUrl } from "../lib/fileIcons";
 
 // Request deduplication: tracks in-flight directory loads
 const pendingLoads = new Set<string>();
@@ -498,6 +499,15 @@ const FileTreeNode = memo(function FileTreeNode({
           <span style={{ width: "14px", flexShrink: 0 }} />
         )}
 
+        {/* Material file/folder icon */}
+        <img
+          src={entry.is_dir ? getFolderIconUrl(entry.name, shouldShowExpanded) : getFileIconUrl(entry.name)}
+          width={16}
+          height={16}
+          style={{ flexShrink: 0, verticalAlign: "middle" }}
+          draggable={false}
+        />
+
         {/* File/dir name */}
         <span
           style={{
@@ -507,6 +517,7 @@ const FileTreeNode = memo(function FileTreeNode({
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
             flex: 1,
+            marginLeft: 4,
             fontWeight: entry.is_dir ? "bold" : "normal",
           }}
         >

@@ -1,6 +1,7 @@
 import { memo, useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { searchFiles, type SearchResult } from "../lib/ipc";
 import { useAppStore } from "../stores/appStore";
+import { getFileIconUrl } from "../lib/fileIcons";
 
 interface ProjectSearchProps {
   rootPath: string;
@@ -199,6 +200,7 @@ export const ProjectSearch = memo(function ProjectSearch({ rootPath }: ProjectSe
                 }}
               >
                 <span style={{ fontSize: 10, color: "#666", width: 12 }}>{collapsed ? "\u25b6" : "\u25bc"}</span>
+                <img src={getFileIconUrl(shortPath.split("/").pop() ?? shortPath)} width={14} height={14} style={{ flexShrink: 0, verticalAlign: "middle" }} draggable={false} />
                 <span style={{ color: "#ddd", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {shortPath}
                 </span>
