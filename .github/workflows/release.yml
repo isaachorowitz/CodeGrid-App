@@ -14,10 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
           fetch-depth: 0
 
-      # Auto-bump patch version on every main push (skip if this is a tag push or a version bump commit)
+      # Auto-bump patch version on every main push (skip if this is a version bump commit)
       - name: Auto-bump version
         if: github.ref == 'refs/heads/main'
         id: bump
@@ -36,30 +36,35 @@ jobs:
           NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
           echo "New version: $NEW_VERSION"
 
-          # Update all three version files
+          # Update version in Cargo.toml
           sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+
+          # Update version in tauri.conf.json (only the top-level version field)
           sed -i '' "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" src-tauri/tauri.conf.json
-          sed -i '' "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" package.json
 
-          # Also update Cargo.lock
-          cd src-tauri && cargo update -p codegrid --precise "$NEW_VERSION" 2>/dev/null || true && cd ..
+          # Update version in package.json (only the first occurrence)
+          sed -i '' "1,/\"version\":/{s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/;}" package.json
 
-          # Commit and tag
+          # Update Cargo.lock to match
+          cd src-tauri && cargo generate-lockfile 2>/dev/null || true && cd ..
+
+          # Commit and tag — only stage the specific version files
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "chore: bump version to ${NEW_VERSION}"
+          git add package.json src-tauri/Cargo.toml src-tauri/Cargo.lock src-tauri/tauri.conf.json
+          git commit -m "chore: bump version to ${NEW_VERSION}" || true
           git tag "v${NEW_VERSION}"
           git push origin main --tags
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
 
-      # Exit early if this was a version bump commit (the tag push will trigger a new run)
+      # Exit early if this was a version bump commit
       - name: Check if should continue
         id: check
         run: |
-          if [[ "${{ steps.bump.outputs.skip }}" == "true" ]]; then
+          SKIP="${{ steps.bump.outputs.skip }}"
+          if [[ "$SKIP" == "true" || -z "$SKIP" ]]; then
             echo "continue=false" >> $GITHUB_OUTPUT
           else
             echo "continue=true" >> $GITHUB_OUTPUT
@@ -115,7 +120,7 @@ jobs:
             --apple-id "$APPLE_ID" \
             --team-id "$APPLE_TEAM_ID" \
             --password "$APPLE_APP_PASSWORD" \
-            --wait
+            --wait --timeout 15m
           xcrun stapler staple $DMG
 
       - name: Get version
