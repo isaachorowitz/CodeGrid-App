@@ -3,7 +3,7 @@ name: Build & Release
 on:
   push:
     branches: [main]
-    tags: ['v*']
+  workflow_dispatch:
 
 jobs:
   build:
@@ -145,17 +145,5 @@ jobs:
             --notes "CodeGrid v${VERSION} — Signed and notarized for macOS." \
             --latest
 
-      - name: Notify landing page
-        if: steps.check.outputs.continue == 'true' && always()
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
-        run: |
-          VERSION=${{ steps.version.outputs.version }}
-          DMG_NAME="CodeGrid_${VERSION}_aarch64.dmg"
-          DOWNLOAD_URL="https://github.com/isaachorowitz/CodeGrid-Claude-Code-Terminal/releases/download/v${VERSION}/${DMG_NAME}"
-          gh api repos/isaachorowitz/CodeGrid-Landing/dispatches \
-            -f event_type=update-download \
-            -f "client_payload[version]=${VERSION}" \
-            -f "client_payload[download_url]=${DOWNLOAD_URL}" \
-            -f "client_payload[tag]=v${VERSION}"
+      # Landing page dynamically fetches the latest release from GitHub API
+      # No notification needed — it always serves the newest DMG automatically
