@@ -50,8 +50,17 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
           git commit -m "chore: bump version to ${NEW_VERSION}" || true
-          git tag "v${NEW_VERSION}"
-          git push origin main --tags
+
+          # Guard: skip tag creation if it already exists on remote
+          if git ls-remote --tags origin "refs/tags/v${NEW_VERSION}" | grep -q "refs/tags"; then
+            echo "Tag v${NEW_VERSION} already exists remotely — force-replacing"
+            git tag -f "v${NEW_VERSION}"
+            git push origin main --force-with-lease
+            git push origin "refs/tags/v${NEW_VERSION}" --force
+          else
+            git tag "v${NEW_VERSION}"
+            git push origin main --tags
+          fi
 
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "skip=false" >> $GITHUB_OUTPUT
@@ -103,6 +112,8 @@ jobs:
         if: steps.check.outputs.continue == 'true'
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --target aarch64-apple-darwin
 
       - name: Notarize
@@ -128,20 +139,50 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "dmg=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg" >> $GITHUB_OUTPUT
 
-      # Create versioned release on the public repo
+      # Create versioned release on the public repo and upload latest.json for auto-update
       - name: Publish release
         if: steps.check.outputs.continue == 'true'
         env:
           GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           REPO="isaachorowitz/CodeGrid-Claude-Code-Terminal"
           VERSION=${{ steps.version.outputs.version }}
           TAG="v${VERSION}"
           DMG="${{ steps.version.outputs.dmg }}"
+          TARBALL="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/CodeGrid.app.tar.gz"
+          SIG_FILE="${TARBALL}.sig"
+
+          # Generate latest.json for auto-updater
+          if [ -f "$SIG_FILE" ]; then
+            SIG=$(cat "$SIG_FILE")
+            PUB_URL="https://github.com/${REPO}/releases/download/${TAG}/CodeGrid_${VERSION}_aarch64.dmg"
+            TARBALL_URL="https://github.com/${REPO}/releases/download/${TAG}/CodeGrid.app.tar.gz"
+            cat > latest.json << EOF
+          {
+            "version": "${TAG}",
+            "notes": "CodeGrid v${VERSION}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "url": "${TARBALL_URL}",
+                "signature": "${SIG}"
+              }
+            }
+          }
+          EOF
+          fi
+
           # Delete existing release with same tag if any
           gh release delete "$TAG" --repo "$REPO" --yes 2>/dev/null || true
-          # Create release with DMG
-          gh release create "$TAG" "$DMG" \
+
+          # Upload DMG + tarball + latest.json
+          ASSETS="$DMG"
+          [ -f "$TARBALL" ] && ASSETS="$ASSETS $TARBALL"
+          [ -f "latest.json" ] && ASSETS="$ASSETS latest.json"
+
+          gh release create "$TAG" $ASSETS \
             --repo "$REPO" \
             --title "CodeGrid $TAG" \
             --notes "CodeGrid v${VERSION} — Signed and notarized for macOS." \
