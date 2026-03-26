@@ -1,6 +1,7 @@
 import { memo, useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 import { useSessionStore } from "../stores/sessionStore";
+import { useLicenseStore } from "../stores/licenseStore";
 import { useLayoutStore, type PresetLayout } from "../stores/layoutStore";
 import { useAppStore } from "../stores/appStore";
 import { useToastStore } from "../stores/toastStore";
@@ -26,6 +27,8 @@ export const CommandPalette = memo(function CommandPalette() {
   } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const { setFocusedSession, toggleBroadcast, focusedSessionId } = useSessionStore();
+  const licenseStatus = useLicenseStore((s) => s.status);
+  const setLicenseDialogOpen = useWorkspaceStore((s) => s.setLicenseDialogOpen);
   const { applyPreset, toggleMaximize } = useLayoutStore();
   const { setSkillsPanelOpen, setHubBrowserOpen, setGitManagerOpen, setMcpManagerOpen, setDependencyGraphOpen, skills } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
@@ -116,7 +119,15 @@ export const CommandPalette = memo(function CommandPalette() {
         id: "toggle-broadcast",
         label: "Broadcast",
         category: "View",
-        action: () => { setCommandPaletteOpen(false); toggleBroadcast(); },
+        action: () => {
+          const isUnlocked = licenseStatus?.is_licensed || licenseStatus?.is_trial;
+          setCommandPaletteOpen(false);
+          if (!isUnlocked) {
+            setLicenseDialogOpen(true);
+          } else {
+            toggleBroadcast();
+          }
+        },
       },
     );
 
