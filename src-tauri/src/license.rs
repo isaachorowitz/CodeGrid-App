@@ -1,177 +1,321 @@
-use ed25519_dalek::{VerifyingKey, Signature, Verifier};
+//! Keyforge-based license validation for CodeGrid.
+//!
+//! Flow:
+//!   activate   → POST /api/v1/public/licenses/activate  → cache in DB
+//!   validate   → POST /api/v1/public/licenses/validate  → refresh cache
+//!   deactivate → DELETE /api/v1/public/licenses/device  → clear DB
+//!
+//! Offline grace: 14 days from last successful online validation.
+//! Free tier:     max 3 panes, permanent (no time limit, no account needed).
+
 use sha2::{Sha256, Digest};
 
-/// Ed25519 PUBLIC key for license verification.
-/// The corresponding private key is kept server-side only (env var LICENSE_SIGNING_KEY).
-/// A public key CANNOT be used to forge signatures — this is the entire point of
-/// asymmetric cryptography.
-const LICENSE_PUBLIC_KEY: [u8; 32] = [
-    0x7f, 0x38, 0xab, 0x09, 0x6e, 0xc7, 0x78, 0xac,
-    0xc3, 0xcf, 0x8d, 0x62, 0xfd, 0x7b, 0xfe, 0x84,
-    0x09, 0x5e, 0x17, 0x10, 0xda, 0xf7, 0x26, 0xa4,
-    0x99, 0xcd, 0xe3, 0x51, 0xa6, 0x19, 0x52, 0x4d,
-];
+/// Keyforge product ID — replace with your real product ID from
+/// https://keyforge.dev after creating a product in the dashboard.
+const KEYFORGE_PRODUCT_ID: &str = "p_CHANGEME";
 
-/// Internal salt for trial integrity verification (not a signing secret —
-/// only prevents casual SQLite edits; real protection is server-side activation).
-const TRIAL_SALT: &[u8] = b"codegrid-trial-integrity-2026";
+/// Base URL for the Keyforge public API (no auth key required).
+const KEYFORGE_API: &str = "https://keyforge.dev/api/v1/public";
 
-/// Trial: 14 days from first launch (9 panes). After trial, limited to 4 panes.
-/// Licensed: up to 50 panes per workspace.
+/// Days the app works offline using a cached valid validation.
+const OFFLINE_GRACE_DAYS: i64 = 14;
+
+pub const MAX_PANES_FREE: u32 = 3;
+pub const MAX_PANES_PRO: u32 = 50;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct LicenseStatus {
     pub is_licensed: bool,
-    pub is_trial: bool,
-    pub trial_days_remaining: i64,
-    pub license_key: Option<String>,
+    pub is_trial: bool,              // always false — kept for interface compat
+    pub trial_days_remaining: i64,   // always 0   — kept for interface compat
+    pub license_key: Option<String>, // masked key for display
     pub max_panes: u32,
+    pub subscription_expires_at: Option<String>,
+    pub keyforge_status: Option<String>, // "active" | "expired" | "revoked"
+    pub is_offline_grace: bool,
 }
 
-/// Validate a license key signed with Ed25519.
-/// Format: CG-XXXXX-XXXXX-XXXXX.{base64url_ed25519_signature}
-pub fn validate_license_key(key: &str) -> bool {
-    let Some((payload, sig_b64)) = key.split_once('.') else {
-        return false;
-    };
-
-    // Verify payload format: CG-XXXXX-XXXXX-XXXXX
-    let segments: Vec<&str> = payload.split('-').collect();
-    if segments.len() != 4 || segments[0] != "CG" {
-        return false;
-    }
-
-    // Decode base64url signature (Ed25519 = 64 bytes)
-    let sig_bytes = match base64_url_decode(sig_b64) {
-        Some(b) if b.len() == 64 => b,
-        _ => return false,
-    };
-
-    // Verify Ed25519 signature using embedded public key
-    let Ok(verifying_key) = VerifyingKey::from_bytes(&LICENSE_PUBLIC_KEY) else {
-        return false;
-    };
-    let Ok(signature) = Signature::from_slice(&sig_bytes) else {
-        return false;
-    };
-
-    verifying_key.verify(payload.as_bytes(), &signature).is_ok()
-}
-
-/// Get the machine fingerprint (SHA-256 of hardware UUID + username).
-/// Used to bind the trial to a specific machine so deleting the DB and
-/// re-installing doesn't grant a fresh trial.
-pub fn get_machine_id() -> String {
-    let hw_uuid = get_hardware_uuid().unwrap_or_default();
-    let username = std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_default();
-
-    let mut hasher = Sha256::new();
-    hasher.update(hw_uuid.as_bytes());
-    hasher.update(b":");
-    hasher.update(username.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-/// Compute trial integrity signature — ties (date, machine) together so
-/// editing one without the other is detectable.
-fn trial_integrity_sig(date_str: &str, machine_id: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(TRIAL_SALT);
-    hasher.update(date_str.as_bytes());
-    hasher.update(b":");
-    hasher.update(machine_id.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-pub fn get_license_status(db: &crate::db::Database) -> LicenseStatus {
-    // Check if a valid license key is stored
-    if let Some(key) = db.get_setting("license_key") {
-        if !key.is_empty() && validate_license_key(&key) {
-            return LicenseStatus {
-                is_licensed: true,
-                is_trial: false,
-                trial_days_remaining: 0,
-                license_key: Some(mask_license_key(&key)),
-                max_panes: 50,
-            };
-        }
-    }
-
-    // Check trial status with integrity verification
-    let machine_id = get_machine_id();
-    let first_launch = db.get_setting("first_launch_date");
-    let stored_sig = db.get_setting("trial_integrity");
-    let stored_machine = db.get_setting("machine_id");
-    let now = chrono::Utc::now();
-
-    let first_launch_date = if let Some(date_str) = &first_launch {
-        // Verify trial integrity — if date or machine was tampered, treat as expired
-        let expected_sig = trial_integrity_sig(date_str, &machine_id);
-        let sig_valid = stored_sig.as_deref() == Some(expected_sig.as_str());
-        let machine_valid = stored_machine.as_deref() == Some(machine_id.as_str());
-
-        if !sig_valid || !machine_valid {
-            return LicenseStatus {
-                is_licensed: false,
-                is_trial: false,
-                trial_days_remaining: 0,
-                license_key: None,
-                max_panes: 4,
-            };
-        }
-
-        chrono::DateTime::parse_from_rfc3339(date_str)
-            .map(|d| d.with_timezone(&chrono::Utc))
-            .unwrap_or(now)
-    } else {
-        // First launch — record trial start with integrity signature
-        let date_str = now.to_rfc3339();
-        let sig = trial_integrity_sig(&date_str, &machine_id);
-        let _ = db.set_setting("first_launch_date", &date_str);
-        let _ = db.set_setting("trial_integrity", &sig);
-        let _ = db.set_setting("machine_id", &machine_id);
-        now
-    };
-
-    let days_elapsed = (now - first_launch_date).num_days();
-    let trial_days = 14;
-    let remaining = (trial_days - days_elapsed).max(0);
-
-    if remaining > 0 {
-        LicenseStatus {
-            is_licensed: false,
-            is_trial: true,
-            trial_days_remaining: remaining,
-            license_key: None,
-            max_panes: 9, // Full access during trial
-        }
-    } else {
+impl LicenseStatus {
+    pub fn free_tier() -> Self {
         LicenseStatus {
             is_licensed: false,
             is_trial: false,
             trial_days_remaining: 0,
             license_key: None,
-            max_panes: 4, // Limited after trial — enough to be useful
+            max_panes: MAX_PANES_FREE,
+            subscription_expires_at: None,
+            keyforge_status: None,
+            is_offline_grace: false,
+        }
+    }
+
+    pub fn pro_tier(key: &str, expires_at: Option<String>, offline_grace: bool) -> Self {
+        LicenseStatus {
+            is_licensed: true,
+            is_trial: false,
+            trial_days_remaining: 0,
+            license_key: Some(mask_license_key(key)),
+            max_panes: MAX_PANES_PRO,
+            subscription_expires_at: expires_at,
+            keyforge_status: Some("active".to_string()),
+            is_offline_grace: offline_grace,
         }
     }
 }
 
-/// Mask the license key for display (only show payload prefix, hide signature)
+/// Mask a license key for safe display (show first segment only).
 fn mask_license_key(key: &str) -> String {
-    if let Some((payload, _)) = key.split_once('.') {
-        format!("{payload}...")
+    let parts: Vec<&str> = key.split('-').collect();
+    if parts.len() >= 2 {
+        format!("{}-****-****", parts[0])
     } else {
-        "CG-*****".to_string()
+        "****-****-****".to_string()
     }
 }
 
-/// Decode base64url (no padding) to bytes
-fn base64_url_decode(input: &str) -> Option<Vec<u8>> {
-    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    URL_SAFE_NO_PAD.decode(input).ok()
+/// Stable machine identifier: SHA-256 of (hardware UUID + username), 48 hex chars.
+pub fn get_machine_id() -> String {
+    let hw_uuid = get_hardware_uuid().unwrap_or_default();
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(hw_uuid.as_bytes());
+    hasher.update(b":");
+    hasher.update(username.as_bytes());
+    hex::encode(hasher.finalize())[..48].to_string()
 }
+
+/// Human-readable device name sent to Keyforge for the device list.
+fn get_device_name() -> String {
+    std::process::Command::new("hostname")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "CodeGrid Mac".to_string())
+}
+
+// ── Sync helper — used by pane-creation (must not block async runtime) ───────
+
+/// Read cached license state from DB without a network call.
+/// Called from pane-creation enforcement which runs in a sync context.
+pub fn get_cached_status(db: &crate::db::Database) -> LicenseStatus {
+    let key = match db.get_setting("keyforge_license_key") {
+        Some(k) if !k.is_empty() => k,
+        _ => return LicenseStatus::free_tier(),
+    };
+
+    let status = db.get_setting("keyforge_status").unwrap_or_default();
+    if status != "active" {
+        return LicenseStatus::free_tier();
+    }
+
+    let last_validated = db.get_setting("keyforge_last_validated").unwrap_or_default();
+    if !is_within_grace_period(&last_validated) {
+        return LicenseStatus::free_tier();
+    }
+
+    let expires_at = db.get_setting("keyforge_expires_at");
+    LicenseStatus::pro_tier(&key, expires_at, false)
+}
+
+fn is_within_grace_period(last_validated: &str) -> bool {
+    if last_validated.is_empty() {
+        return false;
+    }
+    let Ok(last) = chrono::DateTime::parse_from_rfc3339(last_validated) else {
+        return false;
+    };
+    let elapsed = chrono::Utc::now() - last.with_timezone(&chrono::Utc);
+    elapsed.num_days() < OFFLINE_GRACE_DAYS
+}
+
+// ── Async Keyforge API operations ────────────────────────────────────────────
+
+/// Validate the stored license with Keyforge; update DB cache; return status.
+/// Falls back to cached state if the network is unreachable.
+pub async fn refresh_license_status(db: &crate::db::Database) -> LicenseStatus {
+    let key = match db.get_setting("keyforge_license_key") {
+        Some(k) if !k.is_empty() => k,
+        _ => return LicenseStatus::free_tier(),
+    };
+    let device_id = get_machine_id();
+
+    match keyforge_validate(&key, &device_id).await {
+        Ok(resp) => {
+            let is_valid = resp.get("isValid").and_then(|v| v.as_bool()).unwrap_or(false);
+            let status_str = resp
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let expires_at = resp
+                .get("license")
+                .and_then(|l| l.get("expiresAt"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            if is_valid && status_str == "active" {
+                let now = chrono::Utc::now().to_rfc3339();
+                let _ = db.set_setting("keyforge_status", "active");
+                let _ = db.set_setting("keyforge_last_validated", &now);
+                if let Some(ref exp) = expires_at {
+                    let _ = db.set_setting("keyforge_expires_at", exp);
+                }
+                LicenseStatus::pro_tier(&key, expires_at, false)
+            } else {
+                let _ = db.set_setting("keyforge_status", &status_str);
+                LicenseStatus::free_tier()
+            }
+        }
+        Err(_) => {
+            // Network unreachable — apply offline grace
+            let last_validated = db.get_setting("keyforge_last_validated").unwrap_or_default();
+            if is_within_grace_period(&last_validated) {
+                let expires_at = db.get_setting("keyforge_expires_at");
+                LicenseStatus::pro_tier(&key, expires_at, true)
+            } else {
+                LicenseStatus::free_tier()
+            }
+        }
+    }
+}
+
+/// Activate a Keyforge license key on this device. Stores result in DB.
+pub async fn activate_license_key(
+    key: &str,
+    db: &crate::db::Database,
+) -> Result<LicenseStatus, String> {
+    let device_id = get_machine_id();
+    let device_name = get_device_name();
+
+    let resp = keyforge_activate(key, &device_id, &device_name)
+        .await
+        .map_err(|e| format!("Network error: {e}"))?;
+
+    let is_valid = resp
+        .get("isValid")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if !is_valid {
+        let code = resp
+            .get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("unknown");
+        return Err(match code {
+            "invalid_license" => "Invalid license key.".to_string(),
+            "license_revoked" => "This license has been revoked.".to_string(),
+            "license_expired" => {
+                "License expired. Renew at codegrid.app/pricing.".to_string()
+            }
+            "max_devices_reached" => {
+                "Device limit reached. Manage devices at keyforge.dev/portal/request.".to_string()
+            }
+            _ => "Activation failed. Check your key and try again.".to_string(),
+        });
+    }
+
+    let status_str = resp
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("active");
+    let expires_at = resp
+        .get("license")
+        .and_then(|l| l.get("expiresAt"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let now = chrono::Utc::now().to_rfc3339();
+
+    let _ = db.set_setting("keyforge_license_key", key);
+    let _ = db.set_setting("keyforge_status", status_str);
+    let _ = db.set_setting("keyforge_last_validated", &now);
+    if let Some(ref exp) = expires_at {
+        let _ = db.set_setting("keyforge_expires_at", exp);
+    }
+
+    Ok(LicenseStatus::pro_tier(key, expires_at, false))
+}
+
+/// Deactivate this device from Keyforge and clear local cache.
+pub async fn deactivate_license_key(db: &crate::db::Database) -> LicenseStatus {
+    if let Some(key) = db
+        .get_setting("keyforge_license_key")
+        .filter(|k| !k.is_empty())
+    {
+        let device_id = get_machine_id();
+        // Best-effort deactivation — don't block on network failure
+        let _ = keyforge_deactivate(&key, &device_id).await;
+    }
+    let _ = db.set_setting("keyforge_license_key", "");
+    let _ = db.set_setting("keyforge_status", "");
+    let _ = db.set_setting("keyforge_last_validated", "");
+    let _ = db.set_setting("keyforge_expires_at", "");
+    LicenseStatus::free_tier()
+}
+
+// ── Raw HTTP calls ────────────────────────────────────────────────────────────
+
+async fn keyforge_validate(
+    key: &str,
+    device_id: &str,
+) -> Result<serde_json::Value, reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .post(format!("{KEYFORGE_API}/licenses/validate"))
+        .json(&serde_json::json!({
+            "licenseKey": key,
+            "deviceIdentifier": device_id,
+            "productId": KEYFORGE_PRODUCT_ID,
+        }))
+        .send()
+        .await?;
+    Ok(resp.json().await.unwrap_or(serde_json::Value::Null))
+}
+
+async fn keyforge_activate(
+    key: &str,
+    device_id: &str,
+    device_name: &str,
+) -> Result<serde_json::Value, reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let resp = client
+        .post(format!("{KEYFORGE_API}/licenses/activate"))
+        .json(&serde_json::json!({
+            "licenseKey": key,
+            "deviceIdentifier": device_id,
+            "deviceName": device_name,
+            "productId": KEYFORGE_PRODUCT_ID,
+        }))
+        .send()
+        .await?;
+    Ok(resp.json().await.unwrap_or(serde_json::Value::Null))
+}
+
+async fn keyforge_deactivate(key: &str, device_id: &str) -> Result<(), reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    client
+        .delete(format!("{KEYFORGE_API}/licenses/device"))
+        .json(&serde_json::json!({
+            "licenseKey": key,
+            "deviceIdentifier": device_id,
+            "productId": KEYFORGE_PRODUCT_ID,
+        }))
+        .send()
+        .await?;
+    Ok(())
+}
+
+// ── Platform: hardware UUID ───────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
 fn get_hardware_uuid() -> Option<String> {
@@ -192,8 +336,9 @@ fn get_hardware_uuid() -> Option<String> {
 
 #[cfg(not(target_os = "macos"))]
 fn get_hardware_uuid() -> Option<String> {
-    let hostname = std::env::var("COMPUTERNAME")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_default();
-    Some(hostname)
+    Some(
+        std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_default(),
+    )
 }
