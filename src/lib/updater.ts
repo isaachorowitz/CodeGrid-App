@@ -1,4 +1,4 @@
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 export type UpdateReadyCallback = (
@@ -13,7 +13,7 @@ export async function checkForUpdatesInBackground(
     const update = await check();
     if (!update) return;
 
-    await update.download((event) => {
+    await update.download((event: DownloadEvent) => {
       if (event.event === "Finished") {
         console.log("Update download complete");
       }
@@ -27,3 +27,4 @@ export async function checkForUpdatesInBackground(
     console.error("Update check failed:", err);
   }
 }
+
