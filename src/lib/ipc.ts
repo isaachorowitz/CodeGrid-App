@@ -681,6 +681,9 @@ export interface LicenseStatus {
   trial_days_remaining: number;
   license_key: string | null;
   max_panes: number;
+  subscription_expires_at: string | null;
+  keyforge_status: string | null;
+  is_offline_grace: boolean;
 }
 
 export async function getLicenseStatus(): Promise<LicenseStatus> {
@@ -693,6 +696,10 @@ export async function activateLicense(key: string): Promise<LicenseStatus> {
 
 export async function deactivateLicense(): Promise<LicenseStatus> {
   return invoke("deactivate_license");
+}
+
+export async function refreshLicenseStatus(): Promise<LicenseStatus> {
+  return invoke("refresh_license_status");
 }
 
 // === Dependency Graph ===
