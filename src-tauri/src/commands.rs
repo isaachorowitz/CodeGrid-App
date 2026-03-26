@@ -122,7 +122,7 @@ pub async fn create_session(
 
     // Enforce license pane limit server-side (defense in depth — frontend also checks)
     {
-        let license_status = crate::license::get_license_status(&state.db);
+        let license_status = crate::license::get_cached_status(&state.db);
         let sessions = state.sessions.lock().await;
         let workspace_count = sessions
             .iter()
@@ -134,12 +134,10 @@ pub async fn create_session(
                 "Pane limit reached ({}/{}). {}",
                 workspace_count,
                 license_status.max_panes,
-                if license_status.is_trial {
-                    "Upgrade to unlock more panes."
-                } else if license_status.is_licensed {
-                    "License maximum reached."
+                if license_status.is_licensed {
+                    "Session limit reached."
                 } else {
-                    "Trial expired. Purchase a license to continue."
+                    "Free plan: 3 sessions max. Upgrade to Pro at codegrid.app/pricing."
                 }
             ));
         }
@@ -627,10 +625,10 @@ pub async fn set_setting(
     // Block writes to security-sensitive keys — these are managed by
     // activate_license / deactivate_license and the trial system only.
     const BLOCKED_KEYS: &[&str] = &[
-        "license_key",
-        "first_launch_date",
-        "trial_integrity",
-        "machine_id",
+        "keyforge_license_key",
+        "keyforge_status",
+        "keyforge_last_validated",
+        "keyforge_expires_at",
     ];
     if BLOCKED_KEYS.contains(&key.as_str()) {
         return Err(format!("Cannot modify protected setting: {key}"));
@@ -3616,7 +3614,14 @@ pub async fn git_stage_hunk(working_dir: String, file_path: String, hunk_header:
 pub async fn get_license_status(
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::license::LicenseStatus, String> {
-    Ok(crate::license::get_license_status(&state.db))
+    Ok(crate::license::refresh_license_status(&state.db).await)
+}
+
+#[tauri::command]
+pub async fn refresh_license_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<crate::license::LicenseStatus, String> {
+    Ok(crate::license::refresh_license_status(&state.db).await)
 }
 
 #[tauri::command]
@@ -3624,22 +3629,14 @@ pub async fn activate_license(
     key: String,
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::license::LicenseStatus, String> {
-    if crate::license::validate_license_key(&key) {
-        state.db.set_setting("license_key", &key)
-            .map_err(|e| format!("Failed to save license: {e}"))?;
-        Ok(crate::license::get_license_status(&state.db))
-    } else {
-        Err("Invalid license key".to_string())
-    }
+    crate::license::activate_license_key(&key, &state.db).await
 }
 
 #[tauri::command]
 pub async fn deactivate_license(
     state: State<'_, Arc<AppState>>,
 ) -> Result<crate::license::LicenseStatus, String> {
-    state.db.set_setting("license_key", "")
-        .map_err(|e| format!("Failed to remove license: {e}"))?;
-    Ok(crate::license::get_license_status(&state.db))
+    Ok(crate::license::deactivate_license_key(&state.db).await)
 }
 
 // === Dependency Graph Analysis ===
