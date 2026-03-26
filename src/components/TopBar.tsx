@@ -9,6 +9,7 @@ import { createWorkspace, renameWorkspace as renameWorkspaceIpc, setActiveWorksp
 import { ResourceIndicator } from "./ResourceIndicator";
 import { TerminalManager } from "./TerminalManager";
 import { useNotesStore } from "../stores/notesStore";
+import { useLicenseStore } from "../stores/licenseStore";
 import { useLayoutStore as useLayoutStoreForNotes } from "../stores/layoutStore";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -35,11 +36,13 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     setCommandPaletteOpen,
     toggleSidebar,
     sidebarOpen,
+    setLicenseDialogOpen,
   } = useWorkspaceStore();
   const sessions = useSessionStore((s) => s.sessions);
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
   const broadcastMode = useSessionStore((s) => s.broadcastMode);
   const toggleBroadcast = useSessionStore((s) => s.toggleBroadcast);
+  const licenseStatus = useLicenseStore((s) => s.status);
   const setSessionManualName = useSessionStore((s) => s.setSessionManualName);
   const autoLayout = useLayoutStore((s) => s.autoLayout);
   const canvasState = useLayoutStore((s) => s.canvas);
