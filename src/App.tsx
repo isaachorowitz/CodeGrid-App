@@ -76,6 +76,8 @@ export default function App() {
     sidebarOpen,
     activePanel,
     setNewSessionDialogOpen,
+    licenseDialogOpen,
+    setLicenseDialogOpen,
   } = useWorkspaceStore();
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
@@ -679,7 +681,7 @@ export default function App() {
       <ClaudeMdEditor />
       <GitSetupWizard />
       <CodeViewer />
-      <LicenseDialog />
+      <LicenseDialog isOpen={licenseDialogOpen} onClose={() => setLicenseDialogOpen(false)} />
       <DependencyGraph />
       <ResourceWarningDialog
         open={resourceWarningOpen}
