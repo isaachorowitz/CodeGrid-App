@@ -3,6 +3,7 @@ import { matchKeybinding } from "../lib/keybindings";
 import { useSessionStore } from "../stores/sessionStore";
 import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "../stores/layoutStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
+import { useLicenseStore } from "../stores/licenseStore";
 import { setActiveWorkspace as setActiveWorkspaceIpc } from "../lib/ipc";
 
 export function useKeyboardNav() {
@@ -12,6 +13,8 @@ export function useKeyboardNav() {
     setFocusedSession,
     toggleBroadcast,
   } = useSessionStore();
+  const licenseStatus = useLicenseStore((s) => s.status);
+  const setLicenseDialogOpen = useWorkspaceStore((s) => s.setLicenseDialogOpen);
   const { layouts, toggleMaximize, swapPanes, setLayouts, setCanvas } = useLayoutStore();
   const {
     workspaces,
@@ -132,9 +135,15 @@ export function useKeyboardNav() {
         case "command-palette":
           setCommandPaletteOpen(true);
           break;
-        case "toggle-broadcast":
-          toggleBroadcast();
+        case "toggle-broadcast": {
+          const isUnlocked = licenseStatus?.is_licensed || licenseStatus?.is_trial;
+          if (!isUnlocked) {
+            setLicenseDialogOpen(true);
+          } else {
+            toggleBroadcast();
+          }
           break;
+        }
         case "toggle-sidebar":
           toggleSidebar();
           break;
