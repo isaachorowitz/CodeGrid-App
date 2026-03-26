@@ -12,7 +12,7 @@ use sha2::{Sha256, Digest};
 
 /// Your Keyforge product ID — replace with the real ID from
 /// https://keyforge.dev after creating a product in the dashboard.
-const KEYFORGE_PRODUCT_ID: &str = "p_CHANGEME";
+const KEYFORGE_PRODUCT_ID: &str = "p_uyid9x6sml93uns6kht11vtj";
 
 /// Base URL for the Keyforge public API (no auth key required).
 const KEYFORGE_API: &str = "https://keyforge.dev/api/v1/public";
