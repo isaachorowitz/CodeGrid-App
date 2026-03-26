@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { getLicenseStatus, activateLicense, deactivateLicense, type LicenseStatus } from "../lib/ipc";
+import { getLicenseStatus, activateLicense, deactivateLicense, refreshLicenseStatus, type LicenseStatus } from "../lib/ipc";
+import { open } from "@tauri-apps/plugin-shell";
 
 interface LicenseStore {
   status: LicenseStatus | null;
@@ -8,6 +9,8 @@ interface LicenseStore {
   fetchStatus: () => Promise<void>;
   activate: (key: string) => Promise<boolean>;
   deactivate: () => Promise<void>;
+  refresh: () => Promise<void>;
+  openPortal: () => Promise<void>;
 }
 
 export const useLicenseStore = create<LicenseStore>((set) => ({
@@ -31,7 +34,7 @@ export const useLicenseStore = create<LicenseStore>((set) => ({
       set({ status });
       return true;
     } catch (e) {
-      set({ error: "Invalid license key" });
+      set({ error: String(e) });
       return false;
     }
   },
@@ -43,5 +46,18 @@ export const useLicenseStore = create<LicenseStore>((set) => ({
     } catch (e) {
       set({ error: String(e) });
     }
+  },
+
+  refresh: async () => {
+    try {
+      const status = await refreshLicenseStatus();
+      set({ status, error: null });
+    } catch (e) {
+      set({ error: String(e) });
+    }
+  },
+
+  openPortal: async () => {
+    await open("https://keyforge.dev/portal/request");
   },
 }));
