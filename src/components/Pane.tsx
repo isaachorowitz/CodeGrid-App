@@ -22,6 +22,20 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
   const isFocused = focusedSessionId === session.id;
   const isMaximized = maximizedPane === session.id;
 
+  // Flash pane border when agent transitions running→idle ("done generating")
+  const prevStatusRef = useRef<string | undefined>(undefined);
+  const [doneGlow, setDoneGlow] = useState(false);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    const curr = session.status ?? "idle";
+    prevStatusRef.current = curr;
+    if (prev === "running" && curr === "idle") {
+      setDoneGlow(true);
+      const t = setTimeout(() => setDoneGlow(false), 1500);
+      return () => clearTimeout(t);
+    }
+  }, [session.status]);
+
   // Detect agent type from command string
   const cmd = (session.command ?? "").toLowerCase();
   const detectAgent = (): { label: string; color: string } => {
@@ -160,6 +174,7 @@ export const Pane = memo(function Pane({ session, onClose, onDragStart }: PanePr
 
   return (
     <div
+      className={doneGlow ? "pane-done-glow" : undefined}
       onClick={handleFocus}
       style={{
         display: "flex",

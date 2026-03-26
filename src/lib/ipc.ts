@@ -605,6 +605,69 @@ export async function searchFiles(
   });
 }
 
+// === Additional Git Commands ===
+
+export interface GitBlameEntry {
+  hash: string;
+  author: string;
+  date: string;
+  line_number: number;
+  content: string;
+}
+
+export interface GitStashEntry {
+  index: string;
+  message: string;
+}
+
+export async function gitInit(workingDir: string): Promise<string> {
+  return invoke("git_init", { workingDir });
+}
+
+export async function gitDeleteBranch(workingDir: string, branchName: string, force: boolean): Promise<string> {
+  return invoke("git_delete_branch", { workingDir, branchName, force });
+}
+
+export async function gitMergeBranch(workingDir: string, branchName: string): Promise<string> {
+  return invoke("git_merge_branch", { workingDir, branchName });
+}
+
+export async function gitAmendCommit(workingDir: string, message?: string): Promise<string> {
+  return invoke("git_amend_commit", { workingDir, message: message ?? null });
+}
+
+export async function gitDiscardAll(workingDir: string): Promise<string> {
+  return invoke("git_discard_all", { workingDir });
+}
+
+export async function gitBlameFile(workingDir: string, filePath: string): Promise<GitBlameEntry[]> {
+  return invoke("git_blame_file", { workingDir, filePath });
+}
+
+export async function gitTag(workingDir: string, tagName: string, message?: string): Promise<string> {
+  return invoke("git_tag", { workingDir, tagName, message: message ?? null });
+}
+
+export async function gitListTags(workingDir: string): Promise<string[]> {
+  return invoke("git_list_tags", { workingDir });
+}
+
+export async function gitCherryPick(workingDir: string, commitHash: string): Promise<string> {
+  return invoke("git_cherry_pick", { workingDir, commitHash });
+}
+
+export async function gitRevertCommit(workingDir: string, commitHash: string): Promise<string> {
+  return invoke("git_revert_commit", { workingDir, commitHash });
+}
+
+export async function gitStashList(workingDir: string): Promise<GitStashEntry[]> {
+  return invoke("git_stash_list", { workingDir });
+}
+
+export async function gitStashDrop(workingDir: string, index: number): Promise<string> {
+  return invoke("git_stash_drop", { workingDir, index });
+}
+
 // === Git Hunk Staging ===
 
 export async function gitStageHunk(workingDir: string, filePath: string, hunkHeader: string): Promise<void> {

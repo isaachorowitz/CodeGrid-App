@@ -166,6 +166,19 @@ pub fn run() {
             commands::reveal_in_finder,
             commands::open_in_default_app,
             commands::clipboard_write,
+            // Additional git commands
+            commands::git_init,
+            commands::git_delete_branch,
+            commands::git_merge_branch,
+            commands::git_amend_commit,
+            commands::git_discard_all,
+            commands::git_blame_file,
+            commands::git_tag,
+            commands::git_list_tags,
+            commands::git_cherry_pick,
+            commands::git_revert_commit,
+            commands::git_stash_list,
+            commands::git_stash_drop,
 
         ])
         // Intercept close (red X / Cmd+Q) → show confirmation if sessions are running.

@@ -121,7 +121,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     })),
 
   getWorkspaceSessionCount: (workspaceId) =>
-    get().sessions.filter((s) => s.workspace_id === workspaceId).length,
+    get().sessions.filter((s) => s.workspace_id === workspaceId && s.status !== "dead").length,
 
   removeWorkspaceSessions: (workspaceId) => {
     const removedIds = get().sessions

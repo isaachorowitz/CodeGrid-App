@@ -4,7 +4,9 @@ import {
   gitStatus, gitPush, gitPull, gitCommit, gitStageFile, gitUnstageFile,
   gitCreateBranch, gitSwitchBranch, gitListBranches, gitLog, gitDiscardFile,
   gitFetch, gitStash, gitStageAll, gitShowCommit,
-  type GitStatusInfo, type GitBranchInfo, type GitLogEntry,
+  gitInit, gitDeleteBranch, gitMergeBranch, gitAmendCommit, gitDiscardAll,
+  gitTag, gitListTags, gitCherryPick, gitRevertCommit, gitStashList, gitStashDrop,
+  type GitStatusInfo, type GitBranchInfo, type GitLogEntry, type GitStashEntry,
 } from "../lib/ipc";
 
 function resolveFilePath(dir: string, relativePath: string): string {
@@ -43,6 +45,13 @@ export const GitManager = memo(function GitManager() {
   const [commitDetail, setCommitDetail] = useState<string | null>(null);
   const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
   const [stageAllChecked, setStageAllChecked] = useState(false);
+  const [amendMode, setAmendMode] = useState(false);
+  const [confirmDiscardAll, setConfirmDiscardAll] = useState(false);
+  const [confirmDeleteBranch, setConfirmDeleteBranch] = useState<string | null>(null);
+  const [tags, setTags] = useState<string[]>([]);
+  const [newTag, setNewTag] = useState("");
+  const [stashList, setStashList] = useState<GitStashEntry[]>([]);
+  const [isGitRepo, setIsGitRepo] = useState(true);
 
   const dir = gitManagerDir ?? "";
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -77,8 +86,15 @@ export const GitManager = memo(function GitManager() {
     try {
       const s = await gitStatus(dir);
       setStatus(s);
+      setIsGitRepo(true);
     } catch (e) {
-      showError(String(e));
+      const msg = String(e);
+      if (msg.toLowerCase().includes("not a git repository") || msg.toLowerCase().includes("not_a_repo")) {
+        setIsGitRepo(false);
+        setStatus(null);
+      } else {
+        showError(msg);
+      }
     }
   }, [dir, showError]);
 
@@ -92,20 +108,33 @@ export const GitManager = memo(function GitManager() {
     try { setLogEntries(await gitLog(dir, 30)); } catch (e) { showError(String(e)); }
   }, [dir, showError]);
 
+  const refreshTags = useCallback(async () => {
+    if (!dir) return;
+    try { setTags(await gitListTags(dir)); } catch { setTags([]); }
+  }, [dir]);
+
+  const refreshStashList = useCallback(async () => {
+    if (!dir) return;
+    try { setStashList(await gitStashList(dir)); } catch { setStashList([]); }
+  }, [dir]);
+
   // Refresh everything on open or dir change
   useEffect(() => {
     if (gitManagerOpen && dir) {
       refresh();
       refreshBranches();
       refreshLog();
+      refreshTags();
+      refreshStashList();
     }
-  }, [gitManagerOpen, dir, refresh, refreshBranches, refreshLog]);
+  }, [gitManagerOpen, dir, refresh, refreshBranches, refreshLog, refreshTags, refreshStashList]);
 
   // Refresh specific tab data when tab changes
   useEffect(() => {
     if (gitManagerOpen && dir) {
-      if (tab === "branches") refreshBranches();
+      if (tab === "branches") { refreshBranches(); refreshTags(); }
       if (tab === "log") refreshLog();
+      if (tab === "changes") refreshStashList();
     }
   }, [tab, gitManagerOpen, dir, refreshBranches, refreshLog]);
 
@@ -176,11 +205,12 @@ export const GitManager = memo(function GitManager() {
       await gitStash(dir, pop);
       flash(pop ? "Stash popped" : "Changes stashed");
       await refresh();
+      await refreshStashList();
     } catch (e) {
       showError(`Stash failed: ${e}`);
     }
     setLoading("");
-  }, [dir, refresh, flash, showError]);
+  }, [dir, refresh, refreshStashList, flash, showError]);
 
   const handleCommit = useCallback(async () => {
     if (!commitMsg.trim() || !dir) return;
@@ -197,10 +227,15 @@ export const GitManager = memo(function GitManager() {
         setLoading("");
         return;
       }
-      await gitCommit(dir, commitMsg.trim(), false);
+      if (amendMode) {
+        await gitAmendCommit(dir, commitMsg.trim() || undefined);
+      } else {
+        await gitCommit(dir, commitMsg.trim(), false);
+      }
       setCommitMsg("");
       setStageAllChecked(false);
-      flash("Committed successfully");
+      setAmendMode(false);
+      flash(amendMode ? "Amended successfully" : "Committed successfully");
       await refresh();
       await refreshLog();
     } catch (e) {
@@ -299,6 +334,101 @@ export const GitManager = memo(function GitManager() {
       setCommitDetail(`Error loading commit: ${e}`);
     }
   }, [dir, selectedCommit]);
+
+  const handleDiscardAll = useCallback(async () => {
+    if (!confirmDiscardAll) {
+      setConfirmDiscardAll(true);
+      setTimeout(() => setConfirmDiscardAll(false), 3000);
+      return;
+    }
+    setConfirmDiscardAll(false);
+    setLoading("discard");
+    try {
+      await gitDiscardAll(dir);
+      flash("Discarded all changes");
+      await refresh();
+    } catch (e) { showError(`Discard failed: ${e}`); }
+    setLoading("");
+  }, [dir, confirmDiscardAll, refresh, flash, showError]);
+
+  const handleDeleteBranch = useCallback(async (name: string) => {
+    if (confirmDeleteBranch !== name) {
+      setConfirmDeleteBranch(name);
+      setTimeout(() => setConfirmDeleteBranch(null), 3000);
+      return;
+    }
+    setConfirmDeleteBranch(null);
+    try {
+      await gitDeleteBranch(dir, name, false);
+      flash(`Deleted branch ${name}`);
+      await refreshBranches();
+    } catch (e) { showError(`Delete failed: ${e}`); }
+  }, [dir, confirmDeleteBranch, refreshBranches, flash, showError]);
+
+  const handleMergeBranch = useCallback(async (name: string) => {
+    setLoading("merge");
+    try {
+      await gitMergeBranch(dir, name);
+      flash(`Merged ${name} into ${status?.branch ?? "current"}`);
+      await refresh();
+      await refreshBranches();
+      await refreshLog();
+    } catch (e) { showError(`Merge failed: ${e}`); }
+    setLoading("");
+  }, [dir, status, refresh, refreshBranches, refreshLog, flash, showError]);
+
+  const handleGitInit = useCallback(async () => {
+    if (!dir) return;
+    setLoading("init");
+    try {
+      await gitInit(dir);
+      flash("Initialized git repository");
+      setIsGitRepo(true);
+      await refresh();
+      await refreshBranches();
+    } catch (e) { showError(`Init failed: ${e}`); }
+    setLoading("");
+  }, [dir, refresh, refreshBranches, flash, showError]);
+
+  const handleCreateTag = useCallback(async () => {
+    if (!newTag.trim() || !dir) return;
+    try {
+      await gitTag(dir, newTag.trim());
+      flash(`Created tag ${newTag.trim()}`);
+      setNewTag("");
+      await refreshTags();
+    } catch (e) { showError(`Tag failed: ${e}`); }
+  }, [dir, newTag, refreshTags, flash, showError]);
+
+  const handleCherryPick = useCallback(async (hash: string) => {
+    setLoading("cherrypick");
+    try {
+      await gitCherryPick(dir, hash);
+      flash(`Cherry-picked ${hash.slice(0, 7)}`);
+      await refresh();
+      await refreshLog();
+    } catch (e) { showError(`Cherry-pick failed: ${e}`); }
+    setLoading("");
+  }, [dir, refresh, refreshLog, flash, showError]);
+
+  const handleRevert = useCallback(async (hash: string) => {
+    setLoading("revert");
+    try {
+      await gitRevertCommit(dir, hash);
+      flash(`Reverted ${hash.slice(0, 7)}`);
+      await refresh();
+      await refreshLog();
+    } catch (e) { showError(`Revert failed: ${e}`); }
+    setLoading("");
+  }, [dir, refresh, refreshLog, flash, showError]);
+
+  const handleStashDrop = useCallback(async (index: number) => {
+    try {
+      await gitStashDrop(dir, index);
+      flash(`Dropped stash@{${index}}`);
+      await refreshStashList();
+    } catch (e) { showError(`Stash drop failed: ${e}`); }
+  }, [dir, refreshStashList, flash, showError]);
 
   if (!gitManagerOpen) return null;
 
@@ -426,7 +556,12 @@ export const GitManager = memo(function GitManager() {
                loading === "commit" ? "Committing changes..." :
                loading === "fetch" ? "Fetching from remote..." :
                loading === "stash" ? "Stashing changes..." :
-               loading === "branch" ? "Switching branch..." : "Working..."}
+               loading === "branch" ? "Switching branch..." :
+               loading === "discard" ? "Discarding all changes..." :
+               loading === "merge" ? "Merging branch..." :
+               loading === "init" ? "Initializing repository..." :
+               loading === "cherrypick" ? "Cherry-picking commit..." :
+               loading === "revert" ? "Reverting commit..." : "Working..."}
             </span>
           </div>
         )}
@@ -500,7 +635,36 @@ export const GitManager = memo(function GitManager() {
                     <span style={{ color: "#888888", fontSize: "9px" }}>STAGE ALL</span>
                   </label>
 
+                  {/* Discard All */}
+                  <button
+                    onClick={handleDiscardAll}
+                    disabled={loading === "discard" || totalChanges === 0}
+                    style={{
+                      background: "none", border: "1px solid #ff3d0066", color: confirmDiscardAll ? "#ff3d00" : "#ff3d0088",
+                      fontSize: "8px", fontFamily: MONO_FONT, cursor: totalChanges > 0 ? "pointer" : "default",
+                      padding: "2px 6px", fontWeight: confirmDiscardAll ? "bold" : "normal",
+                    }}
+                  >
+                    {confirmDiscardAll ? "CONFIRM DISCARD ALL?" : "DISCARD ALL"}
+                  </button>
+
                   <span style={{ flex: 1 }} />
+
+                  {/* Amend checkbox */}
+                  <label
+                    style={{ display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", userSelect: "none" }}
+                    onClick={(e) => { e.preventDefault(); setAmendMode(!amendMode); }}
+                  >
+                    <span style={{
+                      width: "12px", height: "12px", border: `1px solid ${amendMode ? "#ffab00" : "#555555"}`,
+                      background: amendMode ? "#ffab0033" : "transparent", display: "inline-flex",
+                      alignItems: "center", justifyContent: "center", fontSize: "8px", color: "#ffab00",
+                    }}>
+                      {amendMode ? "\u2713" : ""}
+                    </span>
+                    <span style={{ color: "#888888", fontSize: "9px" }}>AMEND</span>
+                  </label>
+
                   <span style={{ color: "#444444", fontSize: "9px" }}>Cmd+Enter</span>
 
                   {/* Commit button */}
@@ -508,13 +672,13 @@ export const GitManager = memo(function GitManager() {
                     onClick={handleCommit}
                     disabled={!commitMsg.trim() || loading === "commit"}
                     style={{
-                      background: commitMsg.trim() ? "#ff8c00" : "#2a2a2a", border: "none",
+                      background: commitMsg.trim() ? (amendMode ? "#ffab00" : "#ff8c00") : "#2a2a2a", border: "none",
                       color: commitMsg.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
                       fontFamily: MONO_FONT, cursor: commitMsg.trim() ? "pointer" : "default",
                       padding: "5px 14px", fontWeight: "bold",
                     }}
                   >
-                    {loading === "commit" ? "COMMITTING..." : "COMMIT"}
+                    {loading === "commit" ? "COMMITTING..." : amendMode ? "AMEND" : "COMMIT"}
                   </button>
                 </div>
               </div>
@@ -586,16 +750,64 @@ export const GitManager = memo(function GitManager() {
                 </div>
               )}
 
-              {totalChanges === 0 && (
+              {/* Stash list */}
+              {stashList.length > 0 && (
+                <div>
+                  <div style={{ padding: "6px 16px", fontSize: "9px", color: "#888888", letterSpacing: "1px", fontWeight: "bold", marginTop: "4px" }}>
+                    STASHES ({stashList.length})
+                  </div>
+                  {stashList.map((s) => (
+                    <div
+                      key={s.index}
+                      style={{ display: "flex", alignItems: "center", padding: "4px 16px", gap: "8px", fontSize: "11px" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "#1a1a1a")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <span style={{ color: "#888888", fontSize: "10px", fontWeight: "bold", minWidth: "20px" }}>{s.index}</span>
+                      <span style={{ color: "#e0e0e0", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.message}</span>
+                      <button
+                        onClick={() => handleStash(true)}
+                        style={{ background: "none", border: "1px solid #00c85366", color: "#00c853", fontSize: "8px", fontFamily: MONO_FONT, cursor: "pointer", padding: "1px 4px" }}
+                      >POP</button>
+                      <button
+                        onClick={() => handleStashDrop(Number(s.index))}
+                        style={{ background: "none", border: "1px solid #ff3d0066", color: "#ff3d00", fontSize: "8px", fontFamily: MONO_FONT, cursor: "pointer", padding: "1px 4px" }}
+                      >DROP</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {totalChanges === 0 && stashList.length === 0 && (
                 <div style={{ padding: "24px", textAlign: "center", color: "#555555", fontSize: "11px" }}>
                   Working tree clean -- no changes
+                </div>
+              )}
+              {totalChanges === 0 && stashList.length > 0 && (
+                <div style={{ padding: "12px 16px", textAlign: "center", color: "#555555", fontSize: "10px" }}>
+                  Working tree clean
                 </div>
               )}
             </div>
           )}
 
           {/* ---- BRANCHES TAB ---- */}
-          {tab === "branches" && (
+          {tab === "branches" && !isGitRepo && (
+            <div style={{ padding: "24px", textAlign: "center" }}>
+              <div style={{ color: "#555555", fontSize: "11px", marginBottom: "12px" }}>Not a git repository</div>
+              <button
+                onClick={handleGitInit}
+                disabled={loading === "init"}
+                style={{
+                  background: "#ff8c00", border: "none", color: "#0a0a0a", fontSize: "11px",
+                  fontFamily: MONO_FONT, cursor: "pointer", padding: "8px 20px", fontWeight: "bold",
+                }}
+              >
+                {loading === "init" ? "INITIALIZING..." : "GIT INIT"}
+              </button>
+            </div>
+          )}
+          {tab === "branches" && isGitRepo && (
             <div>
               {/* Current branch display */}
               {status && (
@@ -645,7 +857,19 @@ export const GitManager = memo(function GitManager() {
                 >
                   <span style={{ color: b.is_current ? "#ff8c00" : "#e0e0e0", fontSize: "11px", fontWeight: b.is_current ? "bold" : "normal" }}>{b.name}</span>
                   {b.is_current && <span style={{ color: "#00c853", fontSize: "9px" }}>*</span>}
-                  <span style={{ color: "#555555", fontSize: "10px", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "250px" }}>{b.last_commit}</span>
+                  <span style={{ color: "#555555", fontSize: "10px", marginLeft: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "180px" }}>{b.last_commit}</span>
+                  {!b.is_current && (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleMergeBranch(b.name); }}
+                        style={{ background: "none", border: "1px solid #4a9eff66", color: "#4a9eff", fontSize: "8px", fontFamily: MONO_FONT, cursor: "pointer", padding: "1px 4px", flexShrink: 0 }}
+                      >MERGE</button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleDeleteBranch(b.name); }}
+                        style={{ background: "none", border: "1px solid #ff3d0066", color: confirmDeleteBranch === b.name ? "#ff3d00" : "#ff3d0088", fontSize: "8px", fontFamily: MONO_FONT, cursor: "pointer", padding: "1px 4px", flexShrink: 0, fontWeight: confirmDeleteBranch === b.name ? "bold" : "normal" }}
+                      >{confirmDeleteBranch === b.name ? "CONFIRM?" : "\u2715"}</button>
+                    </>
+                  )}
                 </div>
               ))}
 
@@ -666,6 +890,33 @@ export const GitManager = memo(function GitManager() {
                     </div>
                   ))}
                 </>
+              )}
+
+              {/* Tags section */}
+              <div style={{ padding: "6px 16px", fontSize: "9px", color: "#ffab00", letterSpacing: "1px", fontWeight: "bold", marginTop: "4px" }}>TAGS</div>
+              <div style={{ padding: "4px 16px 8px", display: "flex", gap: "4px" }}>
+                <input
+                  value={newTag}
+                  onChange={(e) => setNewTag(e.target.value)}
+                  placeholder="New tag name..."
+                  style={{ flex: 1, background: "#0a0a0a", border: "1px solid #2a2a2a", color: "#e0e0e0", fontSize: "11px", fontFamily: MONO_FONT, padding: "4px 8px", outline: "none" }}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "#ff8c00")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "#2a2a2a")}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleCreateTag(); }}
+                />
+                <button onClick={handleCreateTag} disabled={!newTag.trim()} style={{
+                  background: newTag.trim() ? "#ffab00" : "#2a2a2a", border: "none",
+                  color: newTag.trim() ? "#0a0a0a" : "#555555", fontSize: "10px",
+                  fontFamily: MONO_FONT, cursor: newTag.trim() ? "pointer" : "default",
+                  padding: "4px 10px", fontWeight: "bold",
+                }}>TAG</button>
+              </div>
+              {tags.length > 0 ? tags.map((t) => (
+                <div key={t} style={{ padding: "3px 16px", fontSize: "11px", color: "#e0e0e0" }}>
+                  <span style={{ color: "#ffab00", marginRight: "8px", fontSize: "9px" }}>#</span>{t}
+                </div>
+              )) : (
+                <div style={{ padding: "4px 16px", fontSize: "10px", color: "#555555" }}>No tags</div>
               )}
             </div>
           )}
@@ -696,6 +947,18 @@ export const GitManager = memo(function GitManager() {
                       padding: "8px 16px 10px 80px", background: "#0e0e0e",
                       borderBottom: "1px solid #ff8c0033", fontSize: "10px",
                     }}>
+                      <div style={{ display: "flex", gap: "4px", marginBottom: "6px" }}>
+                        <button
+                          onClick={() => handleCherryPick(entry.hash)}
+                          disabled={loading === "cherrypick"}
+                          style={{ background: "none", border: "1px solid #00c85366", color: "#00c853", fontSize: "8px", fontFamily: MONO_FONT, cursor: "pointer", padding: "2px 6px" }}
+                        >CHERRY-PICK</button>
+                        <button
+                          onClick={() => handleRevert(entry.hash)}
+                          disabled={loading === "revert"}
+                          style={{ background: "none", border: "1px solid #ff3d0066", color: "#ff3d00", fontSize: "8px", fontFamily: MONO_FONT, cursor: "pointer", padding: "2px 6px" }}
+                        >REVERT</button>
+                      </div>
                       {commitDetail === null ? (
                         <span style={{ color: "#555555" }}>Loading...</span>
                       ) : (

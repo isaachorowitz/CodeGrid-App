@@ -126,7 +126,7 @@ pub async fn create_session(
         let sessions = state.sessions.lock().await;
         let workspace_count = sessions
             .iter()
-            .filter(|s| s.workspace_id == workspace_id)
+            .filter(|s| s.workspace_id == workspace_id && s.status != SessionStatus::Dead)
             .count() as u32;
         drop(sessions);
         if workspace_count >= license_status.max_panes {
@@ -1347,6 +1347,41 @@ pub struct GitBranchInfo {
     pub last_commit: String,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct GitBlameEntry {
+    pub hash: String,
+    pub author: String,
+    pub date: String,
+    pub line_number: u32,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct GitStashEntry {
+    pub index: u32,
+    pub message: String,
+}
+
+fn validate_branch_name(name: &str) -> Result<(), String> {
+    if name.starts_with('-') {
+        return Err("Invalid branch name: must not start with '-'".to_string());
+    }
+    if name.contains(|c: char| " \t\n\r$`|;&<>(){}".contains(c)) {
+        return Err("Invalid branch name: contains special characters".to_string());
+    }
+    Ok(())
+}
+
+fn validate_commit_hash(hash: &str) -> Result<(), String> {
+    if hash.is_empty() {
+        return Err("Commit hash must not be empty".to_string());
+    }
+    if !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid commit hash: must be hexadecimal".to_string());
+    }
+    Ok(())
+}
+
 fn validate_dir(dir: &str) -> Result<String, String> {
     let expanded = expand_tilde(dir);
     let path = Path::new(&expanded);
@@ -2198,12 +2233,27 @@ fn build_file_tree(
     let mut dirs: Vec<FileEntry> = Vec::new();
     let mut files: Vec<FileEntry> = Vec::new();
 
+    let root_canonical = std::path::Path::new(dir).canonicalize().unwrap_or_else(|_| std::path::PathBuf::from(dir));
+
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
 
         // Skip entries in the always-skip list (.git, node_modules, target, etc.)
         if ALWAYS_SKIP.contains(&name.as_str()) {
             continue;
+        }
+
+        // Skip symlinks that resolve outside the allowed root
+        if let Ok(ft) = entry.file_type() {
+            if ft.is_symlink() {
+                if let Ok(resolved) = entry.path().canonicalize() {
+                    if !resolved.starts_with(&root_canonical) {
+                        continue;
+                    }
+                } else {
+                    continue; // broken symlink
+                }
+            }
         }
 
         let is_gitignored = matches_gitignore(&name, gitignore_patterns);
@@ -2290,10 +2340,10 @@ pub async fn create_folder(parent_path: String, folder_name: String) -> Result<S
         return Err("Invalid folder name".to_string());
     }
 
-    let new_path = std::path::Path::new(&parent).join(name);
     let parent_canonical = std::path::Path::new(&parent)
         .canonicalize()
         .map_err(|e| format!("Cannot resolve parent path: {e}"))?;
+    let new_path = parent_canonical.join(name);
     if !new_path.starts_with(&parent_canonical) {
         return Err("Invalid folder path".to_string());
     }
@@ -3428,15 +3478,11 @@ pub async fn search_files(
             }
         }
 
-        // Skip gitignored files (basic check)
-        let rel = path.strip_prefix(&dir).unwrap_or(path);
-        let rel_str = rel.to_string_lossy();
-        let is_ignored = gitignore_patterns.iter().any(|p| {
-            let p_trimmed = p.trim_start_matches('/');
-            rel_str.starts_with(p_trimmed) || rel_str.contains(&format!("/{}", p_trimmed))
-        });
-        if is_ignored {
-            continue;
+        // Skip gitignored files
+        if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+            if matches_gitignore(file_name, &gitignore_patterns) {
+                continue;
+            }
         }
 
         // Read file
@@ -3905,5 +3951,148 @@ pub async fn clipboard_write(text: String) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// === Additional Git Commands ===
+
+#[tauri::command]
+pub async fn git_init(working_dir: String) -> Result<String, String> {
+    let expanded = expand_tilde(&working_dir);
+    let path = Path::new(&expanded);
+    if !path.is_dir() {
+        return Err(format!("Directory does not exist: {expanded}"));
+    }
+    let canonical = path.canonicalize().map_err(|e| format!("Invalid path: {e}"))?;
+    if !is_path_within_allowed_roots(&canonical) {
+        return Err("Access denied: path must be under your home directory or /tmp".to_string());
+    }
+    let dir = canonical.to_str().ok_or("Path contains invalid characters")?.to_string();
+    run_git(&dir, &["init"])
+}
+
+#[tauri::command]
+pub async fn git_delete_branch(working_dir: String, branch_name: String, force: bool) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    validate_branch_name(&branch_name)?;
+    let flag = if force { "-D" } else { "-d" };
+    run_git(&dir, &["branch", flag, &branch_name])
+}
+
+#[tauri::command]
+pub async fn git_merge_branch(working_dir: String, branch_name: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    validate_branch_name(&branch_name)?;
+    run_git(&dir, &["merge", &branch_name])
+}
+
+#[tauri::command]
+pub async fn git_amend_commit(working_dir: String, message: Option<String>) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    match message {
+        Some(msg) => run_git(&dir, &["commit", "--amend", "-m", &msg]),
+        None => run_git(&dir, &["commit", "--amend", "--no-edit"]),
+    }
+}
+
+#[tauri::command]
+pub async fn git_discard_all(working_dir: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    run_git(&dir, &["checkout", "--", "."])?;
+    run_git(&dir, &["clean", "-fd"])?;
+    Ok("All working changes discarded".to_string())
+}
+
+#[tauri::command]
+pub async fn git_blame_file(working_dir: String, file_path: String) -> Result<Vec<GitBlameEntry>, String> {
+    let dir = validate_dir(&working_dir)?;
+    validate_file_path(&file_path)?;
+    let output = run_git(&dir, &["blame", "--porcelain", &file_path])?;
+
+    let mut entries: Vec<GitBlameEntry> = Vec::new();
+    let mut current_hash = String::new();
+    let mut current_author = String::new();
+    let mut current_date = String::new();
+    let mut current_line_number: u32 = 0;
+
+    for line in output.lines() {
+        if line.len() >= 40 && line.chars().take(40).all(|c| c.is_ascii_hexdigit()) {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            current_hash = parts[0].to_string();
+            if let Some(ln) = parts.get(2) {
+                current_line_number = ln.parse().unwrap_or(0);
+            }
+        } else if let Some(author) = line.strip_prefix("author ") {
+            current_author = author.to_string();
+        } else if let Some(time) = line.strip_prefix("author-time ") {
+            current_date = time.to_string();
+        } else if let Some(content) = line.strip_prefix('\t') {
+            entries.push(GitBlameEntry {
+                hash: current_hash.clone(),
+                author: current_author.clone(),
+                date: current_date.clone(),
+                line_number: current_line_number,
+                content: content.to_string(),
+            });
+        }
+    }
+
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn git_tag(working_dir: String, tag_name: String, message: Option<String>) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    validate_branch_name(&tag_name)?;
+    match message {
+        Some(msg) => run_git(&dir, &["tag", "-a", &tag_name, "-m", &msg]),
+        None => run_git(&dir, &["tag", &tag_name]),
+    }
+}
+
+#[tauri::command]
+pub async fn git_list_tags(working_dir: String) -> Result<Vec<String>, String> {
+    let dir = validate_dir(&working_dir)?;
+    let output = run_git(&dir, &["tag", "-l", "--sort=-creatordate"])?;
+    Ok(output.lines().filter(|l| !l.is_empty()).map(|l| l.to_string()).collect())
+}
+
+#[tauri::command]
+pub async fn git_cherry_pick(working_dir: String, commit_hash: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    validate_commit_hash(&commit_hash)?;
+    run_git(&dir, &["cherry-pick", &commit_hash])
+}
+
+#[tauri::command]
+pub async fn git_revert_commit(working_dir: String, commit_hash: String) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    validate_commit_hash(&commit_hash)?;
+    run_git(&dir, &["revert", "--no-edit", &commit_hash])
+}
+
+#[tauri::command]
+pub async fn git_stash_list(working_dir: String) -> Result<Vec<GitStashEntry>, String> {
+    let dir = validate_dir(&working_dir)?;
+    let output = run_git(&dir, &["stash", "list", "--format=%gd|||%gs"]).unwrap_or_default();
+    let entries = output
+        .lines()
+        .filter(|l| !l.is_empty())
+        .enumerate()
+        .map(|(i, line)| {
+            let parts: Vec<&str> = line.splitn(2, "|||").collect();
+            GitStashEntry {
+                index: i as u32,
+                message: parts.get(1).unwrap_or(&"").to_string(),
+            }
+        })
+        .collect();
+    Ok(entries)
+}
+
+#[tauri::command]
+pub async fn git_stash_drop(working_dir: String, index: u32) -> Result<String, String> {
+    let dir = validate_dir(&working_dir)?;
+    let stash_ref = format!("stash@{{{index}}}");
+    run_git(&dir, &["stash", "drop", &stash_ref])
 }
 

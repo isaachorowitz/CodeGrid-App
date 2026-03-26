@@ -54,6 +54,10 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [terminalManagerOpen, setTerminalManagerOpen] = useState(false);
 
+  // Track running→idle transitions for "done" flash animations
+  const prevStatusRef = useRef<Map<string, string>>(new Map());
+  const [pulsingTabs, setPulsingTabs] = useState<Set<string>>(new Set());
+
   // Context menu state
   const [ctxMenu, setCtxMenu] = useState<{
     x: number; y: number;
@@ -143,6 +147,23 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
     // Notify terminals so they can re-fit when becoming visible again
     window.dispatchEvent(new CustomEvent("codegrid:workspace-changed", { detail: { workspaceId: wsId } }));
   }, [setActiveWorkspace, workspaces, setLayouts, setCanvas]);
+
+  // Detect running→idle transitions and trigger "done" tab flash
+  useEffect(() => {
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const session of activeSessions) {
+      const prev = prevStatusRef.current.get(session.id);
+      const curr = session.status ?? "idle";
+      if (prev === "running" && curr === "idle") {
+        setPulsingTabs((s) => { const ns = new Set(s); ns.add(session.id); return ns; });
+        timers.push(setTimeout(() => {
+          setPulsingTabs((s) => { const ns = new Set(s); ns.delete(session.id); return ns; });
+        }, 1400));
+      }
+      prevStatusRef.current.set(session.id, curr);
+    }
+    return () => timers.forEach(clearTimeout);
+  }, [activeSessions]);
 
   const handleAutoLayout = useCallback(() => {
     const ids = activeSessions.map((s) => s.id);
@@ -435,6 +456,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
           {activeSessions.map((session) => {
             const isFocused = session.id === focusedSessionId;
             const isHovered = session.id === hoveredTab;
+            const isPulsing = pulsingTabs.has(session.id);
             const statusColor = STATUS_COLORS[session.status] ?? "#555555";
 
             // Display name: manual name > activity name > fallback to working dir
@@ -445,6 +467,7 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
             return (
               <div
                 key={session.id}
+                className={isPulsing ? "tab-done-highlight" : undefined}
                 onClick={() => {
                   onFocusSession(session.id);
                   window.dispatchEvent(
@@ -474,11 +497,15 @@ export const TopBar = memo(function TopBar({ onFocusSession, onCloseSession }: T
                   position: "relative",
                 }}
               >
-                {/* Status dot */}
-                <div style={{
-                  width: "5px", height: "5px", borderRadius: "50%",
-                  background: statusColor, flexShrink: 0,
-                }} />
+                {/* Status dot — pulses bright on running→idle */}
+                <div
+                  key={isPulsing ? `${session.id}-pulsing` : session.id}
+                  className={isPulsing ? "tab-done-dot" : undefined}
+                  style={{
+                    width: "5px", height: "5px", borderRadius: "50%",
+                    background: statusColor, flexShrink: 0,
+                  }}
+                />
 
                 {/* Pane number */}
                 <span style={{ color: "#ff8c00", fontWeight: "bold", fontSize: "9px" }}>
