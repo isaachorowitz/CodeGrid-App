@@ -129,10 +129,16 @@ export const LicenseDialog = memo(function LicenseDialog() {
           ) : (
             /* ── Free / Unlicensed view ── */
             <>
-              {/* Free tier notice */}
-              <div style={{ background: "#111", border: "1px solid #2a2a2a", padding: "10px 12px", fontSize: "11px", color: "#888", lineHeight: "1.6" }}>
-                Free plan · {status?.max_panes ?? 3} session limit · All 5 agents included.
-              </div>
+              {/* Trial / Free tier notice */}
+              {status?.is_trial && status.trial_days_remaining > 0 ? (
+                <div style={{ background: "#1a1a0a", border: "1px solid #3a3a1a", padding: "10px 12px", fontSize: "11px", color: "#cca800", lineHeight: "1.6" }}>
+                  Trial active — {status.trial_days_remaining} day{status.trial_days_remaining !== 1 ? "s" : ""} remaining · {status.max_panes} sessions · Broadcast & Quick Actions included.
+                </div>
+              ) : (
+                <div style={{ background: "#111", border: "1px solid #2a2a2a", padding: "10px 12px", fontSize: "11px", color: "#888", lineHeight: "1.6" }}>
+                  Free plan · {status?.max_panes ?? 3} session limit · All 5 agents included.
+                </div>
+              )}
 
               {/* What you get with Pro */}
               <div>
