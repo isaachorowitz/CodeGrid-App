@@ -386,17 +386,20 @@ export default function App() {
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean, sessionType?: string) => {
       if (!activeWorkspaceId) return;
 
-      // License cap: only enforce for trial/expired users
+      // License cap: enforce max_panes from license status
       const licenseStatus = useLicenseStore.getState().status;
-      const isTrialOrExpired = licenseStatus?.is_trial || (licenseStatus?.trial_days_remaining !== undefined && licenseStatus.trial_days_remaining <= 0);
-      if (isTrialOrExpired) {
-        const maxPanes = licenseStatus?.max_panes ?? 50;
-        const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
-        if (currentCount >= maxPanes) {
-          addToast(`Trial limited to ${maxPanes} panes. Upgrade to unlock unlimited panes.`, "error");
-          useWorkspaceStore.getState().setLicenseDialogOpen(true);
-          return;
-        }
+      const maxPanes = licenseStatus?.max_panes ?? 3;
+      const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
+      if (currentCount >= maxPanes) {
+        const isFree = !licenseStatus?.is_licensed && !licenseStatus?.is_trial;
+        const msg = isFree
+          ? `Free plan: ${maxPanes} session limit. Upgrade to Pro for 50 sessions.`
+          : licenseStatus?.is_trial
+          ? `Trial: ${maxPanes} session limit. Subscribe for 50 sessions.`
+          : `Session limit reached (${maxPanes}).`;
+        addToast(msg, "error");
+        useWorkspaceStore.getState().setLicenseDialogOpen(true);
+        return;
       }
 
       // Resource check: warn if system is low on memory
