@@ -42,6 +42,7 @@ import {
 } from "./lib/ipc";
 import { useResourceStore } from "./stores/resourceStore";
 import { ResourceWarningDialog } from "./components/ResourceWarningDialog";
+import { checkForUpdatesInBackground } from "./lib/updater";
 
 /**
  * Detect the agent/session type from a stored command string (binary path).
@@ -89,6 +90,17 @@ export default function App() {
     isShell: boolean;
     sessionType?: string;
   } | null>(null);
+
+  const [pendingUpdate, setPendingUpdate] = useState<{ version: string; install: () => Promise<void> } | null>(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      checkForUpdatesInBackground((version, install) => {
+        setPendingUpdate({ version, install });
+      });
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 1200, height: 800 });
@@ -675,6 +687,38 @@ export default function App() {
         onForceCreate={handleForceCreateSession}
       />
       <ToastContainer />
+      {pendingUpdate && (
+        <div style={{
+          position: "fixed",
+          bottom: "16px",
+          right: "16px",
+          zIndex: 9999,
+          background: "#1a1a1a",
+          border: "1px solid #333",
+          borderRadius: "8px",
+          padding: "10px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          fontSize: "12px",
+          color: "#ccc",
+          boxShadow: "0 4px 20px rgba(0,0,0,0.5)"
+        }}>
+          <span>v{pendingUpdate.version} is ready</span>
+          <button
+            onClick={() => pendingUpdate.install()}
+            style={{ background: "#fff", color: "#000", border: "none", borderRadius: "4px", padding: "3px 10px", cursor: "pointer", fontSize: "11px", fontWeight: 600 }}
+          >
+            Restart to Update
+          </button>
+          <button
+            onClick={() => setPendingUpdate(null)}
+            style={{ background: "transparent", color: "#666", border: "none", cursor: "pointer", fontSize: "11px" }}
+          >
+            Later
+          </button>
+        </div>
+      )}
     </div>
   );
 }
