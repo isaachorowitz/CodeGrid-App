@@ -151,6 +151,7 @@ pub fn run() {
             commands::toggle_env_allow,
             // License management
             commands::get_license_status,
+            commands::refresh_license_status,
             commands::activate_license,
             commands::deactivate_license,
             // Dependency graph
