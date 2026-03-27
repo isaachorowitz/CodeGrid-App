@@ -12,7 +12,7 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
         with:
           token: ${{ secrets.PUBLIC_REPO_TOKEN }}
           fetch-depth: 0
@@ -78,7 +78,7 @@ jobs:
 
       - name: Install Node.js
         if: steps.check.outputs.continue == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v4.4.0
         with:
           node-version: 22
 
