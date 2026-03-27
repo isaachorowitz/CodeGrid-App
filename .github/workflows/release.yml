@@ -116,6 +116,21 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri build -- --target aarch64-apple-darwin
 
+      - name: Rebuild DMG with proper background
+        if: steps.check.outputs.continue == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          DMG_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg"
+
+          # Remove Tauri's backgroundless DMG and rebuild with appdmg (no AppleScript, works headlessly)
+          rm -f "$DMG_PATH"
+          npx appdmg appdmg.json "$DMG_PATH"
+
+          # Re-sign the new DMG
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --force "$DMG_PATH"
+
       - name: Notarize
         if: steps.check.outputs.continue == 'true'
         env:
