@@ -1,6 +1,6 @@
 mod commands;
 mod db;
-mod license;
+
 mod pty_manager;
 mod rpc_server;
 mod session;
@@ -153,11 +153,6 @@ pub fn run() {
             commands::quick_save,
             commands::get_env_allow_status,
             commands::toggle_env_allow,
-            // License management
-            commands::get_license_status,
-            commands::refresh_license_status,
-            commands::activate_license,
-            commands::deactivate_license,
             // Dependency graph
             commands::analyze_dependencies,
             // Browser pane webviews

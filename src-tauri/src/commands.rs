@@ -120,29 +120,6 @@ pub async fn create_session(
     let session_id = Uuid::new_v4().to_string();
     let pane_number = 1;
 
-    // Enforce license pane limit server-side (defense in depth — frontend also checks)
-    {
-        let license_status = crate::license::get_cached_status(&state.db);
-        let sessions = state.sessions.lock().await;
-        let workspace_count = sessions
-            .iter()
-            .filter(|s| s.workspace_id == workspace_id && s.status != SessionStatus::Dead)
-            .count() as u32;
-        drop(sessions);
-        if workspace_count >= license_status.max_panes {
-            return Err(format!(
-                "Pane limit reached ({}/{}). {}",
-                workspace_count,
-                license_status.max_panes,
-                if license_status.is_licensed {
-                    "Session limit reached."
-                } else {
-                    "Free plan: 3 sessions max. Upgrade to Pro at codegrid.app/pricing."
-                }
-            ));
-        }
-    }
-
     // Determine actual working directory (possibly a worktree)
     let (actual_dir, worktree_path, git_branch) = if use_worktree
         && WorktreeManager::is_git_repo(&working_dir)

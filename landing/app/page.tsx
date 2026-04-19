@@ -250,7 +250,7 @@ const objections = [
   },
   {
     q: "How many sessions can I run at once?",
-    a: "CodeGrid is built for dense multi-session workflows. Limits depend on your machine resources and license state. Each pane runs in its own PTY with an isolated working directory.",
+    a: "CodeGrid is built for dense multi-session workflows. Run as many sessions as your machine supports \u2014 there are no artificial limits. Each pane runs in its own PTY with an isolated working directory.",
   },
   {
     q: "Why not tmux, iTerm2, or VS Code terminals?",
@@ -294,9 +294,7 @@ const faqJsonLd = {
 
 export default function Home() {
   useEffect(() => {
-    if (window.location.hash === "#pricing") {
-      window.location.replace("/pricing");
-    }
+    // No-op: pricing page removed
   }, []);
 
   return (

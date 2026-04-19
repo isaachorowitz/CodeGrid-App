@@ -13,14 +13,14 @@ import { ClaudeMdEditor } from "./components/ClaudeMdEditor";
 import { GitSetupWizard } from "./components/GitSetupWizard";
 import { CodeViewer } from "./components/CodeViewer";
 import { ToastContainer } from "./components/ToastContainer";
-import { LicenseDialog } from "./components/LicenseDialog";
+
 import { DependencyGraph } from "./components/DependencyGraph";
 import { useSessionStore } from "./stores/sessionStore";
 import { sanitizeLayouts, sanitizeCanvasState, useLayoutStore } from "./stores/layoutStore";
 import { useWorkspaceStore } from "./stores/workspaceStore";
 import { useAppStore } from "./stores/appStore";
 import { useToastStore } from "./stores/toastStore";
-import { useLicenseStore } from "./stores/licenseStore";
+
 import { useKeyboardNav } from "./hooks/useKeyboardNav";
 import {
   createSession,
@@ -76,8 +76,6 @@ export default function App() {
     sidebarOpen,
     activePanel,
     setNewSessionDialogOpen,
-    licenseDialogOpen,
-    setLicenseDialogOpen,
   } = useWorkspaceStore();
   const { setSkills, setModels, setRecentDirs, setGitSetupWizardOpen } = useAppStore();
   const addToast = useToastStore((s) => s.addToast);
@@ -227,9 +225,6 @@ export default function App() {
         setWorkspaces([mockWs]);
         setActiveWorkspace(mockWs.id);
       }
-
-      // Load license status FIRST so pane limits are correct before any session creation
-      try { await useLicenseStore.getState().fetchStatus(); } catch (e) { console.warn("Failed to load license status:", e); }
 
       // Load skills
       try { const skills = await detectClaudeSkills(); setSkills(skills); } catch (e) { console.warn("Failed to load skills:", e); }
@@ -399,22 +394,6 @@ export default function App() {
   const handleCreateSession = useCallback(
     async (workingDir: string, useWorktree: boolean, resume: boolean, isShell: boolean, sessionType?: string) => {
       if (!activeWorkspaceId) return;
-
-      // License cap: enforce max_panes from license status
-      const licenseStatus = useLicenseStore.getState().status;
-      const maxPanes = licenseStatus?.max_panes ?? 3;
-      const currentCount = useSessionStore.getState().getWorkspaceSessionCount(activeWorkspaceId);
-      if (currentCount >= maxPanes) {
-        const isFree = !licenseStatus?.is_licensed && !licenseStatus?.is_trial;
-        const msg = isFree
-          ? `Free plan: ${maxPanes} session limit. Upgrade to Pro for 50 sessions.`
-          : licenseStatus?.is_trial
-          ? `Trial: ${maxPanes} session limit. Subscribe for 50 sessions.`
-          : `Session limit reached (${maxPanes}).`;
-        addToast(msg, "error");
-        useWorkspaceStore.getState().setLicenseDialogOpen(true);
-        return;
-      }
 
       // Resource check: warn if system is low on memory
       if (!useResourceStore.getState().canCreateTerminal()) {
@@ -681,8 +660,7 @@ export default function App() {
       <ClaudeMdEditor />
       <GitSetupWizard />
       <CodeViewer />
-      <LicenseDialog isOpen={licenseDialogOpen} onClose={() => setLicenseDialogOpen(false)} />
-      <DependencyGraph />
+<DependencyGraph />
       <ResourceWarningDialog
         open={resourceWarningOpen}
         onClose={() => { setResourceWarningOpen(false); setPendingSession(null); }}

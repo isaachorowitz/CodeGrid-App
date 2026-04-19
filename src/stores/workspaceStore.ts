@@ -14,7 +14,6 @@ interface WorkspaceState {
   commandPaletteOpen: boolean;
   newSessionDialogOpen: boolean;
   deleteConfirmId: string | null;
-  licenseDialogOpen: boolean;
 
   setWorkspaces: (workspaces: WorkspaceInfo[]) => void;
   addWorkspace: (workspace: WorkspaceInfo) => void;
@@ -29,7 +28,6 @@ interface WorkspaceState {
   setCommandPaletteOpen: (open: boolean) => void;
   setNewSessionDialogOpen: (open: boolean) => void;
   setDeleteConfirmId: (id: string | null) => void;
-  setLicenseDialogOpen: (open: boolean) => void;
 }
 
 export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
@@ -41,7 +39,6 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   commandPaletteOpen: false,
   newSessionDialogOpen: false,
   deleteConfirmId: null,
-  licenseDialogOpen: false,
 
   setWorkspaces: (workspaces) => set({ workspaces }),
 
@@ -110,5 +107,4 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   setCommandPaletteOpen: (open) => set({ commandPaletteOpen: open }),
   setNewSessionDialogOpen: (open) => set({ newSessionDialogOpen: open }),
   setDeleteConfirmId: (id) => set({ deleteConfirmId: id }),
-  setLicenseDialogOpen: (open) => set({ licenseDialogOpen: open }),
 }));

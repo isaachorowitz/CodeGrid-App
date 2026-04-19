@@ -1,7 +1,5 @@
 import { memo, useCallback } from "react";
 import { useSessionStore } from "../stores/sessionStore";
-import { useLicenseStore } from "../stores/licenseStore";
-import { useWorkspaceStore } from "../stores/workspaceStore";
 import { sendToSession } from "../lib/ipc";
 
 interface QuickAction {
@@ -28,19 +26,10 @@ interface QuickActionsProps {
 
 export const QuickActions = memo(function QuickActions({ sessionId }: QuickActionsProps) {
   const focusedSessionId = useSessionStore((s) => s.focusedSessionId);
-  const licenseStatus = useLicenseStore((s) => s.status);
-  const setLicenseDialogOpen = useWorkspaceStore((s) => s.setLicenseDialogOpen);
   const targetId = sessionId ?? focusedSessionId;
-
-  // Pro feature: available during trial or with active subscription
-  const isUnlocked = licenseStatus?.is_licensed || licenseStatus?.is_trial;
 
   const handleAction = useCallback(
     async (command: string) => {
-      if (!isUnlocked) {
-        setLicenseDialogOpen(true);
-        return;
-      }
       if (!targetId) return;
       try {
         await sendToSession(targetId, command);
@@ -48,48 +37,44 @@ export const QuickActions = memo(function QuickActions({ sessionId }: QuickActio
         console.warn("Failed to send quick action:", e);
       }
     },
-    [targetId, isUnlocked, setLicenseDialogOpen],
+    [targetId],
   );
 
   return (
     <div style={{ display: "flex", gap: "2px", alignItems: "center" }}>
       <span
         style={{
-          fontSize: "9px", color: isUnlocked ? "#e0e0e0" : "#444",
+          fontSize: "9px", color: "#e0e0e0",
           fontFamily: MONO, marginRight: "2px", letterSpacing: "0.5px", fontWeight: "bold",
         }}
       >
-        {isUnlocked ? "QUICK" : "QUICK ⬆"}
+        QUICK
       </span>
       {QUICK_ACTIONS.map((action) => (
         <button
           key={action.label}
           onClick={() => handleAction(action.command)}
-          title={isUnlocked ? action.tooltip : `Pro feature — upgrade to use ${action.label}`}
+          title={action.tooltip}
           style={{
             background: "#1e1e1e",
-            border: `1px solid ${isUnlocked && targetId ? "#444444" : "#2a2a2a"}`,
-            color: isUnlocked && targetId ? action.color : "#333333",
+            border: `1px solid ${targetId ? "#444444" : "#2a2a2a"}`,
+            color: targetId ? action.color : "#333333",
             fontSize: "9px", fontWeight: "bold", fontFamily: MONO,
-            cursor: isUnlocked ? (targetId ? "pointer" : "default") : "pointer",
+            cursor: targetId ? "pointer" : "default",
             padding: "2px 6px", letterSpacing: "0.3px",
-            opacity: isUnlocked ? (targetId ? 1 : 0.4) : 0.35,
+            opacity: targetId ? 1 : 0.4,
           }}
           onMouseEnter={(e) => {
-            if (isUnlocked && targetId) {
+            if (targetId) {
               e.currentTarget.style.background = `${action.color}15`;
               e.currentTarget.style.borderColor = action.color;
-            } else if (!isUnlocked) {
-              e.currentTarget.style.borderColor = "#ff8c00";
-              e.currentTarget.style.color = "#ff8c0088";
-              e.currentTarget.style.opacity = "0.6";
             }
           }}
           onMouseLeave={(e) => {
             e.currentTarget.style.background = "#1e1e1e";
-            e.currentTarget.style.borderColor = isUnlocked && targetId ? "#444444" : "#2a2a2a";
-            e.currentTarget.style.color = isUnlocked && targetId ? action.color : "#333333";
-            e.currentTarget.style.opacity = isUnlocked ? (targetId ? "1" : "0.4") : "0.35";
+            e.currentTarget.style.borderColor = targetId ? "#444444" : "#2a2a2a";
+            e.currentTarget.style.color = targetId ? action.color : "#333333";
+            e.currentTarget.style.opacity = targetId ? "1" : "0.4";
           }}
         >
           {action.label}
