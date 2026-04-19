@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    width: 1320px;
+    height: 800px;
+    background: #1c1c1e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    color: white;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Subtle radial glow behind center */
+  body::before {
+    content: '';
+    position: absolute;
+    width: 900px;
+    height: 500px;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(ellipse, rgba(232,134,12,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .title {
+    position: absolute;
+    top: 56px;
+    font-size: 32px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: rgba(255,255,255,0.9);
+  }
+
+  .install-row {
+    display: flex;
+    align-items: center;
+    gap: 40px;
+    margin-top: 20px;
+  }
+
+  .zone {
+    width: 200px;
+    height: 200px;
+  }
+
+  .arrow-container {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .arrow-line {
+    width: 100px;
+    height: 3px;
+    background: linear-gradient(90deg, rgba(232,134,12,0.3), rgba(232,134,12,0.7));
+    border-radius: 2px;
+  }
+
+  .arrow-head {
+    width: 0;
+    height: 0;
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+    border-left: 16px solid rgba(232,134,12,0.7);
+  }
+
+  .subtitle {
+    position: absolute;
+    bottom: 48px;
+    font-size: 22px;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.3px;
+    font-weight: 400;
+  }
+
+  .line {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 180px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, rgba(232,134,12,0.25), transparent);
+  }
+  .line-top { top: 100px; }
+  .line-bottom { bottom: 88px; }
+</style>
+</head>
+<body>
+  <div class="line line-top"></div>
+  <div class="line line-bottom"></div>
+  <div class="title">Install Code Grid</div>
+  <div class="install-row">
+    <div class="zone"></div>
+    <div class="arrow-container">
+      <div class="arrow-line"></div>
+      <div class="arrow-head"></div>
+    </div>
+    <div class="zone"></div>
+  </div>
+  <div class="subtitle">Drag to Applications to install</div>
+</body>
+</html>

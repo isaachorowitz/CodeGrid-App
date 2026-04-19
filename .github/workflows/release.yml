@@ -1,0 +1,207 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          token: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          fetch-depth: 0
+
+      # Auto-bump patch version on every main push (skip if this is a version bump commit)
+      - name: Auto-bump version
+        if: github.ref == 'refs/heads/main'
+        id: bump
+        run: |
+          # Skip if the last commit was an auto-version bump (prevent infinite loop)
+          LAST_MSG=$(git log -1 --pretty=%s)
+          if [[ "$LAST_MSG" == chore:\ bump\ version* ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Read current version from Cargo.toml
+          CURRENT=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "New version: $NEW_VERSION"
+
+          # Update version in Cargo.toml
+          sed -i '' "s/^version = \".*\"/version = \"${NEW_VERSION}\"/" src-tauri/Cargo.toml
+
+          # Update version in tauri.conf.json (only the top-level version field)
+          sed -i '' "s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/" src-tauri/tauri.conf.json
+
+          # Update version in package.json (only the first occurrence)
+          sed -i '' "1,/\"version\":/{s/\"version\": \".*\"/\"version\": \"${NEW_VERSION}\"/;}" package.json
+
+          # Commit and tag — only stage the specific version files
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json
+          git commit -m "chore: bump version to ${NEW_VERSION}" || true
+
+          # Guard: skip tag creation if it already exists on remote
+          if git ls-remote --tags origin "refs/tags/v${NEW_VERSION}" | grep -q "refs/tags"; then
+            echo "Tag v${NEW_VERSION} already exists remotely — force-replacing"
+            git tag -f "v${NEW_VERSION}"
+            git push origin main --force-with-lease
+            git push origin "refs/tags/v${NEW_VERSION}" --force
+          else
+            git tag "v${NEW_VERSION}"
+            git push origin main --tags
+          fi
+
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "skip=false" >> $GITHUB_OUTPUT
+
+      # Exit early if this was a version bump commit
+      - name: Check if should continue
+        id: check
+        run: |
+          SKIP="${{ steps.bump.outputs.skip }}"
+          if [[ "$SKIP" == "true" || -z "$SKIP" ]]; then
+            echo "continue=false" >> $GITHUB_OUTPUT
+          else
+            echo "continue=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Node.js
+        if: steps.check.outputs.continue == 'true'
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: 22
+
+      - name: Install Rust
+        if: steps.check.outputs.continue == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install dependencies
+        if: steps.check.outputs.continue == 'true'
+        run: npm ci
+
+      - name: Import signing certificate
+        if: steps.check.outputs.continue == 'true'
+        env:
+          CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          echo "$CERTIFICATE_P12" | base64 --decode > certificate.p12
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain-db
+          security set-keychain-settings -lut 21600 build.keychain-db
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain-db
+          security import certificate.p12 -k build.keychain-db -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign -f pkcs12
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" build.keychain-db
+          security list-keychains -d user -s build.keychain-db login.keychain-db
+          rm certificate.p12
+
+      - name: Build
+        if: steps.check.outputs.continue == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: Rebuild DMG with proper background
+        if: steps.check.outputs.continue == 'true'
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          DMG_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg"
+
+          # Remove Tauri's backgroundless DMG and rebuild with appdmg (no AppleScript, works headlessly)
+          rm -f "$DMG_PATH"
+          npx appdmg appdmg.json "$DMG_PATH"
+
+          # Re-sign the new DMG
+          codesign --sign "$APPLE_SIGNING_IDENTITY" --force "$DMG_PATH"
+
+      - name: Notarize
+        if: steps.check.outputs.continue == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          DMG=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_*.dmg
+          xcrun notarytool submit $DMG \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait --timeout 15m
+          xcrun stapler staple $DMG
+
+      - name: Get version
+        if: steps.check.outputs.continue == 'true'
+        id: version
+        run: |
+          VERSION=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "dmg=src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/CodeGrid_${VERSION}_aarch64.dmg" >> $GITHUB_OUTPUT
+
+      # Create versioned release on the public repo and upload latest.json for auto-update
+      - name: Publish release
+        if: steps.check.outputs.continue == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          REPO="isaachorowitz/CodeGrid-Claude-Code-Terminal"
+          VERSION=${{ steps.version.outputs.version }}
+          TAG="v${VERSION}"
+          DMG="${{ steps.version.outputs.dmg }}"
+          TARBALL="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/CodeGrid.app.tar.gz"
+          SIG_FILE="${TARBALL}.sig"
+
+          # Generate latest.json for auto-updater
+          if [ -f "$SIG_FILE" ]; then
+            SIG=$(cat "$SIG_FILE")
+            PUB_URL="https://github.com/${REPO}/releases/download/${TAG}/CodeGrid_${VERSION}_aarch64.dmg"
+            TARBALL_URL="https://github.com/${REPO}/releases/download/${TAG}/CodeGrid.app.tar.gz"
+            cat > latest.json << EOF
+          {
+            "version": "${TAG}",
+            "notes": "CodeGrid v${VERSION}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-aarch64": {
+                "url": "${TARBALL_URL}",
+                "signature": "${SIG}"
+              }
+            }
+          }
+          EOF
+          fi
+
+          # Delete existing release with same tag if any
+          gh release delete "$TAG" --repo "$REPO" --yes 2>/dev/null || true
+
+          # Upload DMG + tarball + latest.json
+          ASSETS="$DMG"
+          [ -f "$TARBALL" ] && ASSETS="$ASSETS $TARBALL"
+          [ -f "latest.json" ] && ASSETS="$ASSETS latest.json"
+
+          gh release create "$TAG" $ASSETS \
+            --repo "$REPO" \
+            --title "CodeGrid $TAG" \
+            --notes "CodeGrid v${VERSION} — Signed and notarized for macOS." \
+            --latest
+
+      # Landing page dynamically fetches the latest release from GitHub API
+      # No notification needed — it always serves the newest DMG automatically
